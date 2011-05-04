@@ -8,37 +8,38 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"json"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
 
 func TestHorizontalWhitespace(t *testing.T) {
-	if !onlyHorizontalWhitespace([]byte(" \t")) {
+	if !onlyHorizontalWhitespace(" \t") {
 		t.Error("expected pass")
 	}
-	if onlyHorizontalWhitespace([]byte("foo bar")) {
+	if onlyHorizontalWhitespace("foo bar") {
 		t.Error("expected failure")
 	}
 }
 
 func TestBoundaryLine(t *testing.T) {
-	mr := NewReader(strings.NewReader(""), "myBoundary").(*multiReader)
-	if !mr.isBoundaryDelimiterLine([]byte("--myBoundary\r\n")) {
+	boundary := "myBoundary"
+	prefix := "--" + boundary
+	if !isBoundaryDelimiterLine("--myBoundary\r\n", prefix) {
 		t.Error("expected")
 	}
-	if !mr.isBoundaryDelimiterLine([]byte("--myBoundary \r\n")) {
+	if !isBoundaryDelimiterLine("--myBoundary \r\n", prefix) {
 		t.Error("expected")
 	}
-	if !mr.isBoundaryDelimiterLine([]byte("--myBoundary \n")) {
+	if !isBoundaryDelimiterLine("--myBoundary \n", prefix) {
 		t.Error("expected")
 	}
-	if mr.isBoundaryDelimiterLine([]byte("--myBoundary bogus \n")) {
+	if isBoundaryDelimiterLine("--myBoundary bogus \n", prefix) {
 		t.Error("expected fail")
 	}
-	if mr.isBoundaryDelimiterLine([]byte("--myBoundary bogus--")) {
+	if isBoundaryDelimiterLine("--myBoundary bogus--", prefix) {
 		t.Error("expected fail")
 	}
 }
@@ -78,9 +79,7 @@ func TestFormName(t *testing.T) {
 	}
 }
 
-var longLine = strings.Repeat("\n\n\r\r\r\n\r\000", (1<<20)/8)
-
-func testMultipartBody() string {
+func TestMultipart(t *testing.T) {
 	testBody := `
 This is a multi-part message.  This line is ignored.
 --MyBoundary
@@ -90,10 +89,6 @@ foo-bar: baz
 
 My value
 The end.
---MyBoundary
-name: bigsection
-
-[longline]
 --MyBoundary
 Header1: value1b
 HEADER2: value2b
@@ -107,26 +102,11 @@ Line 3 ends in a newline, but just one.
 
 never read data
 --MyBoundary--
-
-
-useless trailer
 `
-	testBody = strings.Replace(testBody, "\n", "\r\n", -1)
-	return strings.Replace(testBody, "[longline]", longLine, 1)
-}
+	testBody = regexp.MustCompile("\n").ReplaceAllString(testBody, "\r\n")
+	bodyReader := strings.NewReader(testBody)
 
-func TestMultipart(t *testing.T) {
-	bodyReader := strings.NewReader(testMultipartBody())
-	testMultipart(t, bodyReader)
-}
-
-func TestMultipartSlowInput(t *testing.T) {
-	bodyReader := strings.NewReader(testMultipartBody())
-	testMultipart(t, &slowReader{bodyReader})
-}
-
-func testMultipart(t *testing.T, r io.Reader) {
-	reader := NewReader(r, "MyBoundary")
+	reader := NewReader(bodyReader, "MyBoundary")
 	buf := new(bytes.Buffer)
 
 	// Part1
@@ -145,64 +125,38 @@ func testMultipart(t *testing.T, r io.Reader) {
 		t.Error("Expected Foo-Bar: baz")
 	}
 	buf.Reset()
-	if _, err := io.Copy(buf, part); err != nil {
-		t.Errorf("part 1 copy: %v", err)
-	}
+	io.Copy(buf, part)
 	expectEq(t, "My value\r\nThe end.",
 		buf.String(), "Value of first part")
 
 	// Part2
 	part, err = reader.NextPart()
-	if err != nil {
-		t.Fatalf("Expected part2; got: %v", err)
-		return
-	}
-	if e, g := "bigsection", part.Header.Get("name"); e != g {
-		t.Errorf("part2's name header: expected %q, got %q", e, g)
-	}
-	buf.Reset()
-	if _, err := io.Copy(buf, part); err != nil {
-		t.Errorf("part 2 copy: %v", err)
-	}
-	s := buf.String()
-	if len(s) != len(longLine) {
-		t.Errorf("part2 body expected long line of length %d; got length %d",
-			len(longLine), len(s))
-	}
-	if s != longLine {
-		t.Errorf("part2 long body didn't match")
-	}
-
-	// Part3
-	part, err = reader.NextPart()
 	if part == nil || err != nil {
-		t.Error("Expected part3")
+		t.Error("Expected part2")
 		return
 	}
 	if part.Header.Get("foo-bar") != "bazb" {
 		t.Error("Expected foo-bar: bazb")
 	}
 	buf.Reset()
-	if _, err := io.Copy(buf, part); err != nil {
-		t.Errorf("part 3 copy: %v", err)
-	}
+	io.Copy(buf, part)
 	expectEq(t, "Line 1\r\nLine 2\r\nLine 3 ends in a newline, but just one.\r\n",
-		buf.String(), "body of part 3")
+		buf.String(), "Value of second part")
 
-	// Part4
+	// Part3
 	part, err = reader.NextPart()
 	if part == nil || err != nil {
-		t.Error("Expected part 4 without errors")
+		t.Error("Expected part3 without errors")
 		return
 	}
 
-	// Non-existent part5
+	// Non-existent part4
 	part, err = reader.NextPart()
 	if part != nil {
-		t.Error("Didn't expect a fifth part.")
+		t.Error("Didn't expect a third part.")
 	}
 	if err != nil {
-		t.Errorf("Unexpected error getting fifth part: %v", err)
+		t.Errorf("Unexpected error getting third part: %v", err)
 	}
 }
 
@@ -282,37 +236,4 @@ func TestLineLimit(t *testing.T) {
 	if mr.n >= maxReadThreshold {
 		t.Errorf("expected to read < %d bytes; read %d", maxReadThreshold, mr.n)
 	}
-}
-
-func TestMultipartTruncated(t *testing.T) {
-	testBody := `
-This is a multi-part message.  This line is ignored.
---MyBoundary
-foo-bar: baz
-
-Oh no, premature EOF!
-`
-	body := strings.Replace(testBody, "\n", "\r\n", -1)
-	bodyReader := strings.NewReader(body)
-	r := NewReader(bodyReader, "MyBoundary")
-
-	part, err := r.NextPart()
-	if err != nil {
-		t.Fatalf("didn't get a part")
-	}
-	_, err = io.Copy(ioutil.Discard, part)
-	if err != io.ErrUnexpectedEOF {
-		t.Fatalf("expected error io.ErrUnexpectedEOF; got %v", err)
-	}
-}
-
-type slowReader struct {
-	r io.Reader
-}
-
-func (s *slowReader) Read(p []byte) (int, os.Error) {
-	if len(p) == 0 {
-		return s.r.Read(p)
-	}
-	return s.r.Read(p[:1])
 }
