@@ -958,19 +958,14 @@ func (v Value) MapIndex(key Value) Value {
 	iv.mustBe(Map)
 	typ := iv.typ.toType()
 
-	// Do not require ikey to be exported, so that DeepEqual
-	// and other programs can use all the keys returned by
-	// MapKeys as arguments to MapIndex.  If either the map
-	// or the key is unexported, though, the result will be
-	// considered unexported.
-
 	ikey := key.internal()
+	ikey.mustBeExported()
 	ikey = convertForAssignment("reflect.Value.MapIndex", nil, typ.Key(), ikey)
 	if iv.word == 0 {
 		return Value{}
 	}
 
-	flag := (iv.flag | ikey.flag) & flagRO
+	flag := iv.flag & flagRO
 	elemType := typ.Elem()
 	elemWord, ok := mapaccess(iv.word, ikey.word)
 	if !ok {

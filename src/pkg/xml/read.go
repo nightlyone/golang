@@ -220,10 +220,13 @@ func (p *Parser) unmarshal(val reflect.Value, start *StartElement) os.Error {
 	}
 
 	if pv := val; pv.Kind() == reflect.Ptr {
-		if pv.IsNil() {
-			pv.Set(reflect.New(pv.Type().Elem()))
+		if pv.Pointer() == 0 {
+			zv := reflect.Zero(pv.Type().Elem())
+			pv.Set(zv.Addr())
+			val = zv
+		} else {
+			val = pv.Elem()
 		}
-		val = pv.Elem()
 	}
 
 	var (
