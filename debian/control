@@ -128,7 +128,8 @@ Description: Go programming language tool chain [debug]
  http://golang.org/doc/devel/weekly.html
 
 Package: golang-weekly
-Depends: golang-weekly-go (>= ${source:Version}),
+Depends: ${misc:Depends},
+	 golang-weekly-go (>= ${source:Version}),
 	 golang-weekly-src (>= ${source:Version}),
 	 golang-weekly-tools (>= ${source:Version})
 Architecture: all
