@@ -1,0 +1,16 @@
+golang-weekly-go: unstripped-binary-or-object usr/bin/cgo
+golang-weekly-go: statically-linked-binary usr/bin/cgo
+golang-weekly-go: unstripped-binary-or-object usr/bin/ebnflint
+golang-weekly-go: statically-linked-binary usr/bin/ebnflint
+golang-weekly-go: unstripped-binary-or-object usr/bin/goyacc
+golang-weekly-go: statically-linked-binary usr/bin/goyacc
+golang-weekly-go: unstripped-binary-or-object usr/bin/gotest
+golang-weekly-go: statically-linked-binary usr/bin/gotest
+golang-weekly-go: unstripped-binary-or-object ./usr/bin/cgo
+golang-weekly-go: statically-linked-binary ./usr/bin/cgo
+golang-weekly-go: unstripped-binary-or-object ./usr/bin/ebnflint
+golang-weekly-go: statically-linked-binary ./usr/bin/ebnflint
+golang-weekly-go: unstripped-binary-or-object ./usr/bin/goyacc
+golang-weekly-go: statically-linked-binary ./usr/bin/goyacc
+golang-weekly-go: unstripped-binary-or-object ./usr/bin/gotest
+golang-weekly-go: statically-linked-binary ./usr/bin/gotest

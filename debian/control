@@ -1,4 +1,4 @@
-Source: golang
+Source: golang-weekly
 Section: devel
 Priority: optional
 Maintainer: Ondřej Surý <ondrej@debian.org>
@@ -8,11 +8,12 @@ Build-Depends: debhelper (>= 7.4.10), bison, ed, mawk | awk, perl
 Standards-Version: 3.9.1
 Homepage: http://golang.org/
 
-Package: golang-go
+Package: golang-weekly-go
+Conflicts: golang-go
 Architecture: i386 amd64 kfreebsd-i386 kfreebsd-amd64 armel armhf
 Depends: ${shlibs:Depends}, ${misc:Depends}, ${perl:Depends}
-Recommends: golang-tools
-Provides: go-compiler
+Recommends: golang-weekly-tools
+Provides: go-compiler, golang-go
 Description: Go programming language compiler
  This package provides assembler, compiler and linker for the Go
  programming language.  This is the Google's Go implementation of the
@@ -27,11 +28,16 @@ Description: Go programming language compiler
  garbage collection and the power of run-time reflection.  It's a
  fast, statically typed, compiled language that feels like a
  dynamically typed, interpreted language.
+ .
+ This package uses the weekly snapshot releases, for more information see:
+ http://golang.org/doc/devel/weekly.html
 
-Package: golang-src
+Package: golang-weekly-src
+Conflicts: golang-src
+Provides: golang-src
 Architecture: i386 amd64 kfreebsd-i386 kfreebsd-amd64 armel armhf
-Depends: ${shlibs:Depends}, ${misc:Depends}, golang-go
-Recommends: golang-tools
+Depends: ${shlibs:Depends}, ${misc:Depends}, golang-weekly-go
+Recommends: golang-weekly-tools
 Description: Go programming language compiler (.go source files)
  This package provides the source files for the Go programming
  language needed for godoc and goinstall.
@@ -45,8 +51,13 @@ Description: Go programming language compiler (.go source files)
  garbage collection and the power of run-time reflection.  It's a
  fast, statically typed, compiled language that feels like a
  dynamically typed, interpreted language.
+ .
+ This package uses the weekly snapshot releases, for more information see:
+ http://golang.org/doc/devel/weekly.html
 
-Package: golang-doc
+Package: golang-weekly-doc
+Conflicts: golang-doc
+Provides: golang-doc
 Architecture: all
 Depends: ${misc:Depends}
 Section: doc
@@ -64,16 +75,21 @@ Description: Documentation for Google's Go programming language
  fast, statically typed, compiled language that feels like a
  dynamically typed, interpreted language.
  .
- After installing golang-tools package, you can view a nicely
+ After installing golang-weekly-tools package, you can view a nicely
  formatted documentation by running godoc --http=:6060 and then
  visiting http://localhost:6060/doc/install.html.
  .
  TODO: Pregenerate HTML documentation to /usr/share/doc/golang-doc/html
+ .
+ This package uses the weekly snapshot releases, for more information see:
+ http://golang.org/doc/devel/weekly.html
 
-Package: golang-tools
+Package: golang-weekly-tools
+Conflicts: golang-tools
+Provides: golang-tools
 Architecture: i386 amd64 kfreebsd-i386 kfreebsd-amd64 armel armhf
-Depends: golang-go, ${shlibs:Depends}, ${misc:Depends}
-Recommends: golang-src
+Depends: golang-weekly-go, ${shlibs:Depends}, ${misc:Depends}
+Recommends: golang-weekly-src
 Description: Tools for Google's Go programming language
  This package provides various tools for the Go programming language:
   * godoc - extracts and generates documentation for Go programs
@@ -91,35 +107,15 @@ Description: Tools for Google's Go programming language
  garbage collection and the power of run-time reflection.  It's a
  fast, statically typed, compiled language that feels like a
  dynamically typed, interpreted language.
+ .
+ This package uses the weekly snapshot releases, for more information see:
+ http://golang.org/doc/devel/weekly.html
 
-Package: golang-mode
-Architecture: all
-Depends: ${misc:Depends}, emacs23 | emacsen
-Suggests: golang-go
-Description: Go mode for GNU Emacs
- Provides a major mode for GNU Emacs to edit programs written in Google's
- Go programming language.
-
-Package: kate-syntax-go
-Architecture: all
-Depends: ${misc:Depends}, kate
-Suggests: golang-go
-Description: Syntax files to highlight Go in kate
- Provides a syntax highlighting for the Kate editor to edit programs
- written in Google's Go programming language.
-
-Package: vim-syntax-go
-Architecture: all
-Depends: ${misc:Depends}, vim
-Recommends: vim-addon-manager
-Suggests: golang-go
-Description: Syntax files to highlight Go in vim
- Provides a syntax highlighting for vim editor to edit programs
- written in Google's Go programming language.
-
-Package: golang-dbg
+Package: golang-weekly-dbg
+Conflicts: golang-dbg
+Provides: golang-dbg
 Architecture: i386 amd64 kfreebsd-i386 kfreebsd-amd64 armel armhf
-Depends: ${misc:Depends}, golang-go (= ${binary:Version})
+Depends: ${misc:Depends}, golang-weekly-go (= ${binary:Version})
 Recommends: gdb
 Section: debug
 Priority: extra
@@ -127,3 +123,28 @@ Description: Go programming language tool chain [debug]
  This package provides the debug symbols for the Google's Go tool
  chain binaries (assembler, compiler, linker) needed for properly
  debugging errors in the tool chain with gdb.
+ .
+ This package uses the weekly snapshot releases, for more information see:
+ http://golang.org/doc/devel/weekly.html
+
+Package: golang-weekly
+Depends: golang-weekly-go (>= ${source:Version}),
+	 golang-weekly-src (>= ${source:Version}),
+	 golang-weekly-tools (>= ${source:Version})
+Architecture: all
+Description: Go programming language [meta package]
+ This package is a metapackage that, when installed, guarantees
+ that (almost) full Go development environment is installed.
+ .
+ The Go programming language is an open source project to make
+ programmers more productive. Go is expressive, concise, clean, and
+ efficient.  Its concurrency mechanisms make it easy to write programs
+ that get the most out of multicore and networked machines, while its
+ novel type system enables flexible and modular program construction.
+ Go compiles quickly to machine code yet has the convenience of
+ garbage collection and the power of run-time reflection.  It's a
+ fast, statically typed, compiled language that feels like a
+ dynamically typed, interpreted language.
+ .
+ This package uses the weekly snapshot releases, for more information see:
+ http://golang.org/doc/devel/weekly.html
