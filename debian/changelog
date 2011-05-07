@@ -1,3 +1,14 @@
+golang-weekly (2011.04.27-4) unstable; urgency=low
+
+  [ Florian Weimer ]
+  * golang-tools: install gofix binary
+
+  [ Ondřej Surý ]
+  * Add ${misc:Depends} to golang-weekly meta-package
+  * Add lintian-overrides for gofix
+
+ -- Ondřej Surý <ondrej@debian.org>  Sat, 07 May 2011 21:02:33 +0200
+
 golang-weekly (2011.04.27-3) unstable; urgency=low
 
   * Spin-off golang-weekly to weekly-* branches
