@@ -1,3 +1,15 @@
+golang-weekly (2011.05.22-2) unstable; urgency=low
+
+  * Import slightly modified patch to be more clear about $GOPATH
+    installs for non-root users and set correct location of logfile
+    for non $GOROOT installs
+  * Import patch to not update standard packages from goinstall
+  * Remove don't install deps patch from goinstall; deprecated by
+    goinstall support for installing to $GOPATH + don't update
+    standard packages patch
+
+ -- Ondřej Surý <ondrej@debian.org>  Mon, 23 May 2011 10:36:32 +0200
+
 golang-weekly (2011.05.22-1) unstable; urgency=low
 
   * Imported Upstream version 2011.05.22
