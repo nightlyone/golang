@@ -13,6 +13,7 @@ import (
 	. "http"
 	"http/httptest"
 	"io/ioutil"
+	"log"
 	"os"
 	"net"
 	"reflect"
@@ -432,6 +433,9 @@ func TestSetsRemoteAddr(t *testing.T) {
 }
 
 func TestChunkedResponseHeaders(t *testing.T) {
+	log.SetOutput(ioutil.Discard) // is noisy otherwise
+	defer log.SetOutput(os.Stderr)
+
 	ts := httptest.NewServer(HandlerFunc(func(w ResponseWriter, r *Request) {
 		w.Header().Set("Content-Length", "intentional gibberish") // we check that this is deleted
 		fmt.Fprintf(w, "I am a chunked response.")
@@ -753,4 +757,44 @@ func TestZeroLengthPostAndResponse(t *testing.T) {
 			t.Errorf("req #%d: client got %d bytes; expected 0", i, len(all))
 		}
 	}
+}
+
+func TestHandlerPanic(t *testing.T) {
+	log.SetOutput(ioutil.Discard) // is noisy otherwise
+	defer log.SetOutput(os.Stderr)
+
+	ts := httptest.NewServer(HandlerFunc(func(ResponseWriter, *Request) {
+		panic("intentional death for testing")
+	}))
+	defer ts.Close()
+	_, err := Get(ts.URL)
+	if err == nil {
+		t.Logf("expected an error")
+	}
+}
+
+func BenchmarkClientServer(b *testing.B) {
+	b.StopTimer()
+	ts := httptest.NewServer(HandlerFunc(func(rw ResponseWriter, r *Request) {
+		fmt.Fprintf(rw, "Hello world.\n")
+	}))
+	defer ts.Close()
+	b.StartTimer()
+
+	for i := 0; i < b.N; i++ {
+		res, err := Get(ts.URL)
+		if err != nil {
+			panic("Get: " + err.String())
+		}
+		all, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			panic("ReadAll: " + err.String())
+		}
+		body := string(all)
+		if body != "Hello world.\n" {
+			panic("Got body: " + body)
+		}
+	}
+
+	b.StopTimer()
 }

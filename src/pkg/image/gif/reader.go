@@ -94,28 +94,26 @@ type blockReader struct {
 	tmp   [256]byte
 }
 
-func (b *blockReader) Read(p []byte) (n int, err os.Error) {
+func (b *blockReader) Read(p []byte) (int, os.Error) {
 	if len(p) == 0 {
-		return
+		return 0, nil
 	}
-	if len(b.slice) > 0 {
-		n = copy(p, b.slice)
-		b.slice = b.slice[n:]
-		return
+	if len(b.slice) == 0 {
+		blockLen, err := b.r.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		if blockLen == 0 {
+			return 0, os.EOF
+		}
+		b.slice = b.tmp[0:blockLen]
+		if _, err = io.ReadFull(b.r, b.slice); err != nil {
+			return 0, err
+		}
 	}
-	var blockLen uint8
-	blockLen, err = b.r.ReadByte()
-	if err != nil {
-		return
-	}
-	if blockLen == 0 {
-		return 0, os.EOF
-	}
-	b.slice = b.tmp[0:blockLen]
-	if _, err = io.ReadFull(b.r, b.slice); err != nil {
-		return
-	}
-	return b.Read(p)
+	n := copy(p, b.slice)
+	b.slice = b.slice[n:]
+	return n, nil
 }
 
 // decode reads a GIF image from r and stores the result in d.
@@ -364,7 +362,7 @@ func (d *decoder) uninterlace(m *image.Paletted) {
 	dx := d.width
 	dy := d.height
 	nPix = make([]uint8, dx*dy)
-	offset := 0 // steps through the input by sequentical scan lines.
+	offset := 0 // steps through the input by sequential scan lines.
 	for _, pass := range interlacing {
 		nOffset := pass.start * dx // steps through the output as defined by pass.
 		for y := pass.start; y < dy; y += pass.skip {

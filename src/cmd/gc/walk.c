@@ -66,6 +66,7 @@ walk(Node *fn)
 	int lno;
 
 	curfn = fn;
+
 	if(debug['W']) {
 		snprint(s, sizeof(s), "\nbefore %S", curfn->nname->sym);
 		dumplist(s, curfn->nbody);
@@ -73,7 +74,7 @@ walk(Node *fn)
 	if(curfn->type->outtuple)
 		if(walkret(curfn->nbody))
 			yyerror("function ends without a return statement");
-	typechecklist(curfn->nbody, Etop);
+
 	lno = lineno;
 	for(l=fn->dcl; l; l=l->next) {
 		n = l->n;
@@ -468,8 +469,10 @@ walkstmt(Node **np)
 	case OPANIC:
 	case OEMPTY:
 	case ORECOVER:
-		if(n->typecheck == 0)
+		if(n->typecheck == 0) {
+			dump("missing typecheck:", n);
 			fatal("missing typecheck");
+		}
 		init = n->ninit;
 		n->ninit = nil;
 		walkexpr(&n, &init);
@@ -770,8 +773,15 @@ walkexpr(Node **np, NodeList **init)
 		t = n->left->type;
 		if(n->list && n->list->n->op == OAS)
 			goto ret;
-		walkexpr(&n->left, init);
+
+		if(n->left->op == OCLOSURE) {
+			walkcallclosure(n, init);
+			t = n->left->type;
+		} else
+			walkexpr(&n->left, init);
+
 		walkexprlist(n->list, init);
+
 		ll = ascompatte(n->op, n->isddd, getinarg(t), n->list, 0, init);
 		n->list = reorder1(ll);
 		if(isselect(n)) {
@@ -1525,7 +1535,7 @@ ascompatee(int op, NodeList *nl, NodeList *nr, NodeList **init)
 static int
 fncall(Node *l, Type *rt)
 {
-	if(l->ullman >= UINF)
+	if(l->ullman >= UINF || l->op == OINDEXMAP)
 		return 1;
 	if(eqtype(l->type, rt))
 		return 0;
