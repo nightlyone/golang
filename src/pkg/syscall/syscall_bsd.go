@@ -22,7 +22,6 @@ const ImplementsGetwd = false
 
 func Getwd() (string, int) { return "", ENOTSUP }
 
-
 /*
  * Wrapped
  */
@@ -392,7 +391,11 @@ func SetsockoptLinger(fd, level, opt int, l *Linger) (errno int) {
 	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(l)), unsafe.Sizeof(*l))
 }
 
-func SetsockoptIpMreq(fd, level, opt int, mreq *IpMreq) (errno int) {
+func SetsockoptIPMreq(fd, level, opt int, mreq *IPMreq) (errno int) {
+	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(mreq)), unsafe.Sizeof(*mreq))
+}
+
+func SetsockoptIPv6Mreq(fd, level, opt int, mreq *IPv6Mreq) (errno int) {
 	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(mreq)), unsafe.Sizeof(*mreq))
 }
 
@@ -517,27 +520,6 @@ func SysctlUint32(name string) (value uint32, errno int) {
 		return 0, EIO
 	}
 	return *(*uint32)(unsafe.Pointer(&buf[0])), 0
-}
-
-func SysctlNetRoute(fourth, fifth, sixth int) (value []byte, errno int) {
-	mib := []_C_int{CTL_NET, AF_ROUTE, 0, _C_int(fourth), _C_int(fifth), _C_int(sixth)}
-
-	// Find size.
-	n := uintptr(0)
-	if errno = sysctl(mib, nil, &n, nil, 0); errno != 0 {
-		return nil, errno
-	}
-	if n == 0 {
-		return nil, 0
-	}
-
-	// Read into buffer of that size.
-	b := make([]byte, n)
-	if errno = sysctl(mib, &b[0], &n, nil, 0); errno != 0 {
-		return nil, errno
-	}
-
-	return b[0:n], 0
 }
 
 //sys	utimes(path string, timeval *[2]Timeval) (errno int)

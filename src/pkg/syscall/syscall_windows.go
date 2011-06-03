@@ -230,16 +230,13 @@ func Open(path string, mode int, perm uint32) (fd int, errno int) {
 	}
 	var createmode uint32
 	switch {
-	case mode&O_CREAT != 0:
-		switch {
-		case mode&O_EXCL != 0:
-			createmode = CREATE_NEW
-		case mode&O_APPEND != 0:
-			createmode = OPEN_ALWAYS
-		default:
-			createmode = CREATE_ALWAYS
-		}
-	case mode&O_TRUNC != 0:
+	case mode&(O_CREAT|O_EXCL) == (O_CREAT | O_EXCL):
+		createmode = CREATE_NEW
+	case mode&(O_CREAT|O_TRUNC) == (O_CREAT | O_TRUNC):
+		createmode = CREATE_ALWAYS
+	case mode&O_CREAT == O_CREAT:
+		createmode = OPEN_ALWAYS
+	case mode&O_TRUNC == O_TRUNC:
 		createmode = TRUNCATE_EXISTING
 	default:
 		createmode = OPEN_EXISTING
@@ -683,14 +680,20 @@ const (
 	IP_DROP_MEMBERSHIP
 )
 
-type IpMreq struct {
+type IPMreq struct {
 	Multiaddr [4]byte /* in_addr */
 	Interface [4]byte /* in_addr */
 }
 
-func SetsockoptLinger(fd, level, opt int, l *Linger) (errno int)    { return EWINDOWS }
-func SetsockoptIpMreq(fd, level, opt int, mreq *IpMreq) (errno int) { return EWINDOWS }
-func BindToDevice(fd int, device string) (errno int)                { return EWINDOWS }
+type IPv6Mreq struct {
+	Multiaddr [16]byte /* in6_addr */
+	Interface uint32
+}
+
+func SetsockoptLinger(fd, level, opt int, l *Linger) (errno int)        { return EWINDOWS }
+func SetsockoptIPMreq(fd, level, opt int, mreq *IPMreq) (errno int)     { return EWINDOWS }
+func SetsockoptIPv6Mreq(fd, level, opt int, mreq *IPv6Mreq) (errno int) { return EWINDOWS }
+func BindToDevice(fd int, device string) (errno int)                    { return EWINDOWS }
 
 // TODO(brainman): fix all needed for os
 

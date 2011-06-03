@@ -17,12 +17,15 @@
 	Data items may be values or pointers; the interface hides the
 	indirection.
 
-	In the following, 'field' is one of several things, according to the data.
+	In the following, 'Field' is one of several things, according to the data.
 
-		- The name of a field of a struct (result = data.field),
-		- The value stored in a map under that key (result = data[field]), or
+		- The name of a field of a struct (result = data.Field),
+		- The value stored in a map under that key (result = data["Field"]), or
 		- The result of invoking a niladic single-valued method with that name
-		  (result = data.field())
+		  (result = data.Field())
+
+	If Field is a struct field or method name, it must be an exported
+	(capitalized) name.
 
 	Major constructs ({} are the default delimiters for template actions;
 	[] are the notation in this comment for optional elements):
@@ -236,8 +239,8 @@ func isExported(name string) bool {
 
 // -- Lexical analysis
 
-// Is c a white space character?
-func white(c uint8) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
+// Is c a space character?
+func isSpace(c uint8) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
 
 // Safely, does s[n:n+len(t)] == t?
 func equal(s []byte, n int, t []byte) bool {
@@ -292,9 +295,9 @@ func (t *Template) nextItem() []byte {
 		t.linenum++
 		i++
 	}
-	// Leading white space up to but not including newline
+	// Leading space up to but not including newline
 	for i = start; i < len(t.buf); i++ {
-		if t.buf[i] == '\n' || !white(t.buf[i]) {
+		if t.buf[i] == '\n' || !isSpace(t.buf[i]) {
 			break
 		}
 	}
@@ -339,7 +342,7 @@ func (t *Template) nextItem() []byte {
 			firstChar := t.buf[left+len(t.ldelim)]
 			if firstChar == '.' || firstChar == '#' {
 				// It's special and the first thing on the line. Is it the last?
-				for j := right; j < len(t.buf) && white(t.buf[j]); j++ {
+				for j := right; j < len(t.buf) && isSpace(t.buf[j]); j++ {
 					if t.buf[j] == '\n' {
 						// Yes it is. Drop the surrounding space and return the {.foo}
 						t.linenum++
@@ -351,7 +354,7 @@ func (t *Template) nextItem() []byte {
 		}
 		// No it's not. If there's leading space, return that.
 		if leadingSpace {
-			// not trimming space: return leading white space if there is some.
+			// not trimming space: return leading space if there is some.
 			t.p = left
 			return t.buf[start:left]
 		}
@@ -374,13 +377,13 @@ func (t *Template) nextItem() []byte {
 	return item
 }
 
-// Turn a byte array into a white-space-split array of strings,
+// Turn a byte array into a space-split array of strings,
 // taking into account quoted strings.
 func words(buf []byte) []string {
 	s := make([]string, 0, 5)
 	for i := 0; i < len(buf); {
 		// One word per loop
-		for i < len(buf) && white(buf[i]) {
+		for i < len(buf) && isSpace(buf[i]) {
 			i++
 		}
 		if i == len(buf) {
@@ -395,10 +398,11 @@ func words(buf []byte) []string {
 			} else {
 				i++
 			}
-		} else {
-			for i < len(buf) && !white(buf[i]) {
-				i++
-			}
+		}
+		// Even with quotes, break on space only.  This handles input
+		// such as {""|} and catches quoting mistakes.
+		for i < len(buf) && !isSpace(buf[i]) {
+			i++
 		}
 		s = append(s, string(buf[start:i]))
 	}
@@ -490,20 +494,9 @@ func (t *Template) formatter(name string) func(io.Writer, string, ...interface{}
 
 // -- Parsing
 
-// Allocate a new variable-evaluation element.
+// newVariable allocates a new variable-evaluation element.
 func (t *Template) newVariable(words []string) *variableElement {
-	// After the final space-separated argument, formatters may be specified separated
-	// by pipe symbols, for example: {a b c|d|e}
-
-	// Until we learn otherwise, formatters contains a single name: "", the default formatter.
-	formatters := []string{""}
-	lastWord := words[len(words)-1]
-	bar := strings.IndexRune(lastWord, '|')
-	if bar >= 0 {
-		words[len(words)-1] = lastWord[0:bar]
-		formatters = strings.Split(lastWord[bar+1:], "|", -1)
-	}
-
+	formatters := extractFormatters(words)
 	args := make([]interface{}, len(words))
 
 	// Build argument list, processing any literals
@@ -547,6 +540,38 @@ func (t *Template) newVariable(words []string) *variableElement {
 	}
 
 	return &variableElement{t.linenum, args, formatters}
+}
+
+// extractFormatters extracts a list of formatters from words.
+// After the final space-separated argument in a variable, formatters may be
+// specified separated by pipe symbols. For example: {a b c|d|e}
+// The words parameter still has the formatters joined by '|' in the last word.
+// extractFormatters splits formatters, replaces the last word with the content
+// found before the first '|' within it, and returns the formatters obtained.
+// If no formatters are found in words, the default formatter is returned.
+func extractFormatters(words []string) (formatters []string) {
+	// "" is the default formatter.
+	formatters = []string{""}
+	if len(words) == 0 {
+		return
+	}
+	var bar int
+	lastWord := words[len(words)-1]
+	if isQuote(lastWord[0]) {
+		end := endQuote([]byte(lastWord), 0)
+		if end < 0 || end+1 == len(lastWord) || lastWord[end+1] != '|' {
+			return
+		}
+		bar = end + 1
+	} else {
+		bar = strings.IndexRune(lastWord, '|')
+		if bar < 0 {
+			return
+		}
+	}
+	words[len(words)-1] = lastWord[0:bar]
+	formatters = strings.Split(lastWord[bar+1:], "|", -1)
+	return
 }
 
 // Grab the next item.  If it's simple, just append it to the template.
@@ -1012,13 +1037,13 @@ func (t *Template) executeRepeated(r *repeatedElement, st *state) {
 	}
 }
 
-// A valid delimiter must contain no white space and be non-empty.
+// A valid delimiter must contain no space and be non-empty.
 func validDelim(d []byte) bool {
 	if len(d) == 0 {
 		return false
 	}
 	for _, c := range d {
-		if white(c) {
+		if isSpace(c) {
 			return false
 		}
 	}

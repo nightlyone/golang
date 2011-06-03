@@ -18,7 +18,11 @@ package big
 // These are the building blocks for the operations on signed integers
 // and rationals.
 
-import "rand"
+import (
+	"io"
+	"os"
+	"rand"
+)
 
 
 // An unsigned integer x of the form
@@ -546,9 +550,14 @@ func (z nat) divLarge(u, uIn, v nat) (q, r nat) {
 	u.clear()
 
 	// D1.
-	shift := Word(leadingZeros(v[n-1]))
-	shlVW(v, v, shift)
-	u[len(uIn)] = shlVW(u[0:len(uIn)], uIn, shift)
+	shift := leadingZeros(v[n-1])
+	if shift > 0 {
+		// do not modify v, it may be used by another goroutine simultaneously
+		v1 := make(nat, n)
+		shlVU(v1, v, shift)
+		v = v1
+	}
+	u[len(uIn)] = shlVU(u[0:len(uIn)], uIn, shift)
 
 	// D2.
 	for j := m; j >= 0; j-- {
@@ -587,8 +596,7 @@ func (z nat) divLarge(u, uIn, v nat) (q, r nat) {
 	}
 
 	q = q.norm()
-	shrVW(u, u, shift)
-	shrVW(v, v, shift)
+	shrVU(u, u, shift)
 	r = u.norm()
 
 	return q, r
@@ -604,68 +612,118 @@ func (x nat) bitLen() int {
 }
 
 
-func hexValue(ch byte) int {
-	var d byte
+// MaxBase is the largest number base accepted for string conversions.
+const MaxBase = 'z' - 'a' + 10 + 1 // = hexValue('z') + 1
+
+func hexValue(ch int) Word {
+	d := MaxBase + 1 // illegal base
 	switch {
 	case '0' <= ch && ch <= '9':
 		d = ch - '0'
-	case 'a' <= ch && ch <= 'f':
+	case 'a' <= ch && ch <= 'z':
 		d = ch - 'a' + 10
-	case 'A' <= ch && ch <= 'F':
+	case 'A' <= ch && ch <= 'Z':
 		d = ch - 'A' + 10
-	default:
-		return -1
 	}
-	return int(d)
+	return Word(d)
 }
 
 
-// scan returns the natural number corresponding to the
-// longest possible prefix of s representing a natural number in a
-// given conversion base, the actual conversion base used, and the
-// prefix length. The syntax of natural numbers follows the syntax
-// of unsigned integer literals in Go.
+// scan sets z to the natural number corresponding to the longest possible prefix
+// read from r representing an unsigned integer in a given conversion base.
+// It returns z, the actual conversion base used, and an error, if any. In the
+// error case, the value of z is undefined. The syntax follows the syntax of
+// unsigned integer literals in Go.
 //
-// If the base argument is 0, the string prefix determines the actual
-// conversion base. A prefix of ``0x'' or ``0X'' selects base 16; the
-// ``0'' prefix selects base 8, and a ``0b'' or ``0B'' prefix selects
-// base 2. Otherwise the selected base is 10.
+// The base argument must be 0 or a value from 2 through MaxBase. If the base
+// is 0, the string prefix determines the actual conversion base. A prefix of
+// ``0x'' or ``0X'' selects base 16; the ``0'' prefix selects base 8, and a
+// ``0b'' or ``0B'' prefix selects base 2. Otherwise the selected base is 10.
 //
-func (z nat) scan(s string, base int) (nat, int, int) {
+func (z nat) scan(r io.RuneScanner, base int) (nat, int, os.Error) {
+	// reject illegal bases
+	if base < 0 || base == 1 || MaxBase < base {
+		return z, 0, os.ErrorString("illegal number base")
+	}
+
+	// one char look-ahead
+	ch, _, err := r.ReadRune()
+	if err != nil {
+		return z, 0, err
+	}
+
 	// determine base if necessary
-	i, n := 0, len(s)
+	b := Word(base)
 	if base == 0 {
-		base = 10
-		if n > 0 && s[0] == '0' {
-			base, i = 8, 1
-			if n > 1 {
-				switch s[1] {
+		b = 10
+		if ch == '0' {
+			switch ch, _, err = r.ReadRune(); err {
+			case nil:
+				b = 8
+				switch ch {
 				case 'x', 'X':
-					base, i = 16, 2
+					b = 16
 				case 'b', 'B':
-					base, i = 2, 2
+					b = 2
 				}
+				if b == 2 || b == 16 {
+					if ch, _, err = r.ReadRune(); err != nil {
+						return z, 0, err
+					}
+				}
+			case os.EOF:
+				return z, 10, nil
+			default:
+				return z, 10, err
 			}
 		}
 	}
 
-	// reject illegal bases or strings consisting only of prefix
-	if base < 2 || 16 < base || (base != 8 && i >= n) {
-		return z, 0, 0
-	}
-
 	// convert string
+	// - group as many digits d as possible together into a "super-digit" dd with "super-base" bb
+	// - only when bb does not fit into a word anymore, do a full number mulAddWW using bb and dd
 	z = z.make(0)
-	for ; i < n; i++ {
-		d := hexValue(s[i])
-		if 0 <= d && d < base {
-			z = z.mulAddWW(z, Word(base), Word(d))
+	bb := Word(1)
+	dd := Word(0)
+	for max := _M / b; ; {
+		d := hexValue(ch)
+		if d >= b {
+			r.UnreadRune() // ch does not belong to number anymore
+			break
+		}
+
+		if bb <= max {
+			bb *= b
+			dd = dd*b + d
 		} else {
+			// bb * b would overflow
+			z = z.mulAddWW(z, bb, dd)
+			bb = b
+			dd = d
+		}
+
+		if ch, _, err = r.ReadRune(); err != nil {
+			if err != os.EOF {
+				return z, int(b), err
+			}
 			break
 		}
 	}
 
-	return z.norm(), base, i
+	switch {
+	case bb > 1:
+		// there was at least one mantissa digit
+		z = z.mulAddWW(z, bb, dd)
+	case base == 0 && b == 8:
+		// there was only the octal prefix 0 (possibly followed by digits > 7);
+		// return base 10, not 8
+		return z, 10, nil
+	case base != 0 || b != 8:
+		// there was neither a mantissa digit nor the octal prefix 0
+		return z, int(b), os.ErrorString("syntax error scanning number")
+	}
+
+	return z.norm(), int(b), nil
 }
 
 
@@ -766,7 +824,7 @@ func (z nat) shl(x nat, s uint) nat {
 
 	n := m + int(s/_W)
 	z = z.make(n + 1)
-	z[n] = shlVW(z[n-m:n], x, Word(s%_W))
+	z[n] = shlVU(z[n-m:n], x, s%_W)
 	z[0 : n-m].clear()
 
 	return z.norm()
@@ -783,7 +841,7 @@ func (z nat) shr(x nat, s uint) nat {
 	// n > 0
 
 	z = z.make(n)
-	shrVW(z, x[m-n:], Word(s%_W))
+	shrVU(z, x[m-n:], s%_W)
 
 	return z.norm()
 }
@@ -914,25 +972,26 @@ func (x nat) modW(d Word) (r Word) {
 }
 
 
-// powersOfTwoDecompose finds q and k such that q * 1<<k = n and q is odd.
-func (n nat) powersOfTwoDecompose() (q nat, k Word) {
-	if len(n) == 0 {
-		return n, 0
+// powersOfTwoDecompose finds q and k with x = q * 1<<k and q is odd, or q and k are 0.
+func (x nat) powersOfTwoDecompose() (q nat, k int) {
+	if len(x) == 0 {
+		return x, 0
 	}
 
-	zeroWords := 0
-	for n[zeroWords] == 0 {
-		zeroWords++
+	// One of the words must be non-zero by definition,
+	// so this loop will terminate with i < len(x), and
+	// i is the number of 0 words.
+	i := 0
+	for x[i] == 0 {
+		i++
 	}
-	// One of the words must be non-zero by invariant, therefore
-	// zeroWords < len(n).
-	x := trailingZeroBits(n[zeroWords])
+	n := trailingZeroBits(x[i]) // x[i] != 0
 
-	q = q.make(len(n) - zeroWords)
-	shrVW(q, n[zeroWords:], Word(x))
+	q = make(nat, len(x)-i)
+	shrVU(q, x[i:], uint(n))
+
 	q = q.norm()
-
-	k = Word(_W*zeroWords + x)
+	k = i*_W + n
 	return
 }
 
@@ -1103,7 +1162,7 @@ NextRandom:
 		if y.cmp(natOne) == 0 || y.cmp(nm1) == 0 {
 			continue
 		}
-		for j := Word(1); j < k; j++ {
+		for j := 1; j < k; j++ {
 			y = y.mul(y, y)
 			quotient, y = quotient.div(y, y, n)
 			if y.cmp(nm1) == 0 {

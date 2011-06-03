@@ -10,6 +10,7 @@ import (
 	"fmt"
 	. "http"
 	"http/httptest"
+	"io"
 	"io/ioutil"
 	"os"
 	"strconv"
@@ -77,6 +78,61 @@ func TestGetRequestFormat(t *testing.T) {
 	}
 }
 
+func TestPostRequestFormat(t *testing.T) {
+	tr := &recordingTransport{}
+	client := &Client{Transport: tr}
+
+	url := "http://dummy.faketld/"
+	json := `{"key":"value"}`
+	b := strings.NewReader(json)
+	client.Post(url, "application/json", b) // Note: doesn't hit network
+
+	if tr.req.Method != "POST" {
+		t.Errorf("got method %q, want %q", tr.req.Method, "POST")
+	}
+	if tr.req.URL.String() != url {
+		t.Errorf("got URL %q, want %q", tr.req.URL.String(), url)
+	}
+	if tr.req.Header == nil {
+		t.Fatalf("expected non-nil request Header")
+	}
+	if tr.req.Close {
+		t.Error("got Close true, want false")
+	}
+	if g, e := tr.req.ContentLength, int64(len(json)); g != e {
+		t.Errorf("got ContentLength %d, want %d", g, e)
+	}
+}
+
+func TestPostFormRequestFormat(t *testing.T) {
+	tr := &recordingTransport{}
+	client := &Client{Transport: tr}
+
+	url := "http://dummy.faketld/"
+	form := map[string]string{"foo": "bar"}
+	client.PostForm(url, form) // Note: doesn't hit network
+
+	if tr.req.Method != "POST" {
+		t.Errorf("got method %q, want %q", tr.req.Method, "POST")
+	}
+	if tr.req.URL.String() != url {
+		t.Errorf("got URL %q, want %q", tr.req.URL.String(), url)
+	}
+	if tr.req.Header == nil {
+		t.Fatalf("expected non-nil request Header")
+	}
+	if g, e := tr.req.Header.Get("Content-Type"), "application/x-www-form-urlencoded"; g != e {
+		t.Errorf("got Content-Type %q, want %q", g, e)
+	}
+	if tr.req.Close {
+		t.Error("got Close true, want false")
+	}
+	if g, e := tr.req.ContentLength, int64(len("foo=bar")); g != e {
+		t.Errorf("got ContentLength %d, want %d", g, e)
+	}
+
+}
+
 func TestRedirects(t *testing.T) {
 	var ts *httptest.Server
 	ts = httptest.NewServer(HandlerFunc(func(w ResponseWriter, r *Request) {
@@ -137,5 +193,43 @@ func TestRedirects(t *testing.T) {
 	finalUrl = res.Request.URL.String()
 	if e, g := "Get /?n=1: no redirects allowed", fmt.Sprintf("%v", err); e != g {
 		t.Errorf("with redirects forbidden, expected error %q, got %q", e, g)
+	}
+}
+
+func TestStreamingGet(t *testing.T) {
+	say := make(chan string)
+	ts := httptest.NewServer(HandlerFunc(func(w ResponseWriter, r *Request) {
+		w.(Flusher).Flush()
+		for str := range say {
+			w.Write([]byte(str))
+			w.(Flusher).Flush()
+		}
+	}))
+	defer ts.Close()
+
+	c := &Client{}
+	res, err := c.Get(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf [10]byte
+	for _, str := range []string{"i", "am", "also", "known", "as", "comet"} {
+		say <- str
+		n, err := io.ReadFull(res.Body, buf[0:len(str)])
+		if err != nil {
+			t.Fatalf("ReadFull on %q: %v", str, err)
+		}
+		if n != len(str) {
+			t.Fatalf("Receiving %q, only read %d bytes", str, n)
+		}
+		got := string(buf[0:n])
+		if got != str {
+			t.Fatalf("Expected %q, got %q", str, got)
+		}
+	}
+	close(say)
+	_, err = io.ReadFull(res.Body, buf[0:1])
+	if err != os.EOF {
+		t.Fatalf("at end expected EOF, got %v", err)
 	}
 }

@@ -6,12 +6,12 @@
 
 // TODO(rsc):
 //	logging
-//	post support
 
 package http
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"crypto/tls"
 	"fmt"
@@ -20,6 +20,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -117,6 +118,27 @@ type response struct {
 	// "Connection: keep-alive" response header and a
 	// Content-Length.
 	closeAfterReply bool
+}
+
+type writerOnly struct {
+	io.Writer
+}
+
+func (r *response) ReadFrom(src io.Reader) (n int64, err os.Error) {
+	// Flush before checking r.chunking, as Flush will call
+	// WriteHeader if it hasn't been called yet, and WriteHeader
+	// is what sets r.chunking.
+	r.Flush()
+	if !r.chunking {
+		if rf, ok := r.conn.rwc.(io.ReaderFrom); ok {
+			n, err = rf.ReadFrom(src)
+			r.written += n
+			return
+		}
+	}
+	// Fall back to default io.Copy implementation.
+	// Use wrapper to hide r.ReadFrom from io.Copy.
+	return io.Copy(writerOnly{r}, src)
 }
 
 // Create new connection from rwc.
@@ -454,6 +476,33 @@ func (c *conn) close() {
 
 // Serve a new connection.
 func (c *conn) serve() {
+	defer func() {
+		err := recover()
+		if err == nil {
+			return
+		}
+		c.rwc.Close()
+
+		// TODO(rsc,bradfitz): this is boilerplate. move it to runtime.Stack()
+		var buf bytes.Buffer
+		fmt.Fprintf(&buf, "http: panic serving %v: %v\n", c.remoteAddr, err)
+		for i := 1; i < 20; i++ {
+			pc, file, line, ok := runtime.Caller(i)
+			if !ok {
+				break
+			}
+			var name string
+			f := runtime.FuncForPC(pc)
+			if f != nil {
+				name = f.Name()
+			} else {
+				name = fmt.Sprintf("%#x", pc)
+			}
+			fmt.Fprintf(&buf, "  %s %s:%d\n", name, file, line)
+		}
+		log.Print(buf.String())
+	}()
+
 	for {
 		w, err := c.readRequest()
 		if err != nil {

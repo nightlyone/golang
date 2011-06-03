@@ -8,8 +8,10 @@ package big
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"rand"
+	"strings"
 )
 
 // An Int represents a signed multi-precision integer.
@@ -325,7 +327,7 @@ func charset(ch int) string {
 		return lowercaseDigits[0:2]
 	case 'o':
 		return lowercaseDigits[0:8]
-	case 'd', 'v':
+	case 'd', 's', 'v':
 		return lowercaseDigits[0:10]
 	case 'x':
 		return lowercaseDigits[0:16]
@@ -374,8 +376,69 @@ func (x *Int) Format(s fmt.State, ch int) {
 }
 
 
-// Int64 returns the int64 representation of z.
-// If z cannot be represented in an int64, the result is undefined.
+// scan sets z to the integer value corresponding to the longest possible prefix
+// read from r representing a signed integer number in a given conversion base.
+// It returns z, the actual conversion base used, and an error, if any. In the
+// error case, the value of z is undefined. The syntax follows the syntax of
+// integer literals in Go.
+//
+// The base argument must be 0 or a value from 2 through MaxBase. If the base
+// is 0, the string prefix determines the actual conversion base. A prefix of
+// ``0x'' or ``0X'' selects base 16; the ``0'' prefix selects base 8, and a
+// ``0b'' or ``0B'' prefix selects base 2. Otherwise the selected base is 10.
+//
+func (z *Int) scan(r io.RuneScanner, base int) (*Int, int, os.Error) {
+	// determine sign
+	ch, _, err := r.ReadRune()
+	if err != nil {
+		return z, 0, err
+	}
+	neg := false
+	switch ch {
+	case '-':
+		neg = true
+	case '+': // nothing to do
+	default:
+		r.UnreadRune()
+	}
+
+	// determine mantissa
+	z.abs, base, err = z.abs.scan(r, base)
+	if err != nil {
+		return z, base, err
+	}
+	z.neg = len(z.abs) > 0 && neg // 0 has no sign
+
+	return z, base, nil
+}
+
+
+// Scan is a support routine for fmt.Scanner; it sets z to the value of
+// the scanned number. It accepts the formats 'b' (binary), 'o' (octal),
+// 'd' (decimal), 'x' (lowercase hexadecimal), and 'X' (uppercase hexadecimal).
+func (z *Int) Scan(s fmt.ScanState, ch int) os.Error {
+	base := 0
+	switch ch {
+	case 'b':
+		base = 2
+	case 'o':
+		base = 8
+	case 'd':
+		base = 10
+	case 'x', 'X':
+		base = 16
+	case 's', 'v':
+		// let scan determine the base
+	default:
+		return os.ErrorString("Int.Scan: invalid verb")
+	}
+	_, _, err := z.scan(s, base)
+	return err
+}
+
+
+// Int64 returns the int64 representation of x.
+// If x cannot be represented in an int64, the result is undefined.
 func (x *Int) Int64() int64 {
 	if len(x.abs) == 0 {
 		return 0
@@ -395,32 +458,19 @@ func (x *Int) Int64() int64 {
 // and returns z and a boolean indicating success. If SetString fails,
 // the value of z is undefined.
 //
-// If the base argument is 0, the string prefix determines the actual
-// conversion base. A prefix of ``0x'' or ``0X'' selects base 16; the
-// ``0'' prefix selects base 8, and a ``0b'' or ``0B'' prefix selects
-// base 2. Otherwise the selected base is 10.
+// The base argument must be 0 or a value from 2 through MaxBase. If the base
+// is 0, the string prefix determines the actual conversion base. A prefix of
+// ``0x'' or ``0X'' selects base 16; the ``0'' prefix selects base 8, and a
+// ``0b'' or ``0B'' prefix selects base 2. Otherwise the selected base is 10.
 //
 func (z *Int) SetString(s string, base int) (*Int, bool) {
-	if len(s) == 0 || base < 0 || base == 1 || 16 < base {
+	r := strings.NewReader(s)
+	_, _, err := z.scan(r, base)
+	if err != nil {
 		return z, false
 	}
-
-	neg := s[0] == '-'
-	if neg || s[0] == '+' {
-		s = s[1:]
-		if len(s) == 0 {
-			return z, false
-		}
-	}
-
-	var scanned int
-	z.abs, _, scanned = z.abs.scan(s, base)
-	if scanned != len(s) {
-		return z, false
-	}
-	z.neg = len(z.abs) > 0 && neg // 0 has no sign
-
-	return z, true
+	_, _, err = r.ReadRune()
+	return z, err == os.EOF // err == os.EOF => scan consumed all of s
 }
 
 
@@ -784,11 +834,11 @@ func (z *Int) GobEncode() ([]byte, os.Error) {
 // GobDecode implements the gob.GobDecoder interface.
 func (z *Int) GobDecode(buf []byte) os.Error {
 	if len(buf) == 0 {
-		return os.NewError("Int.GobDecode: no data")
+		return os.ErrorString("Int.GobDecode: no data")
 	}
 	b := buf[0]
 	if b>>1 != version {
-		return os.NewError(fmt.Sprintf("Int.GobDecode: encoding version %d not supported", b>>1))
+		return os.ErrorString(fmt.Sprintf("Int.GobDecode: encoding version %d not supported", b>>1))
 	}
 	z.neg = b&1 != 0
 	z.abs = z.abs.setBytes(buf[1:])

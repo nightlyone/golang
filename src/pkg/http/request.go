@@ -10,6 +10,7 @@ package http
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"container/vector"
 	"encoding/base64"
@@ -231,7 +232,7 @@ const defaultUserAgent = "Go http package"
 //	Method (defaults to "GET")
 //	UserAgent (defaults to defaultUserAgent)
 //	Referer
-//	Header
+//	Header (only keys not already in this list)
 //	Cookie
 //	ContentLength
 //	TransferEncoding
@@ -256,6 +257,9 @@ func (req *Request) WriteProxy(w io.Writer) os.Error {
 func (req *Request) write(w io.Writer, usingProxy bool) os.Error {
 	host := req.Host
 	if host == "" {
+		if req.URL == nil {
+			return os.NewError("http: Request.Write on Request with no Host or URL set")
+		}
 		host = req.URL.Host
 	}
 
@@ -475,6 +479,17 @@ func NewRequest(method, url string, body io.Reader) (*Request, os.Error) {
 		Body:       rc,
 		Host:       u.Host,
 	}
+	if body != nil {
+		switch v := body.(type) {
+		case *strings.Reader:
+			req.ContentLength = int64(v.Len())
+		case *bytes.Buffer:
+			req.ContentLength = int64(v.Len())
+		default:
+			req.ContentLength = -1 // chunked
+		}
+	}
+
 	return req, nil
 }
 
@@ -485,9 +500,7 @@ func NewRequest(method, url string, body io.Reader) (*Request, os.Error) {
 // are not encrypted.
 func (r *Request) SetBasicAuth(username, password string) {
 	s := username + ":" + password
-	buf := make([]byte, base64.StdEncoding.EncodedLen(len(s)))
-	base64.StdEncoding.Encode(buf, []byte(s))
-	r.Header.Set("Authorization", "Basic "+string(buf))
+	r.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(s)))
 }
 
 // ReadRequest reads and parses a request from b.

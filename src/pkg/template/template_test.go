@@ -144,21 +144,21 @@ var tests = []*Test{
 	},
 
 	&Test{
-		in: `{"Strings" ":"} {""} {"\t\u0123 \x23\\"} {"\"}{\\"}`,
+		in: `{"Strings" ":"} {""} {"|"} {"\t\u0123 \x23\\"} {"\"}{\\"}`,
 
-		out: "Strings:  \t\u0123 \x23\\ \"}{\\",
+		out: "Strings:  | \t\u0123 \x23\\ \"}{\\",
 	},
 
 	&Test{
-		in: "{`Raw strings` `:`} {``} {`\\t\\u0123 \\x23\\`} {`}{\\`}",
+		in: "{`Raw strings` `:`} {``} {`|`} {`\\t\\u0123 \\x23\\`} {`}{\\`}",
 
-		out: "Raw strings:  \\t\\u0123 \\x23\\ }{\\",
+		out: "Raw strings:  | \\t\\u0123 \\x23\\ }{\\",
 	},
 
 	&Test{
-		in: "Characters: {'a'} {'\\u0123'} {' '} {'}'} {'{'}",
+		in: "Characters: {'a'} {'\\u0123'} {' '} {'{'} {'|'} {'}'}",
 
-		out: "Characters: 97 291 32 125 123",
+		out: "Characters: 97 291 32 123 124 125",
 	},
 
 	&Test{
@@ -761,6 +761,10 @@ var formatterTests = []Test{
 	{
 		in:  `{"%.02f 0x%02X" 1.1 10|printf}`,
 		out: "1.10 0x0A",
+	},
+	{
+		in:  `{""|}{""||}{""|printf}`, // Issue #1896.
+		out: "",
 	},
 }
 
