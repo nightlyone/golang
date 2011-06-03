@@ -1,3 +1,13 @@
+golang-weekly (2011.06.02-1) unstable; urgency=low
+
+  * Imported Upstream version 2011.06.02
+  * Fix "the Google's Go implementation" in extended description
+    (Closes: #627814)
+  * Update Vcs-* links
+  * Update patches to a new weekly release
+
+ -- Ondřej Surý <ondrej@debian.org>  Fri, 03 Jun 2011 11:36:57 +0200
+
 golang-weekly (2011.05.22-2) unstable; urgency=low
 
   * Import slightly modified patch to be more clear about $GOPATH
