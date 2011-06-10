@@ -225,7 +225,7 @@ struct	Node
 	Type*	realtype;	// as determined by typecheck
 	NodeList*	list;
 	NodeList*	rlist;
-	Node*	orig;		// original form, for printing
+	Node*	orig;		// original form, for printing, and tracking copies of ONAMEs
 
 	// for-body
 	NodeList*	ninit;
@@ -273,6 +273,7 @@ struct	Node
 	int32	lineno;
 	int32	endlineno;
 	vlong	xoffset;
+	int32	stkdelta;	// offset added by stack frame compaction phase.
 	int32	ostk;
 	int32	iota;
 };
@@ -547,6 +548,7 @@ struct	Var
 	vlong	offset;
 	Sym*	sym;
 	Sym*	gotype;
+	Node*	node;
 	int	width;
 	char	name;
 	char	etype;
@@ -862,7 +864,6 @@ NodeList*	checkarglist(NodeList *all, int input);
 Node*	colas(NodeList *left, NodeList *right);
 void	colasdefn(NodeList *left, Node *defn);
 NodeList*	constiter(NodeList *vl, Node *t, NodeList *cl);
-void	dclchecks(void);
 Node*	dclname(Sym *s);
 void	declare(Node *n, int ctxt);
 Type*	dostruct(NodeList *l, int et);
@@ -1108,6 +1109,7 @@ int	istype(Type *t, int et);
 void	linehist(char *file, int32 off, int relative);
 NodeList*	list(NodeList *l, Node *n);
 NodeList*	list1(Node *n);
+void	listsort(NodeList**, int(*f)(Node*, Node*));
 Node*	liststmt(NodeList *l);
 NodeList*	listtreecopy(NodeList *l);
 Sym*	lookup(char *name);
@@ -1166,6 +1168,11 @@ int	exportassignok(Type *t, char *desc);
 int	islvalue(Node *n);
 Node*	typecheck(Node **np, int top);
 void	typechecklist(NodeList *l, int top);
+Node*	typecheckdef(Node *n);
+void	resumetypecopy(void);
+void	copytype(Node *n, Type *t);
+void	defertypecopy(Node *n, Type *t);
+void	queuemethod(Node *n);
 
 /*
  *	unsafe.c
@@ -1177,15 +1184,10 @@ Node*	unsafenmagic(Node *n);
  */
 Node*	callnew(Type *t);
 Node*	chanfn(char *name, int n, Type *t);
-void	copytype(Node *n, Type *t);
-void	defertypecopy(Node *n, Type *t);
 Node*	mkcall(char *name, Type *t, NodeList **init, ...);
 Node*	mkcall1(Node *fn, Type *t, NodeList **init, ...);
-void	queuemethod(Node *n);
-void	resumetypecopy(void);
 int	vmatch1(Node *l, Node *r);
 void	walk(Node *fn);
-Node*	walkdef(Node *n);
 void	walkexpr(Node **np, NodeList **init);
 void	walkexprlist(NodeList *l, NodeList **init);
 void	walkexprlistsafe(NodeList *l, NodeList **init);
