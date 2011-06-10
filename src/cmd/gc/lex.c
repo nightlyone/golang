@@ -5,7 +5,7 @@
 #define		EXTERN
 #include	"go.h"
 #include	"y.tab.h"
-#include <ar.h>
+#include	<ar.h>
 
 #undef	getc
 #undef	ungetc
@@ -274,7 +274,9 @@ main(int argc, char *argv[])
 			funccompile(l->n, 1);
 	}
 
-	dclchecks();
+	for(l=externdcl; l; l=l->next)
+		if(l->n->op == ONAME)
+			typecheck(&l->n, Erv);
 
 	if(nerrors)
 		errorexit();
