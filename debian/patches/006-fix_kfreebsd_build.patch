@@ -89,7 +89,7 @@
  	echo 'enum {'
 --- a/src/pkg/net/Makefile
 +++ b/src/pkg/net/Makefile
-@@ -33,7 +33,7 @@ GOFILES_freebsd=\
+@@ -35,7 +35,7 @@ GOFILES_freebsd=\
  	sock_bsd.go\
  
  CGOFILES_freebsd=\
