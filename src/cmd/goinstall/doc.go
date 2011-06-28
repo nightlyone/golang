@@ -15,7 +15,9 @@ Flags and default settings:
         -a=false          install all previously installed packages
 	-clean=false      clean the package directory before installing
 	-dashboard=true   tally public packages on godashboard.appspot.com
+	-install=true     build and install the package and its dependencies
 	-log=true         log installed packages to $GOROOT/goinstall.log for use by -a
+	-nuke=false       remove the target object and clean before installing
 	-u=false          update already-downloaded packages
 	-v=false          verbose operation
 
@@ -61,7 +63,7 @@ if necessary.  The recognized code hosting sites are:
 		import "project.googlecode.com/svn/trunk"
 		import "project.googlecode.com/svn/trunk/sub/directory"
 
-	Launchpad
+	Launchpad (Bazaar)
 
 		import "launchpad.net/project"
 		import "launchpad.net/project/series"
@@ -85,7 +87,7 @@ system, typically HEAD for git, tip for Mercurial.
 After a successful download and installation of a publicly accessible
 remote package, goinstall reports the installation to godashboard.appspot.com,
 which increments a count associated with the package and the time
-of its most recent installation.  This mechanism powers the package list
+of its most recent installation. This mechanism powers the package list
 at http://godashboard.appspot.com/package, allowing Go programmers
 to learn about popular packages that might be worth looking at.
 The -dashboard=false flag disables this reporting.
@@ -94,11 +96,7 @@ By default, goinstall prints output only when it encounters an error.
 The -v flag causes goinstall to print information about packages
 being considered and installed.
 
-Goinstall does not attempt to be a replacement for make.
-Instead, it invokes "make install" after locating the package sources.
-For local packages without a Makefile and all remote packages,
-goinstall creates and uses a temporary Makefile constructed from
-the import path and the list of Go files in the package.
+Goinstall does not use make. Makefiles are ignored by goinstall.
 
 
 The GOPATH Environment Variable

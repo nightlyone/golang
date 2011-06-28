@@ -98,6 +98,19 @@ patch(Prog *p, Prog *to)
 	p->to.offset = to->loc;
 }
 
+Prog*
+unpatch(Prog *p)
+{
+	Prog *q;
+
+	if(p->to.type != D_BRANCH)
+		fatal("unpatch: not a branch");
+	q = p->to.branch;
+	p->to.branch = P;
+	p->to.offset = 0;
+	return q;
+}
+
 /*
  * start a new Prog list.
  */
@@ -119,6 +132,44 @@ newplist(void)
 
 	return pl;
 }
+
+void
+clearstk(void)
+{
+	Plist *pl;
+	Prog *p1, *p2;
+	Node sp, di, cx, con, ax;
+
+	if((uint32)plast->firstpc->to.offset <= 0)
+		return;
+
+	// reestablish context for inserting code
+	// at beginning of function.
+	pl = plast;
+	p1 = pl->firstpc;
+	p2 = p1->link;
+	pc = mal(sizeof(*pc));
+	clearp(pc);
+	p1->link = pc;
+	
+	// zero stack frame
+	nodreg(&sp, types[tptr], D_SP);
+	nodreg(&di, types[tptr], D_DI);
+	nodreg(&cx, types[TUINT64], D_CX);
+	nodconst(&con, types[TUINT64], (uint32)p1->to.offset / widthptr);
+	gins(ACLD, N, N);
+	gins(AMOVQ, &sp, &di);
+	gins(AMOVQ, &con, &cx);
+	nodconst(&con, types[TUINT64], 0);
+	nodreg(&ax, types[TUINT64], D_AX);
+	gins(AMOVQ, &con, &ax);
+	gins(AREP, N, N);
+	gins(ASTOSQ, N, N);
+
+	// continue with original code.
+	gins(ANOP, N, N)->link = p2;
+	pc = P;
+}	
 
 void
 gused(Node *n)

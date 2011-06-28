@@ -39,6 +39,7 @@ push(void)
 	Sym *d;
 
 	d = mal(sizeof(*d));
+	d->lastlineno = lineno;
 	d->link = dclstack;
 	dclstack = d;
 	return d;
@@ -60,6 +61,7 @@ void
 popdcl(void)
 {
 	Sym *d, *s;
+	int lno;
 
 //	if(dflag())
 //		print("revert\n");
@@ -68,7 +70,9 @@ popdcl(void)
 		if(d->name == nil)
 			break;
 		s = pkglookup(d->name, d->pkg);
+		lno = s->lastlineno;
 		dcopy(s, d);
+		d->lastlineno = lno;
 		if(dflag())
 			print("\t%L pop %S %p\n", lineno, s, s->def);
 	}
@@ -81,19 +85,12 @@ popdcl(void)
 void
 poptodcl(void)
 {
-	Sym *d, *s;
-
-	for(d=dclstack; d!=S; d=d->link) {
-		if(d->name == nil)
-			break;
-		s = pkglookup(d->name, d->pkg);
-		dcopy(s, d);
-		if(dflag())
-			print("\t%L pop %S\n", lineno, s);
-	}
-	if(d == S)
-		fatal("poptodcl: no mark");
-	dclstack = d;
+	// pop the old marker and push a new one
+	// (cannot reuse the existing one)
+	// because we use the markers to identify blocks
+	// for the goto restriction checks.
+	popdcl();
+	markdcl();
 }
 
 void
@@ -1246,4 +1243,6 @@ funccompile(Node *n, int isclosure)
 	funcdepth = 0;
 	dclcontext = PEXTERN;
 }
+
+
 

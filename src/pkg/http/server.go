@@ -20,7 +20,7 @@ import (
 	"net"
 	"os"
 	"path"
-	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -254,7 +254,7 @@ func (w *response) WriteHeader(code int) {
 		}
 	}
 
-	if w.header.Get("Date") == "" {
+	if _, ok := w.header["Date"]; !ok {
 		w.Header().Set("Date", time.UTC().Format(TimeFormat))
 	}
 
@@ -405,7 +405,7 @@ func errorKludge(w *response) {
 
 	// Is it a broken browser?
 	var msg string
-	switch agent := w.req.UserAgent; {
+	switch agent := w.req.UserAgent(); {
 	case strings.Contains(agent, "MSIE"):
 		msg = "Internet Explorer"
 	case strings.Contains(agent, "Chrome/"):
@@ -490,23 +490,9 @@ func (c *conn) serve() {
 		}
 		c.rwc.Close()
 
-		// TODO(rsc,bradfitz): this is boilerplate. move it to runtime.Stack()
 		var buf bytes.Buffer
 		fmt.Fprintf(&buf, "http: panic serving %v: %v\n", c.remoteAddr, err)
-		for i := 1; i < 20; i++ {
-			pc, file, line, ok := runtime.Caller(i)
-			if !ok {
-				break
-			}
-			var name string
-			f := runtime.FuncForPC(pc)
-			if f != nil {
-				name = f.Name()
-			} else {
-				name = fmt.Sprintf("%#x", pc)
-			}
-			fmt.Fprintf(&buf, "  %s %s:%d\n", name, file, line)
-		}
+		buf.Write(debug.Stack())
 		log.Print(buf.String())
 	}()
 
@@ -584,7 +570,7 @@ func (w *response) Hijack() (rwc net.Conn, buf *bufio.ReadWriter, err os.Error) 
 // Handler object that calls f.
 type HandlerFunc func(ResponseWriter, *Request)
 
-// ServeHTTP calls f(w, req).
+// ServeHTTP calls f(w, r).
 func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request) {
 	f(w, r)
 }
@@ -922,7 +908,9 @@ func ListenAndServe(addr string, handler Handler) os.Error {
 
 // ListenAndServeTLS acts identically to ListenAndServe, except that it
 // expects HTTPS connections. Additionally, files containing a certificate and
-// matching private key for the server must be provided.
+// matching private key for the server must be provided. If the certificate
+// is signed by a certificate authority, the certFile should be the concatenation
+// of the server's certificate followed by the CA's certificate.
 //
 // A trivial example server is:
 //
@@ -947,6 +935,24 @@ func ListenAndServe(addr string, handler Handler) os.Error {
 //
 // One can use generate_cert.go in crypto/tls to generate cert.pem and key.pem.
 func ListenAndServeTLS(addr string, certFile string, keyFile string, handler Handler) os.Error {
+	server := &Server{Addr: addr, Handler: handler}
+	return server.ListenAndServeTLS(certFile, keyFile)
+}
+
+// ListenAndServeTLS listens on the TCP network address srv.Addr and
+// then calls Serve to handle requests on incoming TLS connections.
+//
+// Filenames containing a certificate and matching private key for
+// the server must be provided. If the certificate is signed by a
+// certificate authority, the certFile should be the concatenation
+// of the server's certificate followed by the CA's certificate.
+//
+// If srv.Addr is blank, ":https" is used.
+func (s *Server) ListenAndServeTLS(certFile, keyFile string) os.Error {
+	addr := s.Addr
+	if addr == "" {
+		addr = ":https"
+	}
 	config := &tls.Config{
 		Rand:       rand.Reader,
 		Time:       time.Seconds,
@@ -966,7 +972,7 @@ func ListenAndServeTLS(addr string, certFile string, keyFile string, handler Han
 	}
 
 	tlsListener := tls.NewListener(conn, config)
-	return Serve(tlsListener, handler)
+	return s.Serve(tlsListener)
 }
 
 // TimeoutHandler returns a Handler that runs h with the given time limit.
