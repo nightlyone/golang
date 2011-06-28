@@ -8,8 +8,8 @@
 +		fmt.Fprintf(os.Stderr, "%s: set $GOPATH to the directory you want packages installed to if you get permission denied error\n", argv0)
 +	}
 +
-+	if runtime.GOROOT() != defaultRoot.path {
-+		logfile = filepath.Join(defaultRoot.path, "goinstall.log")
++	if runtime.GOROOT() != defaultTree.path {
++		logfile = filepath.Join(defaultTree.path, "goinstall.log")
 +	}
 +
  	// special case - "unsafe" is already installed
