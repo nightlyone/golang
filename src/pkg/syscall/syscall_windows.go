@@ -173,6 +173,7 @@ func Sendfile(outfd int, infd int, offset *int64, count int) (written int, errno
 //sys	FlushViewOfFile(addr uintptr, length uintptr) (errno int)
 //sys	VirtualLock(addr uintptr, length uintptr) (errno int)
 //sys	VirtualUnlock(addr uintptr, length uintptr) (errno int)
+//sys	TransmitFile(s int32, handle int32, bytesToWrite uint32, bytsPerSend uint32, overlapped *Overlapped, transmitFileBuf *TransmitFileBuffers, flags uint32) (errno int) = wsock32.TransmitFile
 
 // syscall interface implementation for other packages
 
@@ -467,6 +468,7 @@ func Chmod(path string, mode uint32) (errno int) {
 
 //sys	WSAStartup(verreq uint32, data *WSAData) (sockerrno int) = wsock32.WSAStartup
 //sys	WSACleanup() (errno int) [failretval==-1] = wsock32.WSACleanup
+//sys	WSAIoctl(s int32, iocc uint32, inbuf *byte, cbif uint32, outbuf *byte, cbob uint32, cbbr *uint32, overlapped *Overlapped, completionRoutine uintptr) (errno int) [failretval==-1] = ws2_32.WSAIoctl
 //sys	socket(af int32, typ int32, protocol int32) (handle int32, errno int) [failretval==-1] = wsock32.socket
 //sys	setsockopt(s int32, level int32, optname int32, optval *byte, optlen int32) (errno int) [failretval==-1] = wsock32.setsockopt
 //sys	bind(s int32, name uintptr, namelen int32) (errno int) [failretval==-1] = wsock32.bind
@@ -487,6 +489,8 @@ func Chmod(path string, mode uint32) (errno int) {
 //sys	Ntohs(netshort uint16) (u uint16) = ws2_32.ntohs
 //sys	DnsQuery(name string, qtype uint16, options uint32, extra *byte, qrs **DNSRecord, pr *byte) (status uint32) = dnsapi.DnsQuery_W
 //sys	DnsRecordListFree(rl *DNSRecord, freetype uint32) = dnsapi.DnsRecordListFree
+//sys	GetIfEntry(pIfRow *MibIfRow) (errcode int) = iphlpapi.GetIfEntry
+//sys	GetAdaptersInfo(ai *IpAdapterInfo, ol *uint32) (errcode int) = iphlpapi.GetAdaptersInfo
 
 // For testing: clients can set this flag to force
 // creation of IPv6 sockets to return EAFNOSUPPORT.

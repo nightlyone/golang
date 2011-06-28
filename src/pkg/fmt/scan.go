@@ -167,7 +167,7 @@ type ssave struct {
 // satisfies io.Reader. It will never be called when used as
 // intended, so there is no need to make it actually work.
 func (s *ss) Read(buf []byte) (n int, err os.Error) {
-	return 0, os.ErrorString("ScanState's Read should not be called. Use ReadRune")
+	return 0, os.NewError("ScanState's Read should not be called. Use ReadRune")
 }
 
 func (s *ss) ReadRune() (rune int, size int, err os.Error) {
@@ -241,7 +241,7 @@ func (s *ss) error(err os.Error) {
 }
 
 func (s *ss) errorString(err string) {
-	panic(scanError{os.ErrorString(err)})
+	panic(scanError{os.NewError(err)})
 }
 
 func (s *ss) Token(skipSpace bool, f func(int) bool) (tok []byte, err os.Error) {
@@ -427,8 +427,8 @@ func (s *ss) typeError(field interface{}, expected string) {
 	s.errorString("expected field of type pointer to " + expected + "; found " + reflect.TypeOf(field).String())
 }
 
-var complexError = os.ErrorString("syntax error scanning complex number")
-var boolError = os.ErrorString("syntax error scanning boolean")
+var complexError = os.NewError("syntax error scanning complex number")
+var boolError = os.NewError("syntax error scanning boolean")
 
 // consume reads the next rune in the input and reports whether it is in the ok string.
 // If accept is true, it puts the character into the input token.
@@ -945,7 +945,7 @@ func (s *ss) scanOne(verb int, field interface{}) {
 			// For now, can only handle (renamed) []byte.
 			typ := v.Type()
 			if typ.Elem().Kind() != reflect.Uint8 {
-				goto CantHandle
+				s.errorString("Scan: can't handle type: " + val.Type().String())
 			}
 			str := s.convertString(verb)
 			v.Set(reflect.MakeSlice(typ, len(str), len(str)))
@@ -959,7 +959,6 @@ func (s *ss) scanOne(verb int, field interface{}) {
 		case reflect.Complex64, reflect.Complex128:
 			v.SetComplex(s.scanComplex(verb, v.Type().Bits()))
 		default:
-		CantHandle:
 			s.errorString("Scan: can't handle type: " + val.Type().String())
 		}
 	}
