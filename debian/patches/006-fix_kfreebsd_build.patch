@@ -78,7 +78,7 @@
  #include <sys/types.h>
  #include <sys/event.h>
  #include <sys/socket.h>
-@@ -110,7 +108,7 @@ done
+@@ -111,7 +109,7 @@ done
  
  # Write godefs input.
  (

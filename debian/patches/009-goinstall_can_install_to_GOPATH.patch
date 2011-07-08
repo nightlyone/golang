@@ -22,7 +22,7 @@
  
 --- a/src/cmd/goinstall/doc.go
 +++ b/src/cmd/goinstall/doc.go
-@@ -16,7 +16,7 @@ Flags and default settings:
+@@ -17,7 +17,7 @@ Flags and default settings:
  	-clean=false      clean the package directory before installing
  	-dashboard=false  tally public packages on godashboard.appspot.com
  	-install=true     build and install the package and its dependencies
