@@ -351,7 +351,7 @@ symtab(void)
 	s->reachable = 1;
 
 	symt = lookup("symtab", 0);
-	symt->type = SRODATA;
+	symt->type = SSYMTAB;
 	symt->size = 0;
 	symt->reachable = 1;
 	
@@ -372,5 +372,7 @@ symtab(void)
 		}
 	}
 
+	if(debug['s'])
+		return;
 	genasmsym(putsymb);
 }

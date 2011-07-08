@@ -62,6 +62,7 @@ DIRS=\
 	crypto/x509\
 	crypto/x509/pkix\
 	crypto/xtea\
+	csv\
 	debug/dwarf\
 	debug/macho\
 	debug/elf\
@@ -82,6 +83,7 @@ DIRS=\
 	exp/gui\
 	exp/gui/x11\
 	exp/regexp/syntax\
+	exp/template\
 	expvar\
 	flag\
 	fmt\
@@ -240,7 +242,6 @@ NOTEST+=\
 	../cmd/godoc\
 	../cmd/goinstall\
 	../cmd/gotest\
-	../cmd/govet\
 	../cmd/goyacc\
 	../cmd/hgpatch\
 

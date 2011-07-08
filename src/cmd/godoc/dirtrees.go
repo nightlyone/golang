@@ -30,7 +30,7 @@ type Directory struct {
 func isGoFile(fi FileInfo) bool {
 	name := fi.Name()
 	return fi.IsRegular() &&
-		!strings.HasPrefix(name, ".") && // ignore .files
+		len(name) > 0 && name[0] != '.' && // ignore .files
 		filepath.Ext(name) == ".go"
 }
 
@@ -43,7 +43,8 @@ func isPkgFile(fi FileInfo) bool {
 
 func isPkgDir(fi FileInfo) bool {
 	name := fi.Name()
-	return fi.IsDirectory() && len(name) > 0 && name[0] != '_'
+	return fi.IsDirectory() && len(name) > 0 &&
+		name[0] != '_' && name[0] != '.' // ignore _files and .files
 }
 
 
@@ -267,8 +268,8 @@ func (dir *Directory) lookupLocal(name string) *Directory {
 
 // lookup looks for the *Directory for a given path, relative to dir.
 func (dir *Directory) lookup(path string) *Directory {
-	d := strings.Split(dir.Path, string(filepath.Separator), -1)
-	p := strings.Split(path, string(filepath.Separator), -1)
+	d := strings.Split(dir.Path, string(filepath.Separator))
+	p := strings.Split(path, string(filepath.Separator))
 	i := 0
 	for i < len(d) {
 		if i >= len(p) || d[i] != p[i] {
