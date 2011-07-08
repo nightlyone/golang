@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/doc"
 	"go/printer"
 	"go/token"
@@ -83,8 +84,16 @@ var (
 
 
 func initHandlers() {
-	fsMap.Init(*pkgPath)
-	fileServer = http.FileServer(*goroot, "")
+	paths := filepath.SplitList(*pkgPath)
+	for _, t := range build.Path {
+		if t.Goroot {
+			continue
+		}
+		paths = append(paths, t.SrcDir())
+	}
+	fsMap.Init(paths)
+
+	fileServer = http.FileServer(http.Dir(*goroot))
 	cmdHandler = httpHandler{"/cmd/", filepath.Join(*goroot, "src", "cmd"), false}
 	pkgHandler = httpHandler{"/pkg/", filepath.Join(*goroot, "src", "pkg"), true}
 }
@@ -160,7 +169,7 @@ func readDirList(filename string) ([]string, os.Error) {
 		}
 		return e == nil && isPkgDir(d)
 	}
-	list := canonicalizePaths(strings.Split(string(contents), "\n", -1), filter)
+	list := canonicalizePaths(strings.Split(string(contents), "\n"), filter)
 	// for each parent path, remove all it's children q
 	// (requirement for binary search to work when filtering)
 	i := 0
