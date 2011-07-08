@@ -59,10 +59,10 @@ type mapping struct {
 }
 
 
-// Init initializes the Mapping from a list of paths separated by
-// filepath.ListSeparator. Empty paths are ignored; relative paths
-// are assumed to be relative to the current working directory and
-// converted to absolute paths. For each path of the form:
+// Init initializes the Mapping from a list of paths.
+// Empty paths are ignored; relative paths are assumed to be relative to
+// the current working directory and converted to absolute paths.
+// For each path of the form:
 //
 //	dirname/localname
 //
@@ -80,8 +80,8 @@ type mapping struct {
 //	user   -> /home/user
 //	public -> /home/build/public
 //
-func (m *Mapping) Init(paths string) {
-	pathlist := canonicalizePaths(filepath.SplitList(paths), nil)
+func (m *Mapping) Init(paths []string) {
+	pathlist := canonicalizePaths(paths, nil)
 	list := make([]mapping, len(pathlist))
 
 	// create mapping list
@@ -120,7 +120,7 @@ func (m *Mapping) PrefixList() []string {
 		}
 
 		// sort the list and remove duplicate entries
-		sort.SortStrings(list)
+		sort.Strings(list)
 		i := 0
 		prev := ""
 		for _, path := range list {

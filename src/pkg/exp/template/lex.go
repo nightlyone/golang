@@ -18,58 +18,71 @@ type item struct {
 }
 
 func (i item) String() string {
-	switch i.typ {
-	case itemEOF:
+	switch {
+	case i.typ == itemEOF:
 		return "EOF"
-	case itemError:
+	case i.typ == itemError:
 		return i.val
-	}
-	if len(i.val) > 10 {
+	case i.typ > itemKeyword:
+		return fmt.Sprintf("<%s>", i.val)
+	case len(i.val) > 10:
 		return fmt.Sprintf("%.10q...", i.val)
 	}
 	return fmt.Sprintf("%q", i.val)
 }
 
-// itemType identifies the type of lex item.
+// itemType identifies the type of lex items.
 type itemType int
 
 const (
-	itemError itemType = iota // error occurred; value is text of error
-	itemDot                   // the cursor, spelled '.'.
+	itemError   itemType = iota // error occurred; value is text of error
+	itemBool                    // boolean constant
+	itemComplex                 // complex constant (1+2i); imaginary is just a number
 	itemEOF
-	itemElse       // else keyword
-	itemEnd        // end keyword
-	itemField      // alphanumeric identifier, starting with '.'.
+	itemField      // alphanumeric identifier, starting with '.', possibly chained ('.x.y')
 	itemIdentifier // alphanumeric identifier
-	itemIf         // if keyword
-	itemLeftMeta   // left meta-string
-	itemNumber     // number
+	itemLeftDelim  // left action delimiter
+	itemNumber     // simple number, including imaginary
 	itemPipe       // pipe symbol
-	itemRange      // range keyword
 	itemRawString  // raw quoted string (includes quotes)
-	itemRightMeta  // right meta-string
+	itemRightDelim // right action delimiter
 	itemString     // quoted string (includes quotes)
 	itemText       // plain text
+	// Keywords appear after all the rest.
+	itemKeyword  // used only to delimit the keywords
+	itemDot      // the cursor, spelled '.'.
+	itemDefine   // define keyword
+	itemElse     // else keyword
+	itemEnd      // end keyword
+	itemIf       // if keyword
+	itemRange    // range keyword
+	itemTemplate // template keyword
+	itemWith     // with keyword
 )
 
 // Make the types prettyprint.
 var itemName = map[itemType]string{
 	itemError:      "error",
-	itemDot:        ".",
+	itemBool:       "bool",
+	itemComplex:    "complex",
 	itemEOF:        "EOF",
-	itemElse:       "else",
-	itemEnd:        "end",
 	itemField:      "field",
 	itemIdentifier: "identifier",
-	itemIf:         "if",
-	itemLeftMeta:   "left meta",
+	itemLeftDelim:  "left delim",
 	itemNumber:     "number",
 	itemPipe:       "pipe",
-	itemRange:      "range",
 	itemRawString:  "raw string",
-	itemRightMeta:  "rightMeta",
+	itemRightDelim: "right delim",
 	itemString:     "string",
-	itemText:       "text",
+	// keywords
+	itemDot:      ".",
+	itemDefine:   "define",
+	itemElse:     "else",
+	itemIf:       "if",
+	itemEnd:      "end",
+	itemRange:    "range",
+	itemTemplate: "template",
+	itemWith:     "with",
 }
 
 func (i itemType) String() string {
@@ -81,11 +94,14 @@ func (i itemType) String() string {
 }
 
 var key = map[string]itemType{
-	".":     itemDot,
-	"else":  itemElse,
-	"end":   itemEnd,
-	"if":    itemIf,
-	"range": itemRange,
+	".":        itemDot,
+	"define":   itemDefine,
+	"else":     itemElse,
+	"end":      itemEnd,
+	"if":       itemIf,
+	"range":    itemRange,
+	"template": itemTemplate,
+	"with":     itemWith,
 }
 
 const eof = -1
@@ -97,6 +113,7 @@ type stateFn func(*lexer) stateFn
 type lexer struct {
 	name  string    // the name of the input; used only for error reports.
 	input string    // the string being scanned.
+	state stateFn   // the next lexing function to enter
 	pos   int       // current position in the input.
 	start int       // start position of this item.
 	width int       // width of last rune read from input.
@@ -166,38 +183,47 @@ func (l *lexer) errorf(format string, args ...interface{}) stateFn {
 	return nil
 }
 
-// run lexes the input by executing state functions until nil.
-func (l *lexer) run() {
-	for state := lexText; state != nil; {
-		state = state(l)
+// nextItem returns the next item from the input.
+func (l *lexer) nextItem() item {
+	for {
+		select {
+		case item := <-l.items:
+			return item
+		default:
+			l.state = l.state(l)
+		}
 	}
-	close(l.items)
+	panic("not reached")
 }
 
-// lex launches a new scanner and returns the channel of items.
-func lex(name, input string) (*lexer, chan item) {
+// lex creates a new scanner for the input string.
+func lex(name, input string) *lexer {
 	l := &lexer{
 		name:  name,
 		input: input,
-		items: make(chan item),
+		state: lexText,
+		items: make(chan item, 2), // Two items of buffering is sufficient for all state functions
 	}
-	go l.run()
-	return l, l.items
+	return l
 }
 
 // state functions
 
-const leftMeta = "{{"
-const rightMeta = "}}"
+const (
+	leftDelim    = "{{"
+	rightDelim   = "}}"
+	leftComment  = "{{/*"
+	rightComment = "*/}}"
+)
 
-// lexText scans until a metacharacter
+// lexText scans until an opening action delimiter, "{{".
 func lexText(l *lexer) stateFn {
 	for {
-		if strings.HasPrefix(l.input[l.pos:], leftMeta) {
+		if strings.HasPrefix(l.input[l.pos:], leftDelim) {
 			if l.pos > l.start {
 				l.emit(itemText)
 			}
-			return lexLeftMeta
+			return lexLeftDelim
 		}
 		if l.next() == eof {
 			break
@@ -211,28 +237,42 @@ func lexText(l *lexer) stateFn {
 	return nil
 }
 
-// leftMeta scans the left "metacharacter", which is known to be present.
-func lexLeftMeta(l *lexer) stateFn {
-	l.pos += len(leftMeta)
-	l.emit(itemLeftMeta)
+// lexLeftDelim scans the left delimiter, which is known to be present.
+func lexLeftDelim(l *lexer) stateFn {
+	if strings.HasPrefix(l.input[l.pos:], leftComment) {
+		return lexComment
+	}
+	l.pos += len(leftDelim)
+	l.emit(itemLeftDelim)
 	return lexInsideAction
 }
 
-// rightMeta scans the right "metacharacter", which is known to be present.
-func lexRightMeta(l *lexer) stateFn {
-	l.pos += len(rightMeta)
-	l.emit(itemRightMeta)
+// lexComment scans a comment. The left comment marker is known to be present.
+func lexComment(l *lexer) stateFn {
+	i := strings.Index(l.input[l.pos:], rightComment)
+	if i < 0 {
+		return l.errorf("unclosed comment")
+	}
+	l.pos += i + len(rightComment)
+	l.ignore()
 	return lexText
 }
 
-// lexInsideAction scans the elements inside "metacharacters".
+// lexRightDelim scans the right delimiter, which is known to be present.
+func lexRightDelim(l *lexer) stateFn {
+	l.pos += len(rightDelim)
+	l.emit(itemRightDelim)
+	return lexText
+}
+
+// lexInsideAction scans the elements inside action delimiters.
 func lexInsideAction(l *lexer) stateFn {
 	// Either number, quoted string, or identifier.
 	// Spaces separate and are ignored.
 	// Pipe symbols separate and are emitted.
 	for {
-		if strings.HasPrefix(l.input[l.pos:], rightMeta) {
-			return lexRightMeta
+		if strings.HasPrefix(l.input[l.pos:], rightDelim) {
+			return lexRightDelim
 		}
 		switch r := l.next(); {
 		case r == eof || r == '\n':
@@ -273,15 +313,19 @@ Loop:
 	for {
 		switch r := l.next(); {
 		case isAlphaNumeric(r):
-			// absorb
+			// absorb.
+		case r == '.' && l.input[l.start] == '.':
+			// field chaining; absorb into one token.
 		default:
 			l.backup()
 			word := l.input[l.start:l.pos]
 			switch {
-			case key[word] != itemError:
+			case key[word] > itemKeyword:
 				l.emit(key[word])
 			case word[0] == '.':
 				l.emit(itemField)
+			case word == "true", word == "false":
+				l.emit(itemBool)
 			default:
 				l.emit(itemIdentifier)
 			}
@@ -295,8 +339,23 @@ Loop:
 // isn't a perfect number scanner - for instance it accepts "." and "0x0.2"
 // and "089" - but when it's wrong the input is invalid and the parser (via
 // strconv) will notice.
-// TODO: without expressions you can do imaginary but not complex.
 func lexNumber(l *lexer) stateFn {
+	if !l.scanNumber() {
+		return l.errorf("bad number syntax: %q", l.input[l.start:l.pos])
+	}
+	if sign := l.peek(); sign == '+' || sign == '-' {
+		// Complex: 1+2i.  No spaces, must end in 'i'.
+		if !l.scanNumber() || l.input[l.pos-1] != 'i' {
+			return l.errorf("bad number syntax: %q", l.input[l.start:l.pos])
+		}
+		l.emit(itemComplex)
+	} else {
+		l.emit(itemNumber)
+	}
+	return lexInsideAction
+}
+
+func (l *lexer) scanNumber() bool {
 	// Optional leading sign.
 	l.accept("+-")
 	// Is it hex?
@@ -317,10 +376,9 @@ func lexNumber(l *lexer) stateFn {
 	// Next thing mustn't be alphanumeric.
 	if isAlphaNumeric(l.peek()) {
 		l.next()
-		return l.errorf("bad number syntax: %q", l.input[l.start:l.pos])
+		return false
 	}
-	l.emit(itemNumber)
-	return lexInsideAction
+	return true
 }
 
 // lexQuote scans a quoted string.
