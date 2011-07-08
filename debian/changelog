@@ -1,7 +1,16 @@
+golang-weekly (2011.07.07-1) unstable; urgency=low
+
+  * Imported Upstream version 2011.07.07
+  * Update patches to a new weekly release
+  * Update version.bash script to get Go version number from Debian
+    changelog and not from the hg repository
+
+ -- Ondřej Surý <ondrej@debian.org>  Fri, 08 Jul 2011 09:51:50 +0200
+
 golang-weekly (2011.06.23-1) unstable; urgency=low
 
   * Imported Upstream version 2011.06.23
-  * Update patches to new weekly release
+  * Update patches to a new weekly release
   * Don't use goinstall.log at all, upstream has changes and the
     defaultTree variable is not accessible any more
 
