@@ -99,7 +99,7 @@ Conflicts: golang-tools
 Provides: golang-tools
 Architecture: i386 amd64 kfreebsd-i386 kfreebsd-amd64 armel armhf
 Depends: golang-weekly-go, ${shlibs:Depends}, ${misc:Depends}
-Recommends: golang-weekly-src
+Recommends: golang-weekly-src, golang-weekly-doc
 Description: Tools for Google's Go programming language
  This package provides various tools for the Go programming language:
   * godoc - extracts and generates documentation for Go programs
@@ -147,6 +147,7 @@ Depends: ${misc:Depends},
 	 golang-weekly-go (>= ${source:Version}),
 	 golang-weekly-src (>= ${source:Version}),
 	 golang-weekly-tools (>= ${source:Version})
+	 golang-weekly-doc (>= ${source:Version})
 Architecture: all
 Description: Experimental Go programming language [meta package]
  This package is a metapackage that, when installed, guarantees
