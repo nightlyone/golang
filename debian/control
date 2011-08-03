@@ -146,7 +146,7 @@ Package: golang-weekly
 Depends: ${misc:Depends},
 	 golang-weekly-go (>= ${source:Version}),
 	 golang-weekly-src (>= ${source:Version}),
-	 golang-weekly-tools (>= ${source:Version})
+	 golang-weekly-tools (>= ${source:Version}),
 	 golang-weekly-doc (>= ${source:Version})
 Architecture: all
 Description: Experimental Go programming language [meta package]
