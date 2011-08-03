@@ -1,17 +1,8 @@
 --- a/src/cmd/goinstall/main.go
 +++ b/src/cmd/goinstall/main.go
-@@ -36,7 +36,7 @@ var (
- 
- 	allpkg            = flag.Bool("a", false, "install all previously installed packages")
- 	reportToDashboard = flag.Bool("dashboard", false, "report public packages at "+dashboardURL)
--	logPkgs           = flag.Bool("log", true, "log installed packages to $GOROOT/goinstall.log for use by -a")
-+	logPkgs           = flag.Bool("log", false, "log installed packages to $GOROOT/goinstall.log for use by -a")
- 	update            = flag.Bool("u", false, "update already-downloaded packages")
- 	doInstall         = flag.Bool("install", true, "build and install")
- 	clean             = flag.Bool("clean", false, "clean the package directory before installing")
-@@ -77,6 +77,10 @@ func main() {
- 		os.Exit(1)
+@@ -80,6 +80,10 @@ func main() {
  	}
+ 	readPackageList()
  
 +	if os.Getuid() != 0 && os.Getenv("GOPATH") == "" {
 +		fmt.Fprintf(os.Stderr, "%s: set $GOPATH to the directory you want packages installed to if you get permission denied error\n", argv0)
@@ -20,14 +11,3 @@
  	// special case - "unsafe" is already installed
  	visit["unsafe"] = done
  
---- a/src/cmd/goinstall/doc.go
-+++ b/src/cmd/goinstall/doc.go
-@@ -17,7 +17,7 @@ Flags and default settings:
- 	-clean=false      clean the package directory before installing
- 	-dashboard=false  tally public packages on godashboard.appspot.com
- 	-install=true     build and install the package and its dependencies
--	-log=true         log installed packages to $GOROOT/goinstall.log for use by -a
-+	-log=false        log installed packages to $GOROOT/goinstall.log for use by -a
- 	-nuke=false       remove the target object and clean before installing
- 	-u=false          update already-downloaded packages
- 	-v=false          verbose operation
