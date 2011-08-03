@@ -43,7 +43,6 @@ func TestFmtInterface(t *testing.T) {
 	}
 }
 
-
 const b32 uint32 = 1<<32 - 1
 const b64 uint64 = 1<<64 - 1
 
@@ -181,6 +180,8 @@ var fmttests = []struct {
 	{"%+d", 0, "+0"},
 	{"% d", 0, " 0"},
 	{"% d", 12345, " 12345"},
+	{"%.0d", 0, ""},
+	{"%.d", 0, ""},
 
 	// unicode format
 	{"%U", 0x1, "U+0001"},
@@ -633,7 +634,6 @@ func TestBlankln(t *testing.T) {
 		t.Errorf("got %q expected %q", got, expect)
 	}
 }
-
 
 // Check Formatter with Sprint, Sprintln, Sprintf
 func TestFormatterPrintln(t *testing.T) {

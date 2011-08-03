@@ -76,7 +76,7 @@ func StringToUTF16Ptr(s string) *uint16 { return &StringToUTF16(s)[0] }
 
 // dll helpers
 
-// implemented in ../runtime/windows/syscall.cgo
+// Implemented in ../runtime/windows/syscall.goc
 func Syscall(trap, nargs, a1, a2, a3 uintptr) (r1, r2, err uintptr)
 func Syscall6(trap, nargs, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, err uintptr)
 func Syscall9(trap, nargs, a1, a2, a3, a4, a5, a6, a7, a8, a9 uintptr) (r1, r2, err uintptr)
@@ -105,13 +105,8 @@ func Getpagesize() int { return 4096 }
 // Converts a Go function to a function pointer conforming
 // to the stdcall calling convention.  This is useful when
 // interoperating with Windows code requiring callbacks.
-// Implemented in ../runtime/windows/syscall.cgo
+// Implemented in ../runtime/windows/syscall.goc
 func NewCallback(fn interface{}) uintptr
-
-// TODO
-func Sendfile(outfd int, infd int, offset *int64, count int) (written int, errno int) {
-	return -1, ENOSYS
-}
 
 // windows api calls
 
@@ -476,7 +471,7 @@ func Chmod(path string, mode uint32) (errno int) {
 //sys	WSACleanup() (errno int) [failretval==-1] = wsock32.WSACleanup
 //sys	WSAIoctl(s Handle, iocc uint32, inbuf *byte, cbif uint32, outbuf *byte, cbob uint32, cbbr *uint32, overlapped *Overlapped, completionRoutine uintptr) (errno int) [failretval==-1] = ws2_32.WSAIoctl
 //sys	socket(af int32, typ int32, protocol int32) (handle Handle, errno int) [failretval==InvalidHandle] = wsock32.socket
-//sys	setsockopt(s Handle, level int32, optname int32, optval *byte, optlen int32) (errno int) [failretval==-1] = wsock32.setsockopt
+//sys	Setsockopt(s Handle, level int32, optname int32, optval *byte, optlen int32) (errno int) [failretval==-1] = wsock32.setsockopt
 //sys	bind(s Handle, name uintptr, namelen int32) (errno int) [failretval==-1] = wsock32.bind
 //sys	connect(s Handle, name uintptr, namelen int32) (errno int) [failretval==-1] = wsock32.connect
 //sys	getsockname(s Handle, rsa *RawSockaddrAny, addrlen *int32) (errno int) [failretval==-1] = wsock32.getsockname
@@ -594,7 +589,7 @@ func Socket(domain, typ, proto int) (fd Handle, errno int) {
 
 func SetsockoptInt(fd Handle, level, opt int, value int) (errno int) {
 	v := int32(value)
-	return int(setsockopt(fd, int32(level), int32(opt), (*byte)(unsafe.Pointer(&v)), int32(unsafe.Sizeof(v))))
+	return int(Setsockopt(fd, int32(level), int32(opt), (*byte)(unsafe.Pointer(&v)), int32(unsafe.Sizeof(v))))
 }
 
 func Bind(fd Handle, sa Sockaddr) (errno int) {
@@ -728,24 +723,3 @@ func Geteuid() (euid int)                { return -1 }
 func Getgid() (gid int)                  { return -1 }
 func Getegid() (egid int)                { return -1 }
 func Getgroups() (gids []int, errno int) { return nil, EWINDOWS }
-
-// TODO(brainman): fix all this meaningless code, it is here to compile exec.go
-
-func read(fd Handle, buf *byte, nbuf int) (n int, errno int) {
-	return 0, EWINDOWS
-}
-
-func fcntl(fd Handle, cmd, arg int) (val int, errno int) {
-	return 0, EWINDOWS
-}
-
-const (
-	PTRACE_TRACEME = 1 + iota
-	WNOHANG
-	WSTOPPED
-	WUNTRACED
-	SYS_CLOSE
-	SYS_WRITE
-	SYS_EXIT
-	SYS_READ
-)

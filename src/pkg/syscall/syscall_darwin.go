@@ -60,6 +60,16 @@ func ParseDirent(buf []byte, max int, names []string) (consumed int, count int, 
 func PtraceAttach(pid int) (errno int) { return ptrace(PT_ATTACH, pid, 0, 0) }
 func PtraceDetach(pid int) (errno int) { return ptrace(PT_DETACH, pid, 0, 0) }
 
+//sysnb pipe() (r int, w int, errno int)
+
+func Pipe(p []int) (errno int) {
+	if len(p) != 2 {
+		return EINVAL
+	}
+	p[0], p[1], errno = pipe()
+	return
+}
+
 // TODO
 func Sendfile(outfd int, infd int, offset *int64, count int) (written int, errno int) {
 	return -1, ENOSYS
@@ -158,7 +168,6 @@ func Kill(pid int, signum int) (errno int) { return kill(pid, signum, 1) }
 //sys	Write(fd int, p []byte) (n int, errno int)
 //sys	read(fd int, buf *byte, nbuf int) (n int, errno int)
 //sys	write(fd int, buf *byte, nbuf int) (n int, errno int)
-
 
 /*
  * Unimplemented

@@ -38,8 +38,7 @@ var setParseTests = []setParseTest{
 
 func TestSetParse(t *testing.T) {
 	for _, test := range setParseTests {
-		set := NewSet()
-		err := set.Parse(test.input)
+		set, err := new(Set).Parse(test.input)
 		switch {
 		case err == nil && !test.ok:
 			t.Errorf("%q: expected error; got none", test.name)
@@ -52,6 +51,9 @@ func TestSetParse(t *testing.T) {
 			if *debug {
 				fmt.Printf("%s: %s\n\t%s\n", test.name, test.input, err)
 			}
+			continue
+		}
+		if set == nil {
 			continue
 		}
 		if len(set.tmpl) != len(test.names) {
@@ -72,30 +74,158 @@ func TestSetParse(t *testing.T) {
 	}
 }
 
-
 var setExecTests = []execTest{
 	{"empty", "", "", nil, true},
 	{"text", "some text", "some text", nil, true},
-	{"invoke text", `{{template "text" .SI}}`, "TEXT", tVal, true},
+	{"invoke x", `{{template "x" .SI}}`, "TEXT", tVal, true},
+	{"invoke x no args", `{{template "x"}}`, "TEXT", tVal, true},
 	{"invoke dot int", `{{template "dot" .I}}`, "17", tVal, true},
 	{"invoke dot []int", `{{template "dot" .SI}}`, "[3 4 5]", tVal, true},
 	{"invoke dotV", `{{template "dotV" .U}}`, "v", tVal, true},
 	{"invoke nested int", `{{template "nested" .I}}`, "17", tVal, true},
+	{"variable declared by template", `{{template "nested" $x=.SI}},{{index $x 1}}`, "[3 4 5],4", tVal, true},
+
+	// User-defined function: test argument evaluator.
+	{"testFunc literal", `{{oneArg "joe"}}`, "oneArg=joe", tVal, true},
+	{"testFunc .", `{{oneArg .}}`, "oneArg=joe", "joe", true},
 }
 
-const setText = `
-	{{define "text"}}TEXT{{end}}
+// These strings are also in testdata/*.
+const setText1 = `
+	{{define "x"}}TEXT{{end}}
 	{{define "dotV"}}{{.V}}{{end}}
+`
+
+const setText2 = `
 	{{define "dot"}}{{.}}{{end}}
 	{{define "nested"}}{{template "dot" .}}{{end}}
 `
 
 func TestSetExecute(t *testing.T) {
 	// Declare a set with a couple of templates first.
-	set := NewSet()
-	err := set.Parse(setText)
+	set, err := new(Set).Parse(setText1)
+	if err != nil {
+		t.Fatalf("error parsing set: %s", err)
+	}
+	_, err = set.Parse(setText2)
 	if err != nil {
 		t.Fatalf("error parsing set: %s", err)
 	}
 	testExecute(setExecTests, set, t)
+}
+
+func TestSetParseFile(t *testing.T) {
+	set, err := new(Set).ParseFile("DOES NOT EXIST")
+	if err == nil {
+		t.Error("expected error for non-existent file; got none")
+	}
+	_, err = set.ParseFile("testdata/file1.tmpl", "testdata/file2.tmpl")
+	if err != nil {
+		t.Fatalf("error parsing files: %v", err)
+	}
+	testExecute(setExecTests, set, t)
+}
+
+func TestParseSetFile(t *testing.T) {
+	set, err := ParseSetFile("DOES NOT EXIST")
+	if err == nil {
+		t.Error("expected error for non-existent file; got none")
+	}
+	set, err = ParseSetFile("testdata/file1.tmpl", "testdata/file2.tmpl")
+	if err != nil {
+		t.Fatalf("error parsing files: %v", err)
+	}
+	testExecute(setExecTests, set, t)
+}
+
+func TestSetParseFiles(t *testing.T) {
+	set, err := new(Set).ParseFiles("DOES NOT EXIST")
+	if err == nil {
+		t.Error("expected error for non-existent file; got none")
+	}
+	_, err = set.ParseFiles("[x")
+	if err == nil {
+		t.Error("expected error for bad pattern; got none")
+	}
+	_, err = set.ParseFiles("testdata/file*.tmpl")
+	if err != nil {
+		t.Fatalf("error parsing files: %v", err)
+	}
+	testExecute(setExecTests, set, t)
+}
+
+func TestParseSetFiles(t *testing.T) {
+	set, err := ParseSetFiles("DOES NOT EXIST")
+	if err == nil {
+		t.Error("expected error for non-existent file; got none")
+	}
+	set, err = ParseSetFiles("[x")
+	if err == nil {
+		t.Error("expected error for bad pattern; got none")
+	}
+	set, err = ParseSetFiles("testdata/file*.tmpl")
+	if err != nil {
+		t.Fatalf("error parsing files: %v", err)
+	}
+	testExecute(setExecTests, set, t)
+}
+
+var templateFileExecTests = []execTest{
+	{"test", `{{template "tmpl1.tmpl"}}{{template "tmpl2.tmpl"}}`, "template1\ntemplate2\n", 0, true},
+}
+
+func TestSetParseTemplateFile(t *testing.T) {
+	set, err := ParseTemplateFile("DOES NOT EXIST")
+	if err == nil {
+		t.Error("expected error for non-existent file; got none")
+	}
+	_, err = set.ParseTemplateFile("testdata/tmpl1.tmpl", "testdata/tmpl2.tmpl")
+	if err != nil {
+		t.Fatalf("error parsing files: %v", err)
+	}
+	testExecute(templateFileExecTests, set, t)
+}
+
+func TestParseTemplateFile(t *testing.T) {
+	set, err := ParseTemplateFile("DOES NOT EXIST")
+	if err == nil {
+		t.Error("expected error for non-existent file; got none")
+	}
+	set, err = ParseTemplateFile("testdata/tmpl1.tmpl", "testdata/tmpl2.tmpl")
+	if err != nil {
+		t.Fatalf("error parsing files: %v", err)
+	}
+	testExecute(templateFileExecTests, set, t)
+}
+
+func TestSetParseTemplateFiles(t *testing.T) {
+	set, err := ParseTemplateFiles("DOES NOT EXIST")
+	if err == nil {
+		t.Error("expected error for non-existent file; got none")
+	}
+	_, err = set.ParseTemplateFiles("[x")
+	if err == nil {
+		t.Error("expected error for bad pattern; got none")
+	}
+	_, err = set.ParseTemplateFiles("testdata/tmpl*.tmpl")
+	if err != nil {
+		t.Fatalf("error parsing files: %v", err)
+	}
+	testExecute(templateFileExecTests, set, t)
+}
+
+func TestParseTemplateFiles(t *testing.T) {
+	set, err := ParseTemplateFiles("DOES NOT EXIST")
+	if err == nil {
+		t.Error("expected error for non-existent file; got none")
+	}
+	set, err = ParseTemplateFiles("[x")
+	if err == nil {
+		t.Error("expected error for bad pattern; got none")
+	}
+	set, err = ParseTemplateFiles("testdata/tmpl*.tmpl")
+	if err != nil {
+		t.Fatalf("error parsing files: %v", err)
+	}
+	testExecute(templateFileExecTests, set, t)
 }

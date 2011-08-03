@@ -68,7 +68,6 @@ DIRS=\
 	debug/elf\
 	debug/gosym\
 	debug/pe\
-	debug/proc\
 	ebnf\
 	encoding/ascii85\
 	encoding/base32\
@@ -79,7 +78,6 @@ DIRS=\
 	encoding/pem\
 	exec\
 	exp/datafmt\
-	exp/eval\
 	exp/gui\
 	exp/gui/x11\
 	exp/regexp/syntax\
@@ -188,7 +186,6 @@ endif
 ifeq ($(GOOS),plan9)
 NOPLAN9BUILD=\
 	crypto/tls\
-	debug/proc\
 	exp/gui/x11\
 	expvar\
 	http\
@@ -219,7 +216,6 @@ NOTEST+=\
 	crypto\
 	crypto/openpgp/error\
 	crypto/x509/pkix\
-	debug/proc\
 	exp/gui\
 	exp/gui/x11\
 	go/ast\
