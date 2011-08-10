@@ -5,26 +5,27 @@
 package template
 
 import (
+	"exp/template/parse"
 	"fmt"
 	"io"
 	"os"
 	"reflect"
-	"runtime"
-	"strconv"
 )
 
 // Set holds a set of related templates that can refer to one another by name.
 // The zero value represents an empty set.
 // A template may be a member of multiple sets.
 type Set struct {
-	tmpl  map[string]*Template
-	funcs map[string]reflect.Value
+	tmpl       map[string]*Template
+	parseFuncs FuncMap
+	execFuncs  map[string]reflect.Value
 }
 
 func (s *Set) init() {
 	if s.tmpl == nil {
 		s.tmpl = make(map[string]*Template)
-		s.funcs = make(map[string]reflect.Value)
+		s.parseFuncs = make(FuncMap)
+		s.execFuncs = make(map[string]reflect.Value)
 	}
 }
 
@@ -34,7 +35,8 @@ func (s *Set) init() {
 // The return value is the set, so calls can be chained.
 func (s *Set) Funcs(funcMap FuncMap) *Set {
 	s.init()
-	addFuncs(s.funcs, funcMap)
+	addValueFuncs(s.execFuncs, funcMap)
+	addFuncs(s.parseFuncs, funcMap)
 	return s
 }
 
@@ -71,6 +73,11 @@ func (s *Set) Template(name string) *Template {
 	return s.tmpl[name]
 }
 
+// FuncMap returns the set's function map.
+func (s *Set) FuncMap() FuncMap {
+	return s.parseFuncs
+}
+
 // Execute applies the named template to the specified data object, writing
 // the output to wr.
 func (s *Set) Execute(wr io.Writer, name string, data interface{}) os.Error {
@@ -81,55 +88,21 @@ func (s *Set) Execute(wr io.Writer, name string, data interface{}) os.Error {
 	return tmpl.Execute(wr, data)
 }
 
-// recover is the handler that turns panics into returns from the top
-// level of Parse.
-func (s *Set) recover(errp *os.Error) {
-	e := recover()
-	if e != nil {
-		if _, ok := e.(runtime.Error); ok {
-			panic(e)
-		}
-		s.tmpl = nil
-		*errp = e.(os.Error)
-	}
-	return
-}
-
 // Parse parses a string into a set of named templates.  Parse may be called
 // multiple times for a given set, adding the templates defined in the string
 // to the set.  If a template is redefined, the element in the set is
 // overwritten with the new definition.
-func (s *Set) Parse(text string) (set *Set, err os.Error) {
-	set = s
+func (s *Set) Parse(text string) (*Set, os.Error) {
+	trees, err := parse.Set(text, s.parseFuncs, builtins)
+	if err != nil {
+		return nil, err
+	}
 	s.init()
-	defer s.recover(&err)
-	lex := lex("set", text)
-	const context = "define clause"
-	for {
-		t := New("set") // name will be updated once we know it.
-		t.startParse(s, lex)
-		// Expect EOF or "{{ define name }}".
-		if t.atEOF() {
-			return
-		}
-		t.expect(itemLeftDelim, context)
-		t.expect(itemDefine, context)
-		name := t.expect(itemString, context)
-		t.name, err = strconv.Unquote(name.val)
-		if err != nil {
-			t.error(err)
-		}
-		t.expect(itemRightDelim, context)
-		end := t.parse(false)
-		if end == nil {
-			t.errorf("unexpected EOF in %s", context)
-		}
-		if end.typ() != nodeEnd {
-			t.errorf("unexpected %s in %s", end, context)
-		}
-		t.stopParse()
-		t.addToSet(s)
-		s.tmpl[t.name] = t
+	for name, tree := range trees {
+		tmpl := New(name)
+		tmpl.Tree = tree
+		tmpl.addToSet(s)
+		s.tmpl[name] = tmpl
 	}
 	return s, nil
 }
