@@ -101,7 +101,7 @@ static void
 chksectoff(IMAGE_SECTION_HEADER *h, vlong off)
 {
 	if(off != h->PointerToRawData) {
-		diag("%s.PointerToRawData = %#llux, want %#llux", h->Name, (vlong)h->PointerToRawData, off);
+		diag("%s.PointerToRawData = %#llux, want %#llux", (char *)h->Name, (vlong)h->PointerToRawData, off);
 		errorexit();
 	}
 }
@@ -110,11 +110,11 @@ static void
 chksectseg(IMAGE_SECTION_HEADER *h, Segment *s)
 {
 	if(s->vaddr-PEBASE != h->VirtualAddress) {
-		diag("%s.VirtualAddress = %#llux, want %#llux", h->Name, (vlong)h->VirtualAddress, (vlong)(s->vaddr-PEBASE));
+		diag("%s.VirtualAddress = %#llux, want %#llux", (char *)h->Name, (vlong)h->VirtualAddress, (vlong)(s->vaddr-PEBASE));
 		errorexit();
 	}
 	if(s->fileoff != h->PointerToRawData) {
-		diag("%s.PointerToRawData = %#llux, want %#llux", h->Name, (vlong)h->PointerToRawData, (vlong)(s->fileoff));
+		diag("%s.PointerToRawData = %#llux, want %#llux", (char *)h->Name, (vlong)h->PointerToRawData, (vlong)(s->fileoff));
 		errorexit();
 	}
 }
@@ -453,13 +453,14 @@ addsymtable(void)
 	if(nextsymoff == 0)
 		return;
 	
-	size  = nextsymoff + 4;
+	size  = nextsymoff + 4 + 18;
 	h = addpesection(".symtab", size, size);
 	h->Characteristics = IMAGE_SCN_MEM_READ|
 		IMAGE_SCN_MEM_DISCARDABLE;
 	chksectoff(h, cpos());
 	fh.PointerToSymbolTable = cpos();
-	fh.NumberOfSymbols = 0;
+	fh.NumberOfSymbols = 1;
+	strnput("", 18); // one empty symbol
 	// put symbol string table
 	lputl(size);
 	for (i=0; i<nextsymoff; i++)

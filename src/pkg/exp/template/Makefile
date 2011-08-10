@@ -9,7 +9,6 @@ GOFILES=\
 	exec.go\
 	funcs.go\
 	helper.go\
-	lex.go\
 	parse.go\
 	set.go\
 

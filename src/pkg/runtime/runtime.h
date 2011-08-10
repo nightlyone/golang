@@ -335,7 +335,17 @@ enum
 	ASTRING,
 	AINTER,
 	ANILINTER,
-	AMEMWORD,
+	ASLICE,
+	AMEM8,
+	AMEM16,
+	AMEM32,
+	AMEM64,
+	AMEM128,
+	ANOEQ8,
+	ANOEQ16,
+	ANOEQ32,
+	ANOEQ64,
+	ANOEQ128,
 	Amax
 };
 
@@ -380,6 +390,7 @@ extern	uint32	runtime·panicking;
 extern	int32	runtime·gcwaiting;		// gc is waiting to run
 int8*	runtime·goos;
 extern	bool	runtime·iscgo;
+extern	void	(*runtime·destroylock)(Lock*);
 
 /*
  * common functions and data
@@ -515,16 +526,18 @@ void	runtime·starttheworld(void);
  */
 void	runtime·lock(Lock*);
 void	runtime·unlock(Lock*);
-void	runtime·destroylock(Lock*);
 
 /*
  * sleep and wakeup on one-time events.
  * before any calls to notesleep or notewakeup,
  * must call noteclear to initialize the Note.
- * then, any number of threads can call notesleep
+ * then, exactly one thread can call notesleep
  * and exactly one thread can call notewakeup (once).
- * once notewakeup has been called, all the notesleeps
- * will return.  future notesleeps will return immediately.
+ * once notewakeup has been called, the notesleep
+ * will return.  future notesleep will return immediately.
+ * subsequent noteclear must be called only after
+ * previous notesleep has returned, e.g. it's disallowed
+ * to call noteclear straight after notewakeup.
  */
 void	runtime·noteclear(Note*);
 void	runtime·notesleep(Note*);

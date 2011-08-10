@@ -16,7 +16,7 @@ structure as execution proceeds.
 The input text for a template is UTF-8-encoded text in any format.
 "Actions"--data evaluations or control structures--are delimited by
 "{{" and "}}"; all text outside actions is copied to the output unchanged.
-Actions may not span newlines.
+Actions may not span newlines, although comments can.
 
 Once constructed, templates and template sets can be executed safely in
 parallel.
@@ -28,7 +28,8 @@ data, defined in detail below.
 
 */
 //	{{/* a comment */}}
-//		A comment; discarded. Comments do not nest.
+//		A comment; discarded. May contain newlines.
+//		Comments do not nest.
 /*
 
 	{{pipeline}}
@@ -244,6 +245,9 @@ Predefined global functions are named as follows.
 		An alias for fmt.Sprintf
 	println
 		An alias for fmt.Sprintln
+	url
+		Returns the escaped value of the textual representation of
+		its arguments in a form suitable for embedding in a URL.
 
 The boolean functions take any zero value to be false and a non-zero value to
 be true.

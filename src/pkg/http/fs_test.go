@@ -223,7 +223,7 @@ func TestServeFileContentType(t *testing.T) {
 			t.Fatal(err)
 		}
 		if h := resp.Header.Get("Content-Type"); h != want {
-			t.Errorf("Content-Type mismatch: got %d, want %d", h, want)
+			t.Errorf("Content-Type mismatch: got %q, want %q", h, want)
 		}
 	}
 	get("text/plain; charset=utf-8")
@@ -257,7 +257,28 @@ func TestServeFileWithContentEncoding(t *testing.T) {
 		t.Fatal(err)
 	}
 	if g, e := resp.ContentLength, int64(-1); g != e {
-		t.Errorf("Content-Length mismatch: got %q, want %q", g, e)
+		t.Errorf("Content-Length mismatch: got %d, want %d", g, e)
+	}
+}
+
+func TestServeIndexHtml(t *testing.T) {
+	const want = "index.html says hello\n"
+	ts := httptest.NewServer(FileServer(Dir(".")))
+	defer ts.Close()
+
+	for _, path := range []string{"/testdata/", "/testdata/index.html"} {
+		res, err := Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			t.Fatal("reading Body:", err)
+		}
+		if s := string(b); s != want {
+			t.Errorf("for path %q got %q, want %q", path, s, want)
+		}
 	}
 }
 

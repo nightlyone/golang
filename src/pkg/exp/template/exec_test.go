@@ -6,6 +6,7 @@ package template
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"os"
 	"reflect"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 )
+
+var debug = flag.Bool("debug", false, "show the errors produced by the tests")
 
 // T has lots of interesting pieces to use to test execution.
 type T struct {
@@ -40,6 +43,8 @@ type T struct {
 	Empty2 interface{}
 	Empty3 interface{}
 	Empty4 interface{}
+	// Non-empty interface.
+	NonEmptyInterface I
 	// Pointers
 	PI  *int
 	PSI *[]int
@@ -66,14 +71,22 @@ var tVal = &T{
 		{"one": 1, "two": 2},
 		{"eleven": 11, "twelve": 12},
 	},
-	Empty1: 3,
-	Empty2: "empty2",
-	Empty3: []int{7, 8},
-	Empty4: &U{"UinEmpty"},
-	PI:     newInt(23),
-	PSI:    newIntSlice(21, 22, 23),
-	Tmpl:   Must(New("x").Parse("test template")), // "x" is the value of .X
+	Empty1:            3,
+	Empty2:            "empty2",
+	Empty3:            []int{7, 8},
+	Empty4:            &U{"UinEmpty"},
+	NonEmptyInterface: new(T),
+	PI:                newInt(23),
+	PSI:               newIntSlice(21, 22, 23),
+	Tmpl:              Must(New("x").Parse("test template")), // "x" is the value of .X
 }
+
+// A non-empty interface.
+type I interface {
+	Method0() string
+}
+
+var iVal I = tVal
 
 // Helpers for creation.
 func newInt(n int) *int {
@@ -276,6 +289,9 @@ var execTests = []execTest{
 	// JavaScript.
 	{"js", `{{js .}}`, `It\'d be nice.`, `It'd be nice.`, true},
 
+	// URL.
+	{"url", `{{"http://www.example.org/"|url}}`, "http%3A%2F%2Fwww.example.org%2F", nil, true},
+
 	// Booleans
 	{"not", "{{not true}} {{not false}}", "false true", nil, true},
 	{"and", "{{and false 0}} {{and 1 0}} {{and 0 true}} {{and 1 1}}", "false 0 0 1", nil, true},
@@ -290,7 +306,7 @@ var execTests = []execTest{
 	{"slice[WRONG]", "{{index .SI `hello`}}", "", tVal, false},
 	{"map[one]", "{{index .MSI `one`}}", "1", tVal, true},
 	{"map[two]", "{{index .MSI `two`}}", "2", tVal, true},
-	{"map[NO]", "{{index .MSI `XXX`}}", "", tVal, false},
+	{"map[NO]", "{{index .MSI `XXX`}}", "", tVal, true},
 	{"map[WRONG]", "{{index .MSI 10}}", "", tVal, false},
 	{"double index", "{{index .SMSI 1 `eleven`}}", "11", tVal, true},
 
@@ -344,6 +360,13 @@ var execTests = []execTest{
 	// Fixed bugs.
 	// Must separate dot and receiver; otherwise args are evaluated with dot set to variable.
 	{"bug0", "{{range .MSIone}}{{if $.Method1 .}}X{{end}}{{end}}", "X", tVal, true},
+	// Do not loop endlessly in indirect for non-empty interfaces.
+	// The bug appears with *interface only; looped forever.
+	{"bug1", "{{.Method0}}", "M0", &iVal, true},
+	// Was taking address of interface field, so method set was empty.
+	{"bug2", "{{$.NonEmptyInterface.Method0}}", "M0", tVal, true},
+	// Struct values were not legal in with - mere oversight.
+	{"bug4", "{{with $}}{{.Method0}}{{end}}", "M0", tVal, true},
 }
 
 func zeroArgs() string {
