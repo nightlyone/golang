@@ -1,3 +1,10 @@
+golang-weekly (2011.08.10-1) unstable; urgency=low
+
+  * Imported Upstream version 2011.08.10
+  * Refresh patches for new weekly release
+
+ -- Ondřej Surý <ondrej@debian.org>  Wed, 10 Aug 2011 15:08:02 +0200
+
 golang-weekly (2011.07.29-1) unstable; urgency=low
 
   * Imported Upstream version 2011.07.29
