@@ -5,13 +5,13 @@
 package template
 
 import (
-	"exp/template/parse"
 	"fmt"
 	"io"
 	"os"
 	"reflect"
 	"runtime"
 	"strings"
+	"template/parse"
 )
 
 // state represents the state of an execution. It's not part of the
@@ -148,7 +148,7 @@ func (s *state) walkIfOrWith(typ parse.NodeType, dot reflect.Value, pipe *parse.
 	val := s.evalPipeline(dot, pipe)
 	truth, ok := isTrue(val)
 	if !ok {
-		s.errorf("if/with can't use value of type %T", val.Interface())
+		s.errorf("if/with can't use %v", val)
 	}
 	if truth {
 		if typ == parse.NodeWith {
@@ -164,6 +164,10 @@ func (s *state) walkIfOrWith(typ parse.NodeType, dot reflect.Value, pipe *parse.
 // isTrue returns whether the value is 'true', in the sense of not the zero of its type,
 // and whether the value has a meaningful truth value.
 func isTrue(val reflect.Value) (truth, ok bool) {
+	if !val.IsValid() {
+		// Something like var x interface{}, never set. It's a form of nil.
+		return false, true
+	}
 	switch val.Kind() {
 	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
 		truth = val.Len() > 0
@@ -171,7 +175,7 @@ func isTrue(val reflect.Value) (truth, ok bool) {
 		truth = val.Bool()
 	case reflect.Complex64, reflect.Complex128:
 		truth = val.Complex() != 0
-	case reflect.Chan, reflect.Func, reflect.Ptr:
+	case reflect.Chan, reflect.Func, reflect.Ptr, reflect.Interface:
 		truth = !val.IsNil()
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		truth = val.Int() != 0
@@ -229,8 +233,10 @@ func (s *state) walkRange(dot reflect.Value, r *parse.RangeNode) {
 			s.pop(mark)
 		}
 		return
+	case reflect.Invalid:
+		break // An invalid value is likely a nil map, etc. and acts like an empty map.
 	default:
-		s.errorf("range can't iterate over value of type %T", val.Interface())
+		s.errorf("range can't iterate over %v", val)
 	}
 	if r.ElseList != nil {
 		s.walk(dot, r.ElseList)
@@ -388,18 +394,29 @@ func (s *state) evalField(dot reflect.Value, fieldName string, args []parse.Node
 	if method, ok := methodByName(ptr, fieldName); ok {
 		return s.evalCall(dot, method, fieldName, args, final)
 	}
+	hasArgs := len(args) > 1 || final.IsValid()
 	// It's not a method; is it a field of a struct?
 	receiver, isNil := indirect(receiver)
 	if receiver.Kind() == reflect.Struct {
 		tField, ok := receiver.Type().FieldByName(fieldName)
 		if ok {
 			field := receiver.FieldByIndex(tField.Index)
-			if len(args) > 1 || final.IsValid() {
+			if hasArgs {
 				s.errorf("%s is not a method but has arguments", fieldName)
 			}
 			if tField.PkgPath == "" { // field is exported
 				return field
 			}
+		}
+	}
+	// If it's a map, attempt to use the field name as a key.
+	if receiver.Kind() == reflect.Map {
+		nameVal := reflect.ValueOf(fieldName)
+		if nameVal.Type().AssignableTo(receiver.Type().Key()) {
+			if hasArgs {
+				s.errorf("%s is not a method but has arguments", fieldName)
+			}
+			return receiver.MapIndex(nameVal)
 		}
 	}
 	if isNil {
@@ -421,7 +438,8 @@ func methodByName(receiver reflect.Value, name string) (reflect.Value, bool) {
 }
 
 var (
-	osErrorType = reflect.TypeOf(new(os.Error)).Elem()
+	osErrorType     = reflect.TypeOf((*os.Error)(nil)).Elem()
+	fmtStringerType = reflect.TypeOf((*fmt.Stringer)(nil)).Elem()
 )
 
 // evalCall executes a function or method call. If it's a method, fun already has the receiver bound, so
@@ -615,19 +633,23 @@ func indirect(v reflect.Value) (rv reflect.Value, isNil bool) {
 // printValue writes the textual representation of the value to the output of
 // the template.
 func (s *state) printValue(n parse.Node, v reflect.Value) {
+	if v.Kind() == reflect.Ptr {
+		v, _ = indirect(v) // fmt.Fprint handles nil.
+	}
 	if !v.IsValid() {
 		fmt.Fprint(s.wr, "<no value>")
 		return
 	}
-	switch v.Kind() {
-	case reflect.Ptr:
-		var isNil bool
-		if v, isNil = indirect(v); isNil {
-			fmt.Fprint(s.wr, "<nil>")
-			return
+
+	if !v.Type().Implements(fmtStringerType) {
+		if v.CanAddr() && reflect.PtrTo(v.Type()).Implements(fmtStringerType) {
+			v = v.Addr()
+		} else {
+			switch v.Kind() {
+			case reflect.Chan, reflect.Func:
+				s.errorf("can't print %s of type %s", n, v.Type())
+			}
 		}
-	case reflect.Chan, reflect.Func, reflect.Interface:
-		s.errorf("can't print %s of type %s", n, v.Type())
 	}
 	fmt.Fprint(s.wr, v.Interface())
 }

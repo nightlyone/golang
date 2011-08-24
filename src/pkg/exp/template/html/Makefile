@@ -2,14 +2,10 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
-include ../../../Make.inc
+include ../../../../Make.inc
 
-TARG=exp/template
+TARG=exp/template/html
 GOFILES=\
-	exec.go\
-	funcs.go\
-	helper.go\
-	parse.go\
-	set.go\
+	escape.go
 
-include ../../../Make.pkg
+include ../../../../Make.pkg
