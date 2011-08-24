@@ -3,8 +3,11 @@ golang-weekly (2011.08.17-1) unstable; urgency=low
   * Imported Upstream version 2011.08.17
   * Add support for goinstall dashboard debconf question in the Debian
     packaging (now it needs to Go counterpart)
+  * Save upstream VERSION to the archive
+  * Update kfreebsd patch to a new release
+  * Use GOVERSION as generate by src/version.bash on hg archive time
 
- -- Ondřej Surý <ondrej@debian.org>  Wed, 24 Aug 2011 13:46:32 +0200
+ -- Ondřej Surý <ondrej@debian.org>  Wed, 24 Aug 2011 15:36:18 +0200
 
 golang-weekly (2011.08.10-1) unstable; urgency=low
 
