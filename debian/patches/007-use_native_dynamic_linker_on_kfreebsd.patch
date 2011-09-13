@@ -6,9 +6,9 @@
  char linuxdynld[] = "/lib/ld-linux.so.2";
 -char freebsddynld[] = "/usr/libexec/ld-elf.so.1";
 +char freebsddynld[] = "/lib/ld.so.1";
+ char openbsddynld[] = "/usr/libexec/ld.so";
  
  int32
- entryvalue(void)
 --- a/src/cmd/6l/asm.c
 +++ b/src/cmd/6l/asm.c
 @@ -42,7 +42,7 @@
