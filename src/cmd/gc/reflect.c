@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include <u.h>
+#include <libc.h>
 #include "go.h"
 
 /*
@@ -140,7 +142,6 @@ methods(Type *t)
 	Type *f, *mt, *it, *this;
 	Sig *a, *b;
 	Sym *method;
-	Prog *oldlist;
 
 	// named method type
 	mt = methtype(t);
@@ -156,7 +157,6 @@ methods(Type *t)
 	// make list of methods for t,
 	// generating code if necessary.
 	a = nil;
-	oldlist = nil;
 	for(f=mt->xmethod; f; f=f->down) {
 		if(f->type->etype != TFUNC)
 			continue;
@@ -195,8 +195,6 @@ methods(Type *t)
 		if(!(a->isym->flags & SymSiggen)) {
 			a->isym->flags |= SymSiggen;
 			if(!eqtype(this, it) || this->width < types[tptr]->width) {
-				if(oldlist == nil)
-					oldlist = pc;
 				// Is okay to call genwrapper here always,
 				// but we can generate more efficient code
 				// using genembedtramp if all that is necessary
@@ -212,8 +210,6 @@ methods(Type *t)
 		if(!(a->tsym->flags & SymSiggen)) {
 			a->tsym->flags |= SymSiggen;
 			if(!eqtype(this, t)) {
-				if(oldlist == nil)
-					oldlist = pc;
 				if(isptr[t->etype] && isptr[this->etype]
 				&& f->embedded && !isifacemethod(f->type))
 					genembedtramp(t, f, a->tsym, 0);
@@ -221,16 +217,6 @@ methods(Type *t)
 					genwrapper(t, f, a->tsym, 0);
 			}
 		}
-	}
-
-	// restore data output
-	if(oldlist) {
-		// old list ended with AEND; change to ANOP
-		// so that the trampolines that follow can be found.
-		nopout(oldlist);
-
-		// start new data list
-		newplist();
 	}
 
 	return lsort(a, sigcmp);
@@ -245,11 +231,9 @@ imethods(Type *t)
 	Sig *a, *all, *last;
 	Type *f;
 	Sym *method, *isym;
-	Prog *oldlist;
 
 	all = nil;
 	last = nil;
-	oldlist = nil;
 	for(f=t->type; f; f=f->down) {
 		if(f->etype != TFIELD)
 			fatal("imethods: not field");
@@ -287,21 +271,9 @@ imethods(Type *t)
 		isym = methodsym(method, t, 0);
 		if(!(isym->flags & SymSiggen)) {
 			isym->flags |= SymSiggen;
-			if(oldlist == nil)
-				oldlist = pc;
 			genwrapper(t, f, isym, 0);
 		}
 	}
-
-	if(oldlist) {
-		// old list ended with AEND; change to ANOP
-		// so that the trampolines that follow can be found.
-		nopout(oldlist);
-
-		// start new data list
-		newplist();
-	}
-
 	return all;
 }
 
@@ -528,7 +500,7 @@ typestruct(Type *t)
 	return pkglookup(name, typepkg);
 }
 
-static int
+int
 haspointers(Type *t)
 {
 	Type *t1;
@@ -584,7 +556,6 @@ dcommontype(Sym *s, int ot, Type *t)
 
 	dowidth(t);
 	
-	sptr = nil;
 	if(t->sym != nil && !isptr[t->etype])
 		sptr = dtypesym(ptrto(t));
 	else

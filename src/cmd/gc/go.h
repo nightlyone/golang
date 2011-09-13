@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#include	<u.h>
-#include	<libc.h>
 #include	<bio.h>
 
 #undef OAPPEND
@@ -155,7 +153,6 @@ struct	Type
 {
 	uchar	etype;
 	uchar	chan;
-	uchar	recur;		// to detect loops
 	uchar	trecur;		// to detect loops
 	uchar	printed;
 	uchar	embedded;	// TFIELD embedded type
@@ -203,8 +200,50 @@ struct	Type
 };
 #define	T	((Type*)0)
 
+typedef struct InitEntry InitEntry;
+typedef struct InitPlan InitPlan;
+
+struct InitEntry
+{
+	vlong xoffset;  // struct, array only
+	Node *key;  // map only
+	Node *expr;
+};
+
+struct InitPlan
+{
+	vlong lit;  // bytes of initialized non-zero literals
+	vlong zero;  // bytes of zeros
+	vlong expr;  // bytes of run-time computed expressions
+
+	InitEntry *e;
+	int len;
+	int cap;
+};
+
+enum
+{
+	EscUnknown,
+	EscHeap,
+	EscScope,
+	EscNone,
+	EscNever,
+};
+
 struct	Node
 {
+	// Tree structure.
+	// Generic recursive walks should follow these fields.
+	Node*	left;
+	Node*	right;
+	Node*	ntest;
+	Node*	nincr;
+	NodeList*	ninit;
+	NodeList*	nbody;
+	NodeList*	nelse;
+	NodeList*	list;
+	NodeList*	rlist;
+
 	uchar	op;
 	uchar	ullman;		// sethi/ullman number
 	uchar	addable;	// type of addressability - 0 is not addressable
@@ -215,40 +254,23 @@ struct	Node
 	uchar	embedded;	// ODCLFIELD embedded type
 	uchar	colas;		// OAS resulting from :=
 	uchar	diag;		// already printed error about this
-	uchar	noescape;	// ONAME never move to heap
+	uchar	esc;		// EscXXX
 	uchar	funcdepth;
 	uchar	builtin;	// built-in name, like len or close
 	uchar	walkdef;
 	uchar	typecheck;
 	uchar	local;
+	uchar	dodata;
 	uchar	initorder;
-	uchar	dodata;		// compile literal assignment as data statement
 	uchar	used;
 	uchar	isddd;
-	uchar	pun;		// don't registerize variable ONAME
 	uchar	readonly;
 	uchar	implicit;	// don't show in printout
 
 	// most nodes
-	Node*	left;
-	Node*	right;
 	Type*	type;
 	Type*	realtype;	// as determined by typecheck
-	NodeList*	list;
-	NodeList*	rlist;
 	Node*	orig;		// original form, for printing, and tracking copies of ONAMEs
-
-	// for-body
-	NodeList*	ninit;
-	Node*	ntest;
-	Node*	nincr;
-	NodeList*	nbody;
-
-	// if-body
-	NodeList*	nelse;
-
-	// cases
-	Node*	ncase;
 
 	// func
 	Node*	nname;
@@ -263,9 +285,10 @@ struct	Node
 
 	// ONAME
 	Node*	ntype;
-	Node*	defn;
+	Node*	defn;	// ONAME: initializing assignment; OLABEL: labeled statement
 	Node*	pack;	// real package for import . names
 	Node*	curfn;	// function for local variables
+	Type*	paramfld; // TFIELD for this PPARAM
 
 	// ONAME func param with PHEAP
 	Node*	heapaddr;	// temp holding heap address of param
@@ -278,6 +301,13 @@ struct	Node
 
 	// OPACK
 	Pkg*	pkg;
+	
+	// OARRAYLIT, OMAPLIT, OSTRUCTLIT.
+	InitPlan*	initplan;
+
+	// Escape analysis.
+	NodeList* escflowsrc;	// flow(this, src)
+	int	escloopdepth;	// -1: global, 0: not set, function top level:1, increased inside function for every loop or label to mark scopes
 
 	Sym*	sym;		// various
 	int32	vargen;		// unique name for OTYPE/ONAME
@@ -287,9 +317,25 @@ struct	Node
 	int32	stkdelta;	// offset added by stack frame compaction phase.
 	int32	ostk;
 	int32	iota;
+	uint32	walkgen;
 };
 #define	N	((Node*)0)
-EXTERN	int32	walkgen;
+
+/*
+ * Every node has a walkgen field.
+ * If you want to do a traversal of a node graph that
+ * might contain duplicates and want to avoid
+ * visiting the same nodes twice, increment walkgen
+ * before starting.  Then before processing a node, do
+ *
+ *	if(n->walkgen == walkgen)
+ *		return;
+ *	n->walkgen = walkgen;
+ *
+ * Such a walk cannot call another such walk recursively,
+ * because of the use of the global walkgen.
+ */
+EXTERN	uint32	walkgen;
 
 struct	NodeList
 {
@@ -374,7 +420,6 @@ enum
 	OADDR,
 	OANDAND,
 	OAPPEND,
-	OARRAY,
 	OARRAYBYTESTR, OARRAYRUNESTR,
 	OSTRARRAYBYTE, OSTRARRAYRUNE,
 	OAS, OAS2, OAS2MAPW, OAS2FUNC, OAS2RECV, OAS2MAPR, OAS2DOTTYPE, OASOP,
@@ -444,6 +489,7 @@ enum
 
 	// misc
 	ODDD,
+	ODDDARG,
 
 	// for back ends
 	OCMP, ODEC, OEXTEND, OINC, OREGISTER, OINDREG,
@@ -561,7 +607,6 @@ typedef	struct	Var	Var;
 struct	Var
 {
 	vlong	offset;
-	Sym*	sym;
 	Sym*	gotype;
 	Node*	node;
 	int	width;
@@ -644,6 +689,7 @@ struct	Magic
 };
 
 typedef struct	Prog Prog;
+#pragma incomplete Prog
 
 struct	Label
 {
@@ -727,6 +773,7 @@ EXTERN	Pkg*	phash[128];
 EXTERN	int	tptr;		// either TPTR32 or TPTR64
 extern	char*	runtimeimport;
 extern	char*	unsafeimport;
+EXTERN	char*	myimportpath;
 EXTERN	Idir*	idirs;
 
 EXTERN	Type*	types[NTYPE];
@@ -911,6 +958,11 @@ Node*	typenod(Type *t);
 NodeList*	variter(NodeList *vl, Node *t, NodeList *el);
 
 /*
+ *	esc.c
+ */
+void	escapes(void);
+
+/*
  *	export.c
  */
 void	autoexport(Node *n, int ctxt);
@@ -927,7 +979,7 @@ Type*	pkgtype(Sym *s);
 /*
  *	gen.c
  */
-void	allocparams(void);
+void	addrescapes(Node *n);
 void	cgen_as(Node *nl, Node *nr);
 void	cgen_callmeth(Node *n, int proc);
 void	clearlabels(void);
@@ -937,6 +989,7 @@ void	gen(Node *n);
 void	genlist(NodeList *l);
 Node*	sysfunc(char *name);
 void	tempname(Node *n, Type *t);
+Node*	temp(Type*);
 
 /*
  *	init.c
@@ -1050,6 +1103,7 @@ void	dumptypestructs(void);
 Type*	methodfunc(Type *f, Type*);
 Node*	typename(Type *t);
 Sym*	typesym(Type *t);
+int	haspointers(Type *t);
 
 /*
  *	select.c
@@ -1170,6 +1224,7 @@ uint32	typehash(Type *t);
 void	ullmancalc(Node *n);
 void	umagic(Magic *m);
 void	warn(char *fmt, ...);
+void	warnl(int line, char *fmt, ...);
 void	yyerror(char *fmt, ...);
 void	yyerrorl(int line, char *fmt, ...);
 
@@ -1274,6 +1329,24 @@ Prog*	unpatch(Prog*);
 void	zfile(Biobuf *b, char *p, int n);
 void	zhist(Biobuf *b, int line, vlong offset);
 void	zname(Biobuf *b, Sym *s, int t);
-void	data(void);
-void	text(void);
 
+#pragma	varargck	type	"A"	int
+#pragma	varargck	type	"B"	Mpint*
+#pragma	varargck	type	"D"	Addr*
+#pragma	varargck	type	"lD"	Addr*
+#pragma	varargck	type	"E"	int
+#pragma	varargck	type	"F"	Mpflt*
+#pragma	varargck	type	"J"	Node*
+#pragma	varargck	type	"L"	int
+#pragma	varargck	type	"L"	uint
+#pragma	varargck	type	"N"	Node*
+#pragma	varargck	type	"O"	uint
+#pragma	varargck	type	"P"	Prog*
+#pragma	varargck	type	"Q"	Bits
+#pragma	varargck	type	"R"	int
+#pragma	varargck	type	"S"	Sym*
+#pragma	varargck	type	"lS"	Sym*
+#pragma	varargck	type	"T"	Type*
+#pragma	varargck	type	"lT"	Type*
+#pragma	varargck	type	"Y"	char*
+#pragma	varargck	type	"Z"	Strlit*

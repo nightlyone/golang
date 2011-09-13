@@ -1,0 +1,30 @@
+diff --git a/src/cmd/goinstall/main.go b/src/cmd/goinstall/main.go
+index 910ab70..db1e3c9 100644
+--- a/src/cmd/goinstall/main.go
++++ b/src/cmd/goinstall/main.go
+@@ -38,7 +38,7 @@ var (
+ 	schemeRe      = regexp.MustCompile(`^[a-z]+://`)
+ 
+ 	allpkg            = flag.Bool("a", false, "install all previously installed packages")
+-	reportToDashboard = flag.Bool("dashboard", true, "report public packages at "+dashboardURL)
++	reportToDashboard *bool
+ 	update            = flag.Bool("u", false, "update already-downloaded packages")
+ 	doInstall         = flag.Bool("install", true, "build and install")
+ 	clean             = flag.Bool("clean", false, "clean the package directory before installing")
+@@ -47,6 +47,16 @@ var (
+ 	verbose           = flag.Bool("v", false, "verbose")
+ )
+ 
++func init() {
++	d := true
++	b, err := ioutil.ReadFile("/etc/golang/goinstall.conf")
++	if err == nil {
++		re := regexp.MustCompile(`(^|\n)DASHBOARD="[nN][oO]"($|\n)`)
++		d = !re.Match(b)
++	}
++	reportToDashboard = flag.Bool("dashboard", d, "report public packages at "+dashboardURL)
++}
++
+ type status int // status for visited map
+ const (
+ 	unvisited status = iota

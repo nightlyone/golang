@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include	<u.h>
+#include	<libc.h>
 #include	"go.h"
 
 static	Node*	walkprint(Node*, NodeList**, int);
@@ -11,7 +13,7 @@ static	Node*	makenewvar(Type*, NodeList**, Node**);
 static	Node*	ascompatee1(int, Node*, Node*, NodeList**);
 static	NodeList*	ascompatee(int, NodeList*, NodeList*, NodeList**);
 static	NodeList*	ascompatet(int, NodeList*, Type**, int, NodeList**);
-static	NodeList*	ascompatte(int, int, Type**, NodeList*, int, NodeList**);
+static	NodeList*	ascompatte(int, Node*, int, Type**, NodeList*, int, NodeList**);
 static	Node*	convas(Node*, NodeList**);
 static	void	heapmoves(void);
 static	NodeList*	paramstoheap(Type **argin, int out);
@@ -287,7 +289,7 @@ walkstmt(Node **np)
 			n->list = reorder3(ll);
 			break;
 		}
-		ll = ascompatte(n->op, 0, getoutarg(curfn->type), n->list, 1, &n->ninit);
+		ll = ascompatte(n->op, nil, 0, getoutarg(curfn->type), n->list, 1, &n->ninit);
 		n->list = ll;
 		break;
 
@@ -378,14 +380,11 @@ walkexpr(Node **np, NodeList **init)
 		fatal("missed typecheck");
 	}
 
-	t = T;
-	et = Txxx;
-
 	switch(n->op) {
 	default:
 		dump("walk", n);
 		fatal("walkexpr: switch 1 unknown op %N", n);
-		goto ret;
+		break;
 
 	case OTYPE:
 	case ONONAME:
@@ -482,7 +481,7 @@ walkexpr(Node **np, NodeList **init)
 			goto ret;
 		walkexpr(&n->left, init);
 		walkexprlist(n->list, init);
-		ll = ascompatte(n->op, n->isddd, getinarg(t), n->list, 0, init);
+		ll = ascompatte(n->op, n, n->isddd, getinarg(t), n->list, 0, init);
 		n->list = reorder1(ll);
 		goto ret;
 
@@ -499,7 +498,7 @@ walkexpr(Node **np, NodeList **init)
 		walkexpr(&n->left, init);
 		walkexprlist(n->list, init);
 
-		ll = ascompatte(n->op, n->isddd, getinarg(t), n->list, 0, init);
+		ll = ascompatte(n->op, n, n->isddd, getinarg(t), n->list, 0, init);
 		n->list = reorder1(ll);
 		goto ret;
 
@@ -509,8 +508,8 @@ walkexpr(Node **np, NodeList **init)
 			goto ret;
 		walkexpr(&n->left, init);
 		walkexprlist(n->list, init);
-		ll = ascompatte(n->op, 0, getthis(t), list1(n->left->left), 0, init);
-		lr = ascompatte(n->op, n->isddd, getinarg(t), n->list, 0, init);
+		ll = ascompatte(n->op, n, 0, getthis(t), list1(n->left->left), 0, init);
+		lr = ascompatte(n->op, n, n->isddd, getinarg(t), n->list, 0, init);
 		ll = concat(ll, lr);
 		n->left->left = N;
 		ullmancalc(n->left);
@@ -563,8 +562,7 @@ walkexpr(Node **np, NodeList **init)
 		// and map index has an implicit one.
 		lpost = nil;
 		if(l->op == OINDEXMAP) {
-			var = nod(OXXX, N, N);
-			tempname(var, l->type);
+			var = temp(l->type);
 			n->list->n = var;
 			a = nod(OAS, l, var);
 			typecheck(&a, Etop);
@@ -572,8 +570,7 @@ walkexpr(Node **np, NodeList **init)
 		}
 		l = n->list->next->n;
 		if(l->op == OINDEXMAP) {
-			var = nod(OXXX, N, N);
-			tempname(var, l->type);
+			var = temp(l->type);
 			n->list->next->n = var;
 			a = nod(OAS, l, var);
 			typecheck(&a, Etop);
@@ -975,7 +972,15 @@ walkexpr(Node **np, NodeList **init)
 		goto ret;
 
 	case ONEW:
-		n = callnew(n->type->type);
+		if(n->esc == EscNone && n->type->type->width < (1<<16)) {
+			r = temp(n->type->type);
+			*init = list(*init, nod(OAS, r, N));  // zero temp
+			r = nod(OADDR, r, N);
+			typecheck(&r, Erv);
+			n = r;
+		} else {
+			n = callnew(n->type->type);
+		}
 		goto ret;
 
 	case OCMPSTR:
@@ -1156,8 +1161,7 @@ walkexpr(Node **np, NodeList **init)
 	case OARRAYLIT:
 	case OMAPLIT:
 	case OSTRUCTLIT:
-		nvar = nod(OXXX, N, N);
-		tempname(nvar, n->type);
+		nvar = temp(n->type);
 		anylit(0, n, nvar, init);
 		n = nvar;
 		goto ret;
@@ -1186,8 +1190,7 @@ makenewvar(Type *t, NodeList **init, Node **nstar)
 {
 	Node *nvar, *nas;
 
-	nvar = nod(OXXX, N, N);
-	tempname(nvar, t);
+	nvar = temp(t);
 	nas = nod(OAS, nvar, callnew(t->type));
 	typecheck(&nas, Etop);
 	walkexpr(&nas, init);
@@ -1201,6 +1204,8 @@ makenewvar(Type *t, NodeList **init, Node **nstar)
 static Node*
 ascompatee1(int op, Node *l, Node *r, NodeList **init)
 {
+	USED(op);
+
 	return convas(nod(OAS, l, r), init);
 }
 
@@ -1257,6 +1262,8 @@ ascompatet(int op, NodeList *nl, Type **nr, int fp, NodeList **init)
 	int ucount;
 	NodeList *nn, *mm;
 
+	USED(op);
+
 	/*
 	 * check assign type list to
 	 * a expression list. called in
@@ -1279,8 +1286,7 @@ ascompatet(int op, NodeList *nl, Type **nr, int fp, NodeList **init)
 		// deferred until all the return arguments
 		// have been pulled from the output arguments
 		if(fncall(l, r->type)) {
-			tmp = nod(OXXX, N, N);
-			tempname(tmp, r->type);
+			tmp = temp(r->type);
 			typecheck(&tmp, Erv);
 			a = nod(OAS, l, tmp);
 			a = convas(a, init);
@@ -1309,21 +1315,27 @@ ascompatet(int op, NodeList *nl, Type **nr, int fp, NodeList **init)
  * package all the arguments that match a ... T parameter into a []T.
  */
 static NodeList*
-mkdotargslice(NodeList *lr0, NodeList *nn, Type *l, int fp, NodeList **init)
+mkdotargslice(NodeList *lr0, NodeList *nn, Type *l, int fp, NodeList **init, int esc)
 {
 	Node *a, *n;
 	Type *tslice;
-
+	
 	tslice = typ(TARRAY);
 	tslice->type = l->type->type;
 	tslice->bound = -1;
 
-	n = nod(OCOMPLIT, N, typenod(tslice));
-	n->list = lr0;
-	typecheck(&n, Erv);
-	if(n->type == T)
-		fatal("mkdotargslice: typecheck failed");
-	walkexpr(&n, init);
+	if(count(lr0) == 0) {
+		n = nodnil();
+		n->type = tslice;
+	} else {
+		n = nod(OCOMPLIT, N, typenod(tslice));
+		n->list = lr0;
+		n->esc = esc;
+		typecheck(&n, Erv);
+		if(n->type == T)
+			fatal("mkdotargslice: typecheck failed");
+		walkexpr(&n, init);
+	}
 
 	a = nod(OAS, nodarg(l, fp), n);
 	nn = list(nn, convas(a, init));
@@ -1343,7 +1355,6 @@ dumptypes(Type **nl, char *what)
 
 	fmtstrinit(&fmt);
 	fmtprint(&fmt, "\t");
-	l = structfirst(&savel, nl);
 	first = 1;
 	for(l = structfirst(&savel, nl); l != T; l = structnext(&savel)) {
 		if(first)
@@ -1387,8 +1398,9 @@ dumpnodetypes(NodeList *l, char *what)
  *	func(expr-list)
  */
 static NodeList*
-ascompatte(int op, int isddd, Type **nl, NodeList *lr, int fp, NodeList **init)
+ascompatte(int op, Node *call, int isddd, Type **nl, NodeList *lr, int fp, NodeList **init)
 {
+	int esc;
 	Type *l, *ll;
 	Node *r, *a;
 	NodeList *nn, *lr0, *alist;
@@ -1416,8 +1428,7 @@ ascompatte(int op, int isddd, Type **nl, NodeList *lr, int fp, NodeList **init)
 		// copy into temporaries.
 		alist = nil;
 		for(l=structfirst(&savel, &r->type); l; l=structnext(&savel)) {
-			a = nod(OXXX, N, N);
-			tempname(a, l->type);
+			a = temp(l->type);
 			alist = list(alist, a);
 		}
 		a = nod(OAS2, N, N);
@@ -1452,7 +1463,10 @@ loop:
 		// normal case -- make a slice of all
 		// remaining arguments and pass it to
 		// the ddd parameter.
-		nn = mkdotargslice(lr, nn, l, fp, init);
+		esc = EscUnknown;
+		if(call->right)
+			esc = call->right->esc;
+		nn = mkdotargslice(lr, nn, l, fp, init, esc);
 		goto ret;
 	}
 
@@ -1720,7 +1734,7 @@ out:
  * then it is done first. otherwise must
  * make temp variables
  */
-NodeList*
+static NodeList*
 reorder1(NodeList *all)
 {
 	Node *f, *a, *n;
@@ -1757,8 +1771,7 @@ reorder1(NodeList *all)
 		}
 
 		// make assignment of fncall to tempname
-		a = nod(OXXX, N, N);
-		tempname(a, n->right->type);
+		a = temp(n->right->type);
 		a = nod(OAS, a, n->right);
 		g = list(g, a);
 
@@ -1846,7 +1859,7 @@ vmatch1(Node *l, Node *r)
 	return 0;
 }
 
-NodeList*
+static NodeList*
 reorder3(NodeList *all)
 {
 	Node *n1, *n2, *q;
@@ -1861,8 +1874,7 @@ reorder3(NodeList *all)
 			if(c2 > c1) {
 				if(vmatch1(n1->left, n2->right)) {
 					// delay assignment to n1->left
-					q = nod(OXXX, N, N);
-					tempname(q, n1->right->type);
+					q = temp(n1->right->type);
 					q = nod(OAS, n1->left, q);
 					n1->left = q->right;
 					r = list(r, q);
@@ -2125,8 +2137,7 @@ append(Node *n, NodeList **init)
 
 	l = nil;
 
-	ns = nod(OXXX, N, N);             // var s
-	tempname(ns, nsrc->type);
+	ns = temp(nsrc->type);
 	l = list(l, nod(OAS, ns, nsrc));  // s = src
 
 	na = nodintconst(argc);         // const argc
@@ -2143,8 +2154,7 @@ append(Node *n, NodeList **init)
 					       conv(na, types[TINT64]))));
 	l = list(l, nx);
 
-	nn = nod(OXXX, N, N);                            // var n
-	tempname(nn, types[TINT]);
+	nn = temp(types[TINT]);
 	l = list(l, nod(OAS, nn, nod(OLEN, ns, N)));     // n = len(s)
 
 	nx = nod(OSLICE, ns, nod(OKEY, N, nod(OADD, nn, na)));   // ...s[:n+argc]

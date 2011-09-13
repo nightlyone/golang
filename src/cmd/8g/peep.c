@@ -28,6 +28,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 #include "opt.h"
 
@@ -882,7 +884,6 @@ loop:
 		if(p->from.dval == p0->from.dval)
 		if(p->from.index == p0->from.index) {
 			excise(r);
-			t++;
 			goto loop;
 		}
 		break;

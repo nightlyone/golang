@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 
 /*
@@ -727,9 +729,6 @@ bgen(Node *n, int true, Prog *to)
 	if(n->ninit != nil)
 		genlist(n->ninit);
 
-	nl = n->left;
-	nr = n->right;
-
 	if(n->type == T) {
 		convlit(&n, types[TBOOL]);
 		if(n->type == T)
@@ -742,7 +741,6 @@ bgen(Node *n, int true, Prog *to)
 		patch(gins(AEND, N, N), to);
 		goto ret;
 	}
-	nl = N;
 	nr = N;
 
 	switch(n->op) {
@@ -1031,11 +1029,9 @@ sgen(Node *n, Node *ns, int32 w)
 		dump("r", n);
 		dump("res", ns);
 	}
-	if(w == 0)
-		return;
-	if(n->ullman >= UINF && ns->ullman >= UINF) {
+
+	if(n->ullman >= UINF && ns->ullman >= UINF)
 		fatal("sgen UINF");
-	}
 
 	if(w < 0)
 		fatal("sgen copy %d", w);
@@ -1043,6 +1039,15 @@ sgen(Node *n, Node *ns, int32 w)
 	if(w == 16)
 		if(componentgen(n, ns))
 			return;
+	
+	if(w == 0) {
+		// evaluate side effects only
+		regalloc(&nodr, types[tptr], N);
+		agen(ns, &nodr);
+		agen(n, &nodr);
+		regfree(&nodr);
+		return;
+	}
 
 	// offset on the stack
 	osrc = stkof(n);

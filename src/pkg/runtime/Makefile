@@ -13,7 +13,7 @@ SIZE_arm=32
 SIZE=$(SIZE_$(GOARCH))
 
 CFLAGS_windows=-D__WINDOWS__
-CFLAGS=-I$(GOOS) -I$(GOARCH) -I$(GOOS)/$(GOARCH) -wF $(CFLAGS_$(GOARCH)) $(CFLAGS_$(GOOS))
+CFLAGS=-I$(GOOS) -I$(GOARCH) -I$(GOOS)/$(GOARCH) -FVw $(CFLAGS_$(GOARCH)) $(CFLAGS_$(GOOS))
 
 GOFILES=\
 	debug.go\
@@ -31,6 +31,7 @@ GOFILES=\
 CLEANFILES+=version.go version_*.go
 
 OFILES_windows=\
+	callback.$O\
 	syscall.$O\
 
 # 386-specific object files

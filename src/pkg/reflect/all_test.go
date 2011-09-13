@@ -6,7 +6,7 @@ package reflect_test
 
 import (
 	"bytes"
-	"container/vector"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -1322,8 +1322,8 @@ func TestFieldByName(t *testing.T) {
 }
 
 func TestImportPath(t *testing.T) {
-	if path := TypeOf(vector.Vector{}).PkgPath(); path != "container/vector" {
-		t.Errorf("TypeOf(vector.Vector{}).PkgPath() = %q, want \"container/vector\"", path)
+	if path := TypeOf(&base64.Encoding{}).Elem().PkgPath(); path != "encoding/base64" {
+		t.Errorf(`TypeOf(&base64.Encoding{}).Elem().PkgPath() = %q, want "encoding/base64"`, path)
 	}
 }
 
@@ -1560,5 +1560,30 @@ func TestTagGet(t *testing.T) {
 		if v := tt.Tag.Get(tt.Key); v != tt.Value {
 			t.Errorf("StructTag(%#q).Get(%#q) = %#q, want %#q", tt.Tag, tt.Key, v, tt.Value)
 		}
+	}
+}
+
+func TestBytes(t *testing.T) {
+	type B []byte
+	x := B{1, 2, 3, 4}
+	y := ValueOf(x).Bytes()
+	if !bytes.Equal(x, y) {
+		t.Fatalf("ValueOf(%v).Bytes() = %v", x, y)
+	}
+	if &x[0] != &y[0] {
+		t.Errorf("ValueOf(%p).Bytes() = %p", &x[0], &y[0])
+	}
+}
+
+func TestSetBytes(t *testing.T) {
+	type B []byte
+	var x B
+	y := []byte{1, 2, 3, 4}
+	ValueOf(&x).Elem().SetBytes(y)
+	if !bytes.Equal(x, y) {
+		t.Fatalf("ValueOf(%v).Bytes() = %v", x, y)
+	}
+	if &x[0] != &y[0] {
+		t.Errorf("ValueOf(%p).Bytes() = %p", &x[0], &y[0])
 	}
 }

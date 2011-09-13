@@ -81,6 +81,7 @@ DIRS=\
 	exp/gui\
 	exp/gui/x11\
 	exp/norm\
+	exp/regexp\
 	exp/regexp/syntax\
 	exp/template/html\
 	expvar\
@@ -189,29 +190,7 @@ endif
 
 ifeq ($(GOOS),plan9)
 NOPLAN9BUILD=\
-	crypto/tls\
-	exp/gui/x11\
-	expvar\
-	http\
-	http/cgi\
-	http/fcgi\
-	http/httptest\
-	http/pprof\
-	http/spdy\
-	mail\
-	mime/multipart\
-	net\
-	net/dict\
-	net/textproto\
-	netchan\
 	os/signal\
-	rpc\
-	rpc/jsonrpc\
-	smtp\
-	syslog\
-	websocket\
-	../cmd/godoc\
-	../cmd/goinstall\
 
 DIRS:=$(filter-out $(NOPLAN9BUILD),$(DIRS))
 endif
@@ -240,7 +219,6 @@ NOTEST+=\
 	../cmd/cgo\
 	../cmd/ebnflint\
 	../cmd/godoc\
-	../cmd/goinstall\
 	../cmd/gotest\
 	../cmd/goyacc\
 	../cmd/hgpatch\
@@ -252,7 +230,6 @@ NOBENCH+=\
 ifeq ($(GOOS),windows)
 NOTEST+=os/signal    # no signals
 NOTEST+=syslog       # no network
-NOTEST+=time         # no syscall.Kill, syscall.SIGCHLD for sleep tests
 endif
 
 TEST=\

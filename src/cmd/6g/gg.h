@@ -2,15 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#include <u.h>
-#include <libc.h>
+#ifndef	EXTERN
+#define	EXTERN	extern
+#endif
 
 #include "../gc/go.h"
 #include "../6l/6.out.h"
-
-#ifndef	EXTERN
-#define EXTERN	extern
-#endif
 
 typedef	struct	Addr	Addr;
 
@@ -44,22 +41,19 @@ struct	Prog
 	void*	reg;		// pointer to containing Reg struct
 };
 
-EXTERN	Biobuf*	bout;
 EXTERN	int32	dynloc;
 EXTERN	uchar	reg[D_NONE];
 EXTERN	int32	pcloc;		// instruction counter
 EXTERN	Strlit	emptystring;
 extern	char*	anames[];
-EXTERN	Hist*	hist;
 EXTERN	Prog	zprog;
-EXTERN	Node*	curfn;
 EXTERN	Node*	newproc;
 EXTERN	Node*	deferproc;
 EXTERN	Node*	deferreturn;
 EXTERN	Node*	panicindex;
 EXTERN	Node*	panicslice;
 EXTERN	Node*	throwreturn;
-EXTERN	vlong	unmappedzero;
+extern	vlong	unmappedzero;
 
 /*
  * gen.c
@@ -159,3 +153,5 @@ void	listinit(void);
 
 void	zaddr(Biobuf*, Addr*, int, int);
 
+#pragma	varargck	type	"D"	Addr*
+#pragma	varargck	type	"lD"	Addr*

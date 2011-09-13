@@ -122,6 +122,25 @@ type response struct {
 	// "Connection: keep-alive" response header and a
 	// Content-Length.
 	closeAfterReply bool
+
+	// requestBodyLimitHit is set by requestTooLarge when
+	// maxBytesReader hits its max size. It is checked in
+	// WriteHeader, to make sure we don't consume the the
+	// remaining request body to try to advance to the next HTTP
+	// request. Instead, when this is set, we stop doing
+	// subsequent requests on this connection and stop reading
+	// input from it.
+	requestBodyLimitHit bool
+}
+
+// requestTooLarge is called by maxBytesReader when too much input has
+// been read from the client.
+func (r *response) requestTooLarge() {
+	r.closeAfterReply = true
+	r.requestBodyLimitHit = true
+	if !r.wroteHeader {
+		r.Header().Set("Connection", "close")
+	}
 }
 
 type writerOnly struct {
@@ -257,7 +276,7 @@ func (w *response) WriteHeader(code int) {
 
 	// Per RFC 2616, we should consume the request body before
 	// replying, if the handler hasn't already done so.
-	if w.req.ContentLength != 0 {
+	if w.req.ContentLength != 0 && !w.requestBodyLimitHit {
 		ecr, isExpecter := w.req.Body.(*expectContinueReader)
 		if !isExpecter || ecr.resp.wroteContinue {
 			w.req.Body.Close()
@@ -472,55 +491,6 @@ func (w *response) Write(data []byte) (n int, err os.Error) {
 	return m + n, err
 }
 
-// If this is an error reply (4xx or 5xx)
-// and the handler wrote some data explaining the error,
-// some browsers (i.e., Chrome, Internet Explorer)
-// will show their own error instead unless the error is
-// long enough.  The minimum lengths used in those
-// browsers are in the 256-512 range.
-// Pad to 1024 bytes.
-func errorKludge(w *response) {
-	const min = 1024
-
-	// Is this an error?
-	if kind := w.status / 100; kind != 4 && kind != 5 {
-		return
-	}
-
-	// Did the handler supply any info?  Enough?
-	if w.written == 0 || w.written >= min {
-		return
-	}
-
-	// Is it a broken browser?
-	var msg string
-	switch agent := w.req.UserAgent(); {
-	case strings.Contains(agent, "MSIE"):
-		msg = "Internet Explorer"
-	case strings.Contains(agent, "Chrome/"):
-		msg = "Chrome"
-	default:
-		return
-	}
-	msg += " would ignore this error page if this text weren't here.\n"
-
-	// Is it text?  ("Content-Type" is always in the map)
-	baseType := strings.SplitN(w.header.Get("Content-Type"), ";", 2)[0]
-	switch baseType {
-	case "text/html":
-		io.WriteString(w, "<!-- ")
-		for w.written < min {
-			io.WriteString(w, msg)
-		}
-		io.WriteString(w, " -->")
-	case "text/plain":
-		io.WriteString(w, "\n")
-		for w.written < min {
-			io.WriteString(w, msg)
-		}
-	}
-}
-
 func (w *response) finishRequest() {
 	// If this was an HTTP/1.0 request with keep-alive and we sent a Content-Length
 	// back, we can make this a keep-alive response ...
@@ -536,14 +506,17 @@ func (w *response) finishRequest() {
 	if w.needSniff {
 		w.sniff()
 	}
-	errorKludge(w)
 	if w.chunking {
 		io.WriteString(w.conn.buf, "0\r\n")
 		// trailer key/value pairs, followed by blank line
 		io.WriteString(w.conn.buf, "\r\n")
 	}
 	w.conn.buf.Flush()
-	w.req.Body.Close()
+	// Close the body, unless we're about to close the whole TCP connection
+	// anyway.
+	if !w.closeAfterReply {
+		w.req.Body.Close()
+	}
 	if w.req.MultipartForm != nil {
 		w.req.MultipartForm.RemoveAll()
 	}
@@ -592,14 +565,18 @@ func (c *conn) serve() {
 	for {
 		w, err := c.readRequest()
 		if err != nil {
+			msg := "400 Bad Request"
 			if err == errTooLarge {
 				// Their HTTP client may or may not be
 				// able to read this if we're
 				// responding to them and hanging up
 				// while they're still writing their
 				// request.  Undefined behavior.
-				fmt.Fprintf(c.rwc, "HTTP/1.1 400 Request Too Large\r\n\r\n")
+				msg = "413 Request Entity Too Large"
+			} else if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+				break // Don't reply
 			}
+			fmt.Fprintf(c.rwc, "HTTP/1.1 %s\r\n\r\n", msg)
 			break
 		}
 

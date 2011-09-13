@@ -10,6 +10,8 @@
  * rewrites n->op to be more specific in some cases.
  */
 
+#include <u.h>
+#include <libc.h>
 #include "go.h"
 
 static void	implicitstar(Node**);
@@ -21,7 +23,6 @@ static void	typecheckaste(int, Node*, int, Type*, NodeList*, char*);
 static Type*	lookdot1(Sym *s, Type *t, Type *f, int);
 static int	nokeys(NodeList*);
 static void	typecheckcomplit(Node**);
-static void	addrescapes(Node*);
 static void	typecheckas2(Node*);
 static void	typecheckas(Node*);
 static void	typecheckfunc(Node*);
@@ -37,7 +38,7 @@ static	NodeList*	typecheckdefstack;
 /*
  * resolve ONONAME to definition, if any.
  */
-Node*
+static Node*
 resolve(Node *n)
 {
 	Node *r;
@@ -152,7 +153,7 @@ typecheck(Node **np, int top)
 	}
 
 	if(n->typecheck == 2) {
-		yyerror("typechecking loop");
+		yyerror("typechecking loop involving %#N", n);
 		lineno = lno;
 		return n;
 	}
@@ -337,7 +338,7 @@ reswitch:
 	 */
 	case OIND:
 		ntop = Erv | Etype;
-		if(!(top & Eaddr))
+		if(!(top & Eaddr))  		// The *x in &*x is not an indirect.
 			ntop |= Eindir;
 		l = typecheck(&n->left, ntop);
 		if((t = l->type) == T)
@@ -535,7 +536,9 @@ reswitch:
 		l = n->left;
 		if((t = l->type) == T)
 			goto error;
-		if(!(top & Eindir) && !n->etype)
+		// top&Eindir means this is &x in *&x.  (or the arg to built-in print)
+		// n->etype means code generator flagged it as non-escaping.
+		if(debug['s'] && !(top & Eindir) && !n->etype)
 			addrescapes(n->left);
 		n->type = ptrto(t);
 		goto ret;
@@ -721,7 +724,7 @@ reswitch:
 		}
 		defaultlit(&n->right, t->type);
 		r = n->right;
-		if((t = r->type) == T)
+		if(r->type == T)
 			goto error;
 		r = assignconv(r, l->type->type, "send");
 		// TODO: more aggressive
@@ -1028,6 +1031,7 @@ reswitch:
 		}
 		n->left = args->n;
 		n->right = args->next->n;
+		n->list = nil;
 		n->type = types[TINT];
 		typecheck(&n->left, Erv);
 		typecheck(&n->right, Erv);
@@ -1038,7 +1042,7 @@ reswitch:
 		
 		// copy([]byte, string)
 		if(isslice(n->left->type) && n->right->type->etype == TSTRING) {
-			if (n->left->type->type == types[TUINT8])
+			if(n->left->type->type == types[TUINT8])
 				goto ret;
 			yyerror("arguments to copy have different element types: %lT and string", n->left->type);
 			goto error;
@@ -1068,7 +1072,7 @@ reswitch:
 			goto error;
 		if((n->op = convertop(t, n->type, &why)) == 0) {
 			yyerror("cannot convert %+N to type %T%s", n->left, n->type, why);
-			op = OCONV;
+			n->op = OCONV;
 		}
 		switch(n->op) {
 		case OCONVNOP:
@@ -1602,7 +1606,8 @@ lookdot(Node *n, Type *t, int dostrcmp)
 		if(!eqtype(rcvr, tt)) {
 			if(rcvr->etype == tptr && eqtype(rcvr->type, tt)) {
 				checklvalue(n->left, "call pointer method on");
-				addrescapes(n->left);
+				if(debug['s'])
+					addrescapes(n->left);
 				n->left = nod(OADDR, n->left, N);
 				n->left->implicit = 1;
 				typecheck(&n->left, Etype|Erv);
@@ -2097,6 +2102,7 @@ typecheckcomplit(Node **np)
 					yyerror("implicit assignment of unexported field '%s' in %T literal", s->name, t);
 				ll->n = assignconv(ll->n, f->type, "field value");
 				ll->n = nod(OKEY, newname(f->sym), ll->n);
+				ll->n->left->type = f;
 				ll->n->left->typecheck = 1;
 				f = f->down;
 			}
@@ -2126,14 +2132,15 @@ typecheckcomplit(Node **np)
 				// before we do the lookup.
 				if(s->pkg != localpkg)
 					s = lookup(s->name);
-				l->left = newname(s);
-				l->left->typecheck = 1;
 				f = lookdot1(s, t, t->type, 0);
 				typecheck(&l->right, Erv);
 				if(f == nil) {
 					yyerror("unknown %T field '%s' in struct literal", t, s->name);
 					continue;
 				}
+				l->left = newname(s);
+				l->left->typecheck = 1;
+				l->left->type = f;
 				s = f->sym;
 				fielddup(newname(s), hash, nhash);
 				l->right = assignconv(l->right, f->type, "field value");
@@ -2154,82 +2161,6 @@ error:
 	n->type = T;
 	*np = n;
 	lineno = lno;
-}
-
-/*
- * the address of n has been taken and might be used after
- * the current function returns.  mark any local vars
- * as needing to move to the heap.
- */
-static void
-addrescapes(Node *n)
-{
-	char buf[100];
-	switch(n->op) {
-	default:
-		// probably a type error already.
-		// dump("addrescapes", n);
-		break;
-
-	case ONAME:
-		if(n->noescape)
-			break;
-		switch(n->class) {
-		case PPARAMREF:
-			addrescapes(n->defn);
-			break;
-		case PPARAM:
-		case PPARAMOUT:
-			// if func param, need separate temporary
-			// to hold heap pointer.
-			// the function type has already been checked
-			// (we're in the function body)
-			// so the param already has a valid xoffset.
-
-			// expression to refer to stack copy
-			n->stackparam = nod(OPARAM, n, N);
-			n->stackparam->type = n->type;
-			n->stackparam->addable = 1;
-			if(n->xoffset == BADWIDTH)
-				fatal("addrescapes before param assignment");
-			n->stackparam->xoffset = n->xoffset;
-			n->xoffset = 0;
-			// fallthrough
-		case PAUTO:
-
-			n->class |= PHEAP;
-			n->addable = 0;
-			n->ullman = 2;
-			n->xoffset = 0;
-
-			// create stack variable to hold pointer to heap
-			n->heapaddr = nod(ONAME, N, N);
-			n->heapaddr->type = ptrto(n->type);
-			snprint(buf, sizeof buf, "&%S", n->sym);
-			n->heapaddr->sym = lookup(buf);
-			n->heapaddr->class = PHEAP-1;	// defer tempname to allocparams
-			n->heapaddr->ullman = 1;
-			n->curfn->dcl = list(n->curfn->dcl, n->heapaddr);
-
-			break;
-		}
-		break;
-
-	case OIND:
-	case ODOTPTR:
-		break;
-
-	case ODOT:
-	case OINDEX:
-		// ODOTPTR has already been introduced,
-		// so these are the non-pointer ODOT and OINDEX.
-		// In &x[0], if x is a slice, then x does not
-		// escape--the pointer inside x does, but that
-		// is always a heap pointer anyway.
-		if(!isslice(n->left->type))
-			addrescapes(n->left);
-		break;
-	}
 }
 
 /*
@@ -2462,7 +2393,6 @@ typecheckfunc(Node *n)
 {
 	Type *t, *rcvr;
 
-//dump("nname", n->nname);
 	typecheck(&n->nname, Erv | Easgn);
 	if((t = n->nname->type) == T)
 		return;
@@ -2514,7 +2444,7 @@ getforwtype(Node *n)
 {
 	Node *f1, *f2;
 
-	for(f1=f2=n; ; n=n->ntype) {
+	for(f2=n; ; n=n->ntype) {
 		if((n = resolve(n)) == N || n->op != OTYPE)
 			return T;
 
@@ -2772,6 +2702,7 @@ typecheckdef(Node *n)
 		if(n->ntype != N) {
 			typecheck(&n->ntype, Etype);
 			n->type = n->ntype->type;
+
 			if(n->type == T) {
 				n->diag = 1;
 				goto ret;

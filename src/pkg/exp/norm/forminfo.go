@@ -77,7 +77,7 @@ func decompBoundary(f *formInfo, info runeInfo) bool {
 }
 
 func compBoundaryBefore(f *formInfo, info runeInfo) bool {
-	if info.ccc == 0 && info.flags.isYesC() {
+	if info.ccc == 0 && !info.flags.combinesBackward() {
 		return true
 	}
 	// We assume that the CCC of the first character in a decomposition
@@ -89,9 +89,7 @@ func compBoundaryBefore(f *formInfo, info runeInfo) bool {
 func compBoundaryAfter(f *formInfo, info runeInfo) bool {
 	// This misses values where the last char in a decomposition is a
 	// boundary such as Hangul with JamoT.
-	// TODO(mpvl): verify this does not lead to segments that do
-	// not fit in the reorderBuffer.
-	return info.flags.isInert()
+	return info.isInert()
 }
 
 // We pack quick check data in 4 bits:
@@ -110,11 +108,14 @@ func (i qcInfo) isNoC() bool   { return i&0x6 == 0x2 }
 func (i qcInfo) isMaybe() bool { return i&0x4 != 0 }
 func (i qcInfo) isYesD() bool  { return i&0x1 == 0 }
 func (i qcInfo) isNoD() bool   { return i&0x1 != 0 }
-func (i qcInfo) isInert() bool { return i&0xf == 0 }
 
 func (i qcInfo) combinesForward() bool  { return i&0x8 != 0 }
 func (i qcInfo) combinesBackward() bool { return i&0x4 != 0 } // == isMaybe
 func (i qcInfo) hasDecomposition() bool { return i&0x1 != 0 } // == isNoD
+
+func (r runeInfo) isInert() bool {
+	return r.flags&0xf == 0 && r.ccc == 0
+}
 
 // Wrappers for tables.go
 

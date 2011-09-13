@@ -322,8 +322,31 @@ func packValue(flag uint32, typ *runtime.Type, word iword) Value {
 	return Value{Internal: *(*interface{})(unsafe.Pointer(&eface))}
 }
 
+var dummy struct {
+	b bool
+	x interface{}
+}
+
+// Dummy annotation marking that the value x escapes,
+// for use in cases where the reflect code is so clever that
+// the compiler cannot follow.
+func escapes(x interface{}) {
+	if dummy.b {
+		dummy.x = x
+	}
+}
+
 // valueFromAddr returns a Value using the given type and address.
 func valueFromAddr(flag uint32, typ Type, addr unsafe.Pointer) Value {
+	// TODO(rsc): Eliminate this terrible hack.
+	// The escape analysis knows that addr is a pointer
+	// but it doesn't see addr get passed to anything
+	// that keeps it.  packValue keeps it, but packValue
+	// takes a uintptr (iword(addr)), and integers (non-pointers)
+	// are assumed not to matter.  The escapes function works
+	// because return values always escape (for now).
+	escapes(addr)
+
 	if flag&flagAddr != 0 {
 		// Addressable, so the internal value is
 		// an interface containing a pointer to the real value.
@@ -396,6 +419,18 @@ func (v Value) Bool() bool {
 	iv := v.internal()
 	iv.mustBe(Bool)
 	return *(*bool)(unsafe.Pointer(&iv.word))
+}
+
+// Bytes returns v's underlying value.
+// It panics if v's underlying value is not a slice of bytes.
+func (v Value) Bytes() []byte {
+	iv := v.internal()
+	iv.mustBe(Slice)
+	typ := iv.typ.toType()
+	if typ.Elem().Kind() != Uint8 {
+		panic("reflect.Value.Bytes of non-byte slice")
+	}
+	return *(*[]byte)(iv.addr)
 }
 
 // CanAddr returns true if the value's address can be obtained with Addr.
@@ -1224,6 +1259,19 @@ func (v Value) SetBool(x bool) {
 	*(*bool)(iv.addr) = x
 }
 
+// SetBytes sets v's underlying value.
+// It panics if v's underlying value is not a slice of bytes.
+func (v Value) SetBytes(x []byte) {
+	iv := v.internal()
+	iv.mustBeAssignable()
+	iv.mustBe(Slice)
+	typ := iv.typ.toType()
+	if typ.Elem().Kind() != Uint8 {
+		panic("reflect.Value.SetBytes of non-byte slice")
+	}
+	*(*[]byte)(iv.addr) = x
+}
+
 // SetComplex sets v's underlying value to x.
 // It panics if v's Kind is not Complex64 or Complex128, or if CanSet() is false.
 func (v Value) SetComplex(x complex128) {
@@ -1653,6 +1701,14 @@ func ValueOf(i interface{}) Value {
 	if i == nil {
 		return Value{}
 	}
+
+	// TODO(rsc): Eliminate this terrible hack.
+	// In the call to packValue, eface.typ doesn't escape,
+	// and eface.word is an integer.  So it looks like
+	// i (= eface) doesn't escape.  But really it does,
+	// because eface.word is actually a pointer.
+	escapes(i)
+
 	// For an interface value with the noAddr bit set,
 	// the representation is identical to an empty interface.
 	eface := *(*emptyInterface)(unsafe.Pointer(&i))

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include	<u.h>
+#include	<libc.h>
 #include	"go.h"
 #include	"y.tab.h"
 
@@ -115,6 +117,8 @@ dumpdcl(char *st)
 	Sym *s, *d;
 	int i;
 
+	USED(st);
+
 	i = 0;
 	for(d=dclstack; d!=S; d=d->link) {
 		i++;
@@ -188,7 +192,7 @@ declare(Node *n, int ctxt)
 		n->curfn = curfn;
 	}
 	if(ctxt == PAUTO)
-		n->xoffset = BADWIDTH;
+		n->xoffset = 0;
 
 	if(s->block == block)
 		redeclare(s, "in this block");
@@ -726,7 +730,6 @@ stotype(NodeList *l, int et, Type **t, int funarg)
 	for(; l; l=l->next) {
 		n = l->n;
 		lineno = n->lineno;
-		note = nil;
 
 		if(n->op != ODCLFIELD)
 			fatal("stotype: oops %N\n", n);
@@ -819,6 +822,10 @@ stotype(NodeList *l, int et, Type **t, int funarg)
 		f->note = note;
 		f->width = BADWIDTH;
 		f->isddd = n->isddd;
+
+		// esc.c needs to find f given a PPARAM to add the tag.
+		if(funarg && n->left && n->left->class == PPARAM)
+			n->left->paramfld = f;
 
 		if(left != N && left->op == ONAME) {
 			f->nname = left;
@@ -1132,8 +1139,6 @@ addmethod(Sym *sf, Type *t, int local)
 {
 	Type *f, *d, *pa;
 	Node *n;
-
-	pa = nil;
 
 	// get field sym
 	if(sf == S)

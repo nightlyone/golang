@@ -5,6 +5,8 @@
 // TODO(rsc):
 //	assume CLD?
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 
 void
@@ -680,7 +682,6 @@ agen(Node *n, Node *res)
 		break;
 
 	case ODOT:
-		t = nl->type;
 		agen(nl, res);
 		if(n->xoffset != 0) {
 			nodconst(&n1, types[tptr], n->xoffset);
@@ -798,9 +799,6 @@ bgen(Node *n, int true, Prog *to)
 	if(n->ninit != nil)
 		genlist(n->ninit);
 
-	nl = n->left;
-	nr = n->right;
-
 	if(n->type == T) {
 		convlit(&n, types[TBOOL]);
 		if(n->type == T)
@@ -813,7 +811,6 @@ bgen(Node *n, int true, Prog *to)
 		patch(gins(AEND, N, N), to);
 		return;
 	}
-	nl = N;
 	nr = N;
 
 	switch(n->op) {
@@ -1139,14 +1136,19 @@ sgen(Node *n, Node *res, int32 w)
 		dump("r", n);
 		dump("res", res);
 	}
-	if(w == 0)
-		return;
-	if(n->ullman >= UINF && res->ullman >= UINF) {
+	if(n->ullman >= UINF && res->ullman >= UINF)
 		fatal("sgen UINF");
-	}
 
 	if(w < 0)
 		fatal("sgen copy %d", w);
+
+	if(w == 0) {
+		// evaluate side effects only.
+		tempname(&tdst, types[tptr]);
+		agen(res, &tdst);
+		agen(n, &tdst);
+		return;
+	}
 
 	// offset on the stack
 	osrc = stkof(n);

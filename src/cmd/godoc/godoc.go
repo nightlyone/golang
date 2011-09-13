@@ -64,7 +64,10 @@ var (
 
 	// search index
 	indexEnabled = flag.Bool("index", false, "enable search index")
-	maxResults   = flag.Int("maxresults", 10000, "maximum number of full text search results shown")
+	indexFiles   = flag.String("index_files", "", "glob pattern specifying index files;"+
+		"if not empty, the index is read from these files in sorted order")
+	maxResults    = flag.Int("maxresults", 10000, "maximum number of full text search results shown")
+	indexThrottle = flag.Float64("index_throttle", 0.75, "index throttle value; 0.0 = no time allocated, 1.0 = full throttle")
 
 	// file system mapping
 	fs         FileSystem      // the underlying file system for godoc
@@ -403,8 +406,8 @@ var infoKinds = [nKinds]string{
 	Use:           "use",
 }
 
-func infoKind_htmlFunc(kind SpotKind) string {
-	return infoKinds[kind] // infoKind entries are html-escaped
+func infoKind_htmlFunc(info SpotInfo) string {
+	return infoKinds[info.Kind()] // infoKind entries are html-escaped
 }
 
 func infoLineFunc(info SpotInfo) int {
@@ -540,7 +543,19 @@ func readTemplate(name string) *template.Template {
 			path = defaultpath
 		}
 	}
-	return template.Must(template.New(name).Funcs(fmap).ParseFile(path))
+
+	// use underlying file system fs to read the template file
+	// (cannot use template ParseFile functions directly)
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		log.Fatal("readTemplate: ", err)
+	}
+	// be explicit with errors (for app engine use)
+	t, err := template.New(name).Funcs(fmap).Parse(string(data))
+	if err != nil {
+		log.Fatal("readTemplate: ", err)
+	}
+	return t
 }
 
 var (
@@ -1049,9 +1064,7 @@ func lookup(query string) (result SearchResult) {
 	// is the result accurate?
 	if *indexEnabled {
 		if _, ts := fsModified.get(); timestamp < ts {
-			// The index is older than the latest file system change
-			// under godoc's observation. Indexing may be in progress
-			// or start shortly (see indexer()).
+			// The index is older than the latest file system change under godoc's observation.
 			result.Alert = "Indexing in progress: result may be inaccurate"
 		}
 	} else {
@@ -1128,26 +1141,61 @@ func fsDirnames() <-chan string {
 	return c
 }
 
+func readIndex(filenames string) os.Error {
+	matches, err := filepath.Glob(filenames)
+	if err != nil {
+		return err
+	}
+	sort.Strings(matches) // make sure files are in the right order
+	files := make([]io.Reader, 0, len(matches))
+	for _, filename := range matches {
+		f, err := os.Open(filename)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		files = append(files, f)
+	}
+	x := new(Index)
+	if err := x.Read(io.MultiReader(files...)); err != nil {
+		return err
+	}
+	searchIndex.set(x)
+	return nil
+}
+
+func updateIndex() {
+	if *verbose {
+		log.Printf("updating index...")
+	}
+	start := time.Nanoseconds()
+	index := NewIndex(fsDirnames(), *maxResults > 0, *indexThrottle)
+	stop := time.Nanoseconds()
+	searchIndex.set(index)
+	if *verbose {
+		secs := float64((stop-start)/1e6) / 1e3
+		stats := index.Stats()
+		log.Printf("index updated (%gs, %d bytes of source, %d files, %d lines, %d unique words, %d spots)",
+			secs, stats.Bytes, stats.Files, stats.Lines, stats.Words, stats.Spots)
+	}
+	log.Printf("before GC: bytes = %d footprint = %d", runtime.MemStats.HeapAlloc, runtime.MemStats.Sys)
+	runtime.GC()
+	log.Printf("after  GC: bytes = %d footprint = %d", runtime.MemStats.HeapAlloc, runtime.MemStats.Sys)
+}
+
 func indexer() {
+	// initialize the index from disk if possible
+	if *indexFiles != "" {
+		if err := readIndex(*indexFiles); err != nil {
+			log.Printf("error reading index: %s", err)
+		}
+	}
+
+	// repeatedly update the index when it goes out of date
 	for {
 		if !indexUpToDate() {
 			// index possibly out of date - make a new one
-			if *verbose {
-				log.Printf("updating index...")
-			}
-			start := time.Nanoseconds()
-			index := NewIndex(fsDirnames(), *maxResults > 0)
-			stop := time.Nanoseconds()
-			searchIndex.set(index)
-			if *verbose {
-				secs := float64((stop-start)/1e6) / 1e3
-				stats := index.Stats()
-				log.Printf("index updated (%gs, %d bytes of source, %d files, %d lines, %d unique words, %d spots)",
-					secs, stats.Bytes, stats.Files, stats.Lines, stats.Words, stats.Spots)
-			}
-			log.Printf("before GC: bytes = %d footprint = %d", runtime.MemStats.HeapAlloc, runtime.MemStats.Sys)
-			runtime.GC()
-			log.Printf("after  GC: bytes = %d footprint = %d", runtime.MemStats.HeapAlloc, runtime.MemStats.Sys)
+			updateIndex()
 		}
 		var delay int64 = 60 * 1e9 // by default, try every 60s
 		if *testDir != "" {

@@ -4,46 +4,57 @@
 
 #include "amd64/asm.h"
 
-// void *stdcall_raw(void *fn, uintptr nargs, void *args)
-TEXT runtime·stdcall_raw(SB),7,$8
-	MOVQ	fn+0(FP), AX
-	MOVQ	nargs+8(FP), CX
-	MOVQ	args+16(FP), R11
+#define maxargs 12
 
-	// Switch to m->g0 if needed.
-	get_tls(DI)
-	MOVQ	m(DI), DX
-	MOVQ	g(DI), SI
-	MOVQ	SI, 0(SP)		// save g
-	MOVQ	SP, m_gostack(DX)	// save SP
-	MOVQ	m_g0(DX), SI
-	CMPQ	g(DI), SI
-	JEQ 3(PC)
-	MOVQ	(g_sched+gobuf_sp)(SI), SP
-	ANDQ	$~15, SP
-	MOVQ	SI, g(DI)
-	
-	SUBQ	$0x60, SP
-	
-	// Copy args to new stack.
+// void runtime·asmstdcall(void *c);
+TEXT runtime·asmstdcall(SB),7,$0
+	// asmcgocall will put first argument into CX.
+	PUSHQ	CX			// save for later
+	MOVQ	wincall_fn(CX), AX
+	MOVQ	wincall_args(CX), SI
+	MOVQ	wincall_n(CX), CX
+
+	// SetLastError(0).
+	MOVQ	0x30(GS), DI
+	MOVL	$0, 0x68(DI)
+
+	SUBQ	$(maxargs*8), SP	// room for args
+
+	// Fast version, do not store args on the stack.
+	CMPL	CX, $4
+	JLE	loadregs
+
+	// Check we have enough room for args.
+	CMPL	CX, $maxargs
+	JLE	2(PC)
+	INT	$3			// not enough room -> crash
+
+	// Copy args to the stack.
 	MOVQ	SP, DI
-	MOVQ	R11, SI
 	CLD
 	REP; MOVSQ
-	MOVQ	0(R11), CX
-	MOVQ	8(R11), DX
-	MOVQ	16(R11), R8
-	MOVQ	24(R11), R9
+	MOVQ	SP, SI
+
+loadregs:
+	// Load first 4 args into correspondent registers.
+	MOVQ	0(SI), CX
+	MOVQ	8(SI), DX
+	MOVQ	16(SI), R8
+	MOVQ	24(SI), R9
 
 	// Call stdcall function.
 	CALL	AX
-	
-	// Restore original SP, g.
-	get_tls(DI)
-	MOVQ	m(DI), DX
-	MOVQ	m_gostack(DX), SP	// restore SP
-	MOVQ	0(SP), SI		// restore g
-	MOVQ	SI, g(DI)
+
+	ADDQ	$(maxargs*8), SP
+
+	// Return result.
+	POPQ	CX
+	MOVQ	AX, wincall_r(CX)
+
+	// GetLastError().
+	MOVQ	0x30(GS), DI
+	MOVL	0x68(DI), AX
+	MOVQ	AX, wincall_err(CX)
 
 	RET
 
@@ -59,26 +70,164 @@ TEXT runtime·setlasterror(SB),7,$0
 	MOVL	AX, 0x68(CX)
 	RET
 
+TEXT runtime·sigtramp(SB),7,$56
+	// CX: exception record
+	// R8: context
+
+	// unwinding?
+	TESTL	$6, 4(CX)		// exception flags
+	MOVL	$1, AX
+	JNZ	sigdone
+
+	// copy arguments for call to sighandler
+	MOVQ	CX, 0(SP)
+	MOVQ	R8, 8(SP)
+	get_tls(CX)
+	MOVQ	g(CX), CX
+	MOVQ	CX, 16(SP)
+
+	MOVQ	BX, 24(SP)
+	MOVQ	BP, 32(SP)
+	MOVQ	SI, 40(SP)
+	MOVQ	DI, 48(SP)
+
+	CALL	runtime·sighandler(SB)
+
+	MOVQ	24(SP), BX
+	MOVQ	32(SP), BP
+	MOVQ	40(SP), SI
+	MOVQ	48(SP), DI
+sigdone:
+	RET
+
 // Windows runs the ctrl handler in a new thread.
 TEXT runtime·ctrlhandler(SB),7,$0
-	// TODO
+	PUSHQ	BP
+	MOVQ	SP, BP
+	PUSHQ	BX
+	PUSHQ	SI
+	PUSHQ	DI
+	PUSHQ	0x58(GS)
+	MOVQ	SP, BX
+
+	// setup dummy m, g
+	SUBQ	$(m_fflag+4), SP	// at least space for m_fflag
+	LEAQ	m_tls(SP), CX
+	MOVQ	CX, 0x58(GS)
+	MOVQ	SP, m(CX)
+	MOVQ	SP, DX
+	SUBQ	$16, SP			// space for g_stack{guard,base}
+	MOVQ	SP, g(CX)
+	MOVQ	SP, m_g0(DX)
+	LEAQ	-8192(SP), CX
+	MOVQ	CX, g_stackguard(SP)
+	MOVQ	BX, g_stackbase(SP)
+
+	PUSHQ	16(BP)
+	CALL	runtime·ctrlhandler1(SB)
+	POPQ	CX
+
+	get_tls(CX)
+	MOVQ	g(CX), CX
+	MOVQ	g_stackbase(CX), SP
+	POPQ	0x58(GS)
+	POPQ	DI
+	POPQ	SI
+	POPQ	BX
+	POPQ	BP
 	RET
-	
+
+// Continuation of thunk function created for each callback by ../thread.c compilecallback,
+// runs on Windows stack (not Go stack).
+// Thunk code designed to have minimal size for it is copied many (up to thousands) times.
+//
+// thunk:
+//	MOVQ	$fn, AX
+//	PUSHQ	AX
+//	MOVQ	$argsize, AX
+//	PUSHQ	AX
+//	MOVQ	$runtime·callbackasm, AX
+//	JMP	AX
 TEXT runtime·callbackasm(SB),7,$0
-	// TODO
+	// Construct args vector for cgocallback().
+	// By windows/amd64 calling convention first 4 args are in CX, DX, R8, R9
+	// args from the 5th on are on the stack.
+	// In any case, even if function has 0,1,2,3,4 args, there is reserved
+	// but uninitialized "shadow space" for the first 4 args.
+	// The values are in registers.
+  	MOVQ	CX, (24+0)(SP)
+  	MOVQ	DX, (24+8)(SP)
+  	MOVQ	R8, (24+16)(SP)
+  	MOVQ	R9, (24+24)(SP)
+	// 6l does not accept writing POPQs here issuing a warning "unbalanced PUSH/POP"
+  	MOVQ	0(SP), DX	// POPQ DX
+  	MOVQ	8(SP), AX	// POPQ AX
+	ADDQ	$16, SP
+
+	// preserve whatever's at the memory location that
+	// the callback will use to store the return value
+	LEAQ	8(SP), CX       // args vector, skip return address
+	PUSHQ	0(CX)(DX*1)     // store 8 bytes from just after the args array
+	ADDQ	$8, DX          // extend argsize by size of return value
+
+	// DI SI BP BX R12 R13 R14 R15 registers and DF flag are preserved
+	// as required by windows callback convention.
+	// 6l does not allow writing many PUSHQs here issuing a warning "nosplit stack overflow"
+	// the warning has no sense as this code uses os thread stack
+	PUSHFQ
+	SUBQ	$64, SP
+	MOVQ	DI, 56(SP)
+	MOVQ	SI, 48(SP)
+	MOVQ	BP, 40(SP)
+	MOVQ	BX, 32(SP)
+	MOVQ	R12, 24(SP)
+	MOVQ	R13, 16(SP)
+	MOVQ	R14, 8(SP)
+	MOVQ	R15, 0(SP)
+
+	// cgocallback(void (*fn)(void*), void *frame, uintptr framesize)
+	PUSHQ	DX    // uintptr framesize
+	PUSHQ	CX    // void *frame
+	PUSHQ	AX    // void (*fn)(void*)
+	CLD
+	CALL  runtime·cgocallback(SB)
+	POPQ	AX
+	POPQ	CX
+	POPQ	DX
+
+	// restore registers as required for windows callback
+	// 6l does not allow writing many POPs here issuing a warning "nosplit stack overflow"
+	MOVQ	0(SP), R15
+	MOVQ	8(SP), R14
+	MOVQ	16(SP), R13
+	MOVQ	24(SP), R12
+	MOVQ	32(SP), BX
+	MOVQ	40(SP), BP
+	MOVQ	48(SP), SI
+	MOVQ	56(SP), DI
+	ADDQ	$64, SP
+	POPFQ
+
+	MOVL	-8(CX)(DX*1), AX  // return value
+	POPQ	-8(CX)(DX*1)      // restore bytes just after the args
 	RET
 
-// void tstart(M *newm);
-TEXT runtime·tstart(SB),7,$0
-	MOVQ	newm+8(SP), CX		// m
-	MOVQ	m_g0(CX), DX		// g
+TEXT runtime·setstacklimits(SB),7,$0
+	MOVQ	0x30(GS), CX
+	MOVQ	$0, 0x10(CX)
+	MOVQ	$0xffffffffffff, AX
+	MOVQ	AX, 0x08(CX)
+	RET
 
-	MOVQ	SP, DI			// remember stack
+// uint32 tstart_stdcall(M *newm);
+TEXT runtime·tstart_stdcall(SB),7,$0
+	// CX contains first arg newm
+	MOVQ	m_g0(CX), DX		// g
 
 	// Layout new m scheduler stack on os stack.
 	MOVQ	SP, AX
 	MOVQ	AX, g_stackbase(DX)
-	SUBQ	$(64*1024), AX	// stack size
+	SUBQ	$(64*1024), AX		// stack size
 	MOVQ	AX, g_stackguard(DX)
 
 	// Set up tls.
@@ -90,32 +239,11 @@ TEXT runtime·tstart(SB),7,$0
 	// Someday the convention will be D is always cleared.
 	CLD
 
-	PUSHQ	DI			// original stack
-
-	CALL	runtime·stackcheck(SB)		// clobbers AX,CX
-
+	CALL	runtime·setstacklimits(SB)
+	CALL	runtime·stackcheck(SB)	// clobbers AX,CX
 	CALL	runtime·mstart(SB)
 
-	POPQ	DI			// original stack
-	MOVQ	DI, SP
-	
-	RET
-
-// uint32 tstart_stdcall(M *newm);
-TEXT runtime·tstart_stdcall(SB),7,$0
-	MOVQ CX, BX // stdcall first arg in RCX
-
-	PUSHQ	BX
-	CALL	runtime·tstart+0(SB)
-	POPQ	BX
-
-	// Adjust stack for stdcall to return properly.
-	MOVQ	(SP), AX		// save return address
-	ADDQ	$8, SP			// remove single parameter
-	MOVQ	AX, (SP)		// restore return address
-
 	XORL	AX, AX			// return 0 == success
-
 	RET
 
 TEXT runtime·notok(SB),7,$0
@@ -125,6 +253,6 @@ TEXT runtime·notok(SB),7,$0
 
 // set tls base to DI
 TEXT runtime·settls(SB),7,$0
+	CALL	runtime·setstacklimits(SB)
 	MOVQ	DI, 0x58(GS)
 	RET
-

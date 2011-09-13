@@ -18,6 +18,7 @@ import (
 )
 
 func f() {
+	var _ http.URL
 	http.ParseURL(a)
 	http.ParseURLReference(a)
 	http.ParseQuery(a)
@@ -33,6 +34,7 @@ func f() {
 import "url"
 
 func f() {
+	var _ url.URL
 	url.Parse(a)
 	url.ParseWithReference(a)
 	url.ParseQuery(a)
@@ -78,10 +80,15 @@ import (
 	"http"
 )
 
+type U struct{ url int }
+type M map[int]int
+
 func f() {
 	http.ParseURL(a)
 	var url = 23
 	url, x := 45, y
+	_ = U{url: url}
+	_ = M{url + 1: url}
 }
 
 func g(url string) string {
@@ -96,10 +103,15 @@ func h() (url string) {
 
 import "url"
 
+type U struct{ url int }
+type M map[int]int
+
 func f() {
 	url.Parse(a)
 	var url_ = 23
 	url_, x := 45, y
+	_ = U{url: url_}
+	_ = M{url_ + 1: url_}
 }
 
 func g(url_ string) string {

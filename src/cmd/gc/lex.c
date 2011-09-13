@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#define		EXTERN
+#include	<u.h>
+#include	<libc.h>
 #include	"go.h"
 #include	"y.tab.h"
 #include	<ar.h>
@@ -64,7 +65,7 @@ yy_isalnum(int c)
 #define isalpha use_yy_isalpha_instead_of_isalpha
 #define isalnum use_yy_isalnum_instead_of_isalnum
 
-#define	DBG	if(!debug['x']);else print
+#define	DBG	if(!debug['x']){}else print
 enum
 {
 	EOF		= -1,
@@ -77,22 +78,29 @@ usage(void)
 	print("flags:\n");
 	// -A is allow use of "any" type, for bootstrapping
 	print("  -I DIR search for packages in DIR\n");
+	print("  -L show full path in file:line prints\n");
+	print("  -N disable optimizer\n");
+	print("  -S print the assembly language\n");
+	print("  -V print the compiler version\n");
 	print("  -d print declarations\n");
 	print("  -e no limit on number of errors printed\n");
 	print("  -f print stack frame structure\n");
 	print("  -h panic on an error\n");
+	print("  -m print about moves to heap\n");
 	print("  -o file specify output file\n");
-	print("  -S print the assembly language\n");
-	print("  -V print the compiler version\n");
+	print("  -p assumed import path for this code\n");
+	print("  -s disable escape analysis\n");
 	print("  -u disable package unsafe\n");
 	print("  -w print the parse tree after typing\n");
 	print("  -x print lex tokens\n");
-	exit(0);
+	exits(0);
 }
 
 void
 fault(int s)
 {
+	USED(s);
+
 	// If we've already complained about things
 	// in the program, don't bother complaining
 	// about the seg fault too; let the user clean up
@@ -108,9 +116,11 @@ main(int argc, char *argv[])
 	int i, c;
 	NodeList *l;
 	char *p;
-	
+
+#ifdef	SIGBUS	
 	signal(SIGBUS, fault);
 	signal(SIGSEGV, fault);
+#endif
 
 	localpkg = mkpkg(strlit(""));
 	localpkg->prefix = "\"\"";
@@ -145,6 +155,10 @@ main(int argc, char *argv[])
 	case 'o':
 		outfile = EARGF(usage());
 		break;
+	
+	case 'p':
+		myimportpath = EARGF(usage());
+		break;
 
 	case 'I':
 		addidir(EARGF(usage()));
@@ -156,7 +170,7 @@ main(int argc, char *argv[])
 
 	case 'V':
 		print("%cg version %s\n", thechar, getgoversion());
-		exit(0);
+		exits(0);
 	} ARGEND
 
 	if(argc < 1)
@@ -236,24 +250,24 @@ main(int argc, char *argv[])
 	if(debug['f'])
 		frame(1);
 
-	// Process top-level declarations in four phases.
+	// Process top-level declarations in phases.
 	// Phase 1: const, type, and names and types of funcs.
 	//   This will gather all the information about types
 	//   and methods but doesn't depend on any of it.
-	// Phase 2: Variable assignments.
-	//   To check interface assignments, depends on phase 1.
-	// Phase 3: Type check function bodies.
-	// Phase 4: Compile function bodies.
 	defercheckwidth();
 	for(l=xtop; l; l=l->next)
 		if(l->n->op != ODCL && l->n->op != OAS)
 			typecheck(&l->n, Etop);
+
+	// Phase 2: Variable assignments.
+	//   To check interface assignments, depends on phase 1.
 	for(l=xtop; l; l=l->next)
 		if(l->n->op == ODCL || l->n->op == OAS)
 			typecheck(&l->n, Etop);
 	resumetypecopy();
 	resumecheckwidth();
 
+	// Phase 3: Type check function bodies.
 	for(l=xtop; l; l=l->next) {
 		if(l->n->op == ODCLFUNC || l->n->op == OCLOSURE) {
 			curfn = l->n;
@@ -269,6 +283,11 @@ main(int argc, char *argv[])
 	if(nsavederrors+nerrors)
 		errorexit();
 
+	// Phase 3b: escape analysis.
+	if(!debug['s'])
+		escapes();
+
+	// Phase 4: Compile function bodies.
 	for(l=xtop; l; l=l->next)
 		if(l->n->op == ODCLFUNC)
 			funccompile(l->n, 0);
@@ -276,6 +295,7 @@ main(int argc, char *argv[])
 	if(nsavederrors+nerrors == 0)
 		fninit(xtop);
 
+	// Phase 4b: Compile all closures.
 	while(closures) {
 		l = closures;
 		closures = nil;
@@ -284,6 +304,7 @@ main(int argc, char *argv[])
 		}
 	}
 
+	// Phase 5: check external declarations.
 	for(l=externdcl; l; l=l->next)
 		if(l->n->op == ONAME)
 			typecheck(&l->n, Erv);
@@ -297,7 +318,7 @@ main(int argc, char *argv[])
 		errorexit();
 
 	flusherrors();
-	exit(0);
+	exits(0);
 	return 0;
 }
 
@@ -400,8 +421,8 @@ findpkg(Strlit *name)
 	}
 
 	// local imports should be canonicalized already.
-	// don't want to see "container/../container/vector"
-	// as different from "container/vector".
+	// don't want to see "encoding/../encoding/base64"
+	// as different from "encoding/base64".
 	q = mal(name->len+1);
 	memmove(q, name->s, name->len);
 	q[name->len] = '\0';
@@ -440,6 +461,8 @@ importfile(Val *f, int line)
 	Strlit *path;
 	char *cleanbuf;
 
+	USED(line);
+
 	// TODO(rsc): don't bother reloading imports more than once?
 
 	if(f->ctype != CTSTR) {
@@ -458,6 +481,11 @@ importfile(Val *f, int line)
 	// path "math" to identify the standard math package.
 	if(strcmp(f->u.sval->s, "main") == 0) {
 		yyerror("cannot import \"main\"");
+		errorexit();
+	}
+
+	if(myimportpath != nil && strcmp(f->u.sval->s, myimportpath) == 0) {
+		yyerror("import \"%Z\" while compiling that package (import cycle)", f->u.sval);
 		errorexit();
 	}
 
@@ -482,14 +510,14 @@ importfile(Val *f, int line)
 	}
 
 	if(!findpkg(path)) {
-		yyerror("can't find import: %Z", f->u.sval);
+		yyerror("can't find import: \"%Z\"", f->u.sval);
 		errorexit();
 	}
 	importpkg = mkpkg(path);
 
 	imp = Bopen(namebuf, OREAD);
 	if(imp == nil) {
-		yyerror("can't open import: %Z: %r", f->u.sval);
+		yyerror("can't open import: \"%Z\": %r", f->u.sval);
 		errorexit();
 	}
 	file = strdup(namebuf);
@@ -546,7 +574,7 @@ importfile(Val *f, int line)
 			continue;
 		return;
 	}
-	yyerror("no import in: %Z", f->u.sval);
+	yyerror("no import in \"%Z\"", f->u.sval);
 	unimportfile();
 }
 
@@ -665,7 +693,6 @@ l0:
 			ep = lexbuf+sizeof lexbuf;
 			*cp++ = c;
 			c = c1;
-			c1 = 0;
 			goto casedot;
 		}
 		if(c1 == '.') {
@@ -1056,7 +1083,6 @@ talph:
 	return s->lexical;
 
 tnum:
-	c1 = 0;
 	cp = lexbuf;
 	ep = lexbuf+sizeof lexbuf;
 	if(c != '0') {
@@ -1740,7 +1766,6 @@ lexfini(void)
 	}
 	
 	nodfp = nod(ONAME, N, N);
-	nodfp->noescape = 1;
 	nodfp->type = types[TINT32];
 	nodfp->xoffset = 0;
 	nodfp->class = PPARAM;
@@ -1923,7 +1948,7 @@ mkpackage(char* pkgname)
 					// errors if a conflicting top-level name is
 					// introduced by a different file.
 					if(!s->def->used && !nsyntaxerrors)
-						yyerrorl(s->def->lineno, "imported and not used: %Z", s->def->pkg->path);
+						yyerrorl(s->def->lineno, "imported and not used: \"%Z\"", s->def->pkg->path);
 					s->def = N;
 					continue;
 				}
@@ -1931,7 +1956,7 @@ mkpackage(char* pkgname)
 					// throw away top-level name left over
 					// from previous import . "x"
 					if(s->def->pack != N && !s->def->pack->used && !nsyntaxerrors) {
-						yyerrorl(s->def->pack->lineno, "imported and not used: %Z", s->def->pack->pkg->path);
+						yyerrorl(s->def->pack->lineno, "imported and not used: \"%Z\"", s->def->pack->pkg->path);
 						s->def->pack->used = 1;
 					}
 					s->def = N;

@@ -448,19 +448,19 @@ TEXT runtime·asmcgocall(SB),7,$0
 	MOVQ	(g_sched+gobuf_sp)(SI), SP
 
 	// Now on a scheduling stack (a pthread-created stack).
-	SUBQ	$32, SP
+	SUBQ	$48, SP
 	ANDQ	$~15, SP	// alignment for gcc ABI
-	MOVQ	DI, 16(SP)	// save g
-	MOVQ	DX, 8(SP)	// save SP
+	MOVQ	DI, 32(SP)	// save g
+	MOVQ	DX, 24(SP)	// save SP
 	MOVQ	BX, DI		// DI = first argument in AMD64 ABI
 	MOVQ	BX, CX		// CX = first argument in Win64
 	CALL	AX
 
 	// Restore registers, g, stack pointer.
 	get_tls(CX)
-	MOVQ	16(SP), DI
+	MOVQ	32(SP), DI
 	MOVQ	DI, g(CX)
-	MOVQ	8(SP), SP
+	MOVQ	24(SP), SP
 	RET
 
 // cgocallback(void (*fn)(void*), void *frame, uintptr framesize)
@@ -477,17 +477,17 @@ TEXT runtime·cgocallback(SB),7,$24
 	PUSHQ	(g_sched+gobuf_sp)(SI)
 	MOVQ	SP, (g_sched+gobuf_sp)(SI)
 
-	// Switch to m->curg stack and call runtime.cgocallback
+	// Switch to m->curg stack and call runtime.cgocallbackg
 	// with the three arguments.  Because we are taking over
 	// the execution of m->curg but *not* resuming what had
 	// been running, we need to save that information (m->curg->gobuf)
 	// so that we can restore it when we're done. 
 	// We can restore m->curg->gobuf.sp easily, because calling
-	// runtime.cgocallback leaves SP unchanged upon return.
+	// runtime.cgocallbackg leaves SP unchanged upon return.
 	// To save m->curg->gobuf.pc, we push it onto the stack.
 	// This has the added benefit that it looks to the traceback
-	// routine like cgocallback is going to return to that
-	// PC (because we defined cgocallback to have
+	// routine like cgocallbackg is going to return to that
+	// PC (because we defined cgocallbackg to have
 	// a frame size of 24, the same amount that we use below),
 	// so that the traceback will seamlessly trace back into
 	// the earlier calls.
