@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include <u.h>
+#include <libc.h>
 #include "go.h"
 
 enum
@@ -137,6 +139,10 @@ exprfmt(Fmt *f, Node *n, int prec)
 
 	case OPAREN:
 		fmtprint(f, "(%#N)", n->left);
+		break;
+
+	case ODDDARG:
+		fmtprint(f, "... argument");
 		break;
 
 	case OREGISTER:

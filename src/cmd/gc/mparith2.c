@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include	<u.h>
+#include	<libc.h>
 #include	"go.h"
 
 //
@@ -349,6 +351,7 @@ mporfixfix(Mpint *a, Mpint *b)
 	int i;
 	long x, *a1, *b1;
 
+	x = 0;
 	if(a->ovf || b->ovf) {
 		yyerror("ovf in mporfixfix");
 		mpmovecfix(a, 0);
@@ -383,6 +386,7 @@ mpandfixfix(Mpint *a, Mpint *b)
 	int i;
 	long x, *a1, *b1;
 
+	x = 0;
 	if(a->ovf || b->ovf) {
 		yyerror("ovf in mpandfixfix");
 		mpmovecfix(a, 0);
@@ -417,6 +421,7 @@ mpandnotfixfix(Mpint *a, Mpint *b)
 	int i;
 	long x, *a1, *b1;
 
+	x = 0;
 	if(a->ovf || b->ovf) {
 		yyerror("ovf in mpandnotfixfix");
 		mpmovecfix(a, 0);
@@ -451,6 +456,7 @@ mpxorfixfix(Mpint *a, Mpint *b)
 	int i;
 	long x, *a1, *b1;
 
+	x = 0;
 	if(a->ovf || b->ovf) {
 		yyerror("ovf in mporfixfix");
 		mpmovecfix(a, 0);

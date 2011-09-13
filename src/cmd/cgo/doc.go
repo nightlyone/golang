@@ -73,6 +73,9 @@ A few special functions convert between Go and C types
 by making copies of the data.  In pseudo-Go definitions:
 
 	// Go string to C string
+	// The C string is allocated in the C heap using malloc.
+	// It is the caller's responsibility to arrange for it to be
+	// freed, such as by calling C.free.
 	func C.CString(string) *C.char
 
 	// C string to Go string

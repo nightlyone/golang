@@ -22,6 +22,10 @@
 //
 package atomic
 
+import (
+	"unsafe"
+)
+
 // BUG(rsc): On ARM, the 64-bit functions use instructions unavailable before ARM 11.
 //
 // On x86-32, the 64-bit functions use instructions unavailable before the Pentium.
@@ -40,6 +44,9 @@ func CompareAndSwapUint64(val *uint64, old, new uint64) (swapped bool)
 
 // CompareAndSwapUintptr executes the compare-and-swap operation for a uintptr value.
 func CompareAndSwapUintptr(val *uintptr, old, new uintptr) (swapped bool)
+
+// CompareAndSwapPointer executes the compare-and-swap operation for a unsafe.Pointer value.
+func CompareAndSwapPointer(val *unsafe.Pointer, old, new unsafe.Pointer) (swapped bool)
 
 // AddInt32 atomically adds delta to *val and returns the new value.
 func AddInt32(val *int32, delta int32) (new int32)
@@ -61,6 +68,24 @@ func LoadInt32(addr *int32) (val int32)
 
 // LoadUint32 atomically loads *addr.
 func LoadUint32(addr *uint32) (val uint32)
+
+// LoadUintptr atomically loads *addr.
+func LoadUintptr(addr *uintptr) (val uintptr)
+
+// LoadPointer atomically loads *addr.
+func LoadPointer(addr *unsafe.Pointer) (val unsafe.Pointer)
+
+// StoreInt32 atomically stores val into *addr.
+func StoreInt32(addr *int32, val int32)
+
+// StoreUint32 atomically stores val into *addr.
+func StoreUint32(addr *uint32, val uint32)
+
+// StoreUintptr atomically stores val into *addr.
+func StoreUintptr(addr *uintptr, val uintptr)
+
+// StorePointer atomically stores val into *addr.
+func StorePointer(addr *unsafe.Pointer, val unsafe.Pointer)
 
 // Helper for ARM.  Linker will discard on other systems
 func panic64() {

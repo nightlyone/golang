@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include	<u.h>
+#include	<libc.h>
 #include	"go.h"
 #include	"md5.h"
 #include	"y.tab.h"
@@ -27,7 +29,7 @@ errorexit(void)
 	flusherrors();
 	if(outfile)
 		remove(outfile);
-	exit(1);
+	exits("error");
 }
 
 extern int yychar;
@@ -106,7 +108,7 @@ hcrash(void)
 	if(debug['h']) {
 		flusherrors();
 		if(outfile)
-			unlink(outfile);
+			remove(outfile);
 		*(volatile int*)0 = 0;
 	}
 }
@@ -207,6 +209,16 @@ warn(char *fmt, ...)
 	va_end(arg);
 
 	hcrash();
+}
+
+void
+warnl(int line, char *fmt, ...)
+{
+	va_list arg;
+
+	va_start(arg, fmt);
+	adderr(line, fmt, arg);
+	va_end(arg);
 }
 
 void
@@ -393,7 +405,7 @@ importdot(Pkg *opkg, Node *pack)
 	}
 	if(n == 0) {
 		// can't possibly be used - there were no symbols
-		yyerrorl(pack->lineno, "imported and not used: %Z", opkg->path);
+		yyerrorl(pack->lineno, "imported and not used: \"%Z\"", opkg->path);
 	}
 }
 
@@ -483,6 +495,7 @@ nod(int op, Node *nleft, Node *nright)
 	n->lineno = parserline();
 	n->xoffset = BADWIDTH;
 	n->orig = n;
+	n->curfn = curfn;
 	return n;
 }
 
@@ -1094,8 +1107,8 @@ Jconv(Fmt *fp)
 
 	if(n->class != 0) {
 		s = "";
-		if (n->class & PHEAP) s = ",heap";
-		if ((n->class & ~PHEAP) < nelem(classnames))
+		if(n->class & PHEAP) s = ",heap";
+		if((n->class & ~PHEAP) < nelem(classnames))
 			fmtprint(fp, " class(%s%s)", classnames[n->class&~PHEAP], s);
 		else
 			fmtprint(fp, " class(%d?%s)", n->class&~PHEAP, s);
@@ -1107,8 +1120,29 @@ Jconv(Fmt *fp)
 	if(n->funcdepth != 0)
 		fmtprint(fp, " f(%d)", n->funcdepth);
 
-	if(n->noescape != 0)
-		fmtprint(fp, " ne(%d)", n->noescape);
+	switch(n->esc) {
+	case EscUnknown:
+		break;
+	case EscHeap:
+		fmtprint(fp, " esc(h)");
+		break;
+	case EscScope:
+		fmtprint(fp, " esc(s)");
+		break;
+	case EscNone:
+		fmtprint(fp, " esc(no)");
+		break;
+	case EscNever:
+		if(!c)
+			fmtprint(fp, " esc(N)");
+		break;
+	default:
+		fmtprint(fp, " esc(%d)", n->esc);
+		break;
+	}
+
+	if(n->escloopdepth)
+		fmtprint(fp, " ld(%d)", n->escloopdepth);
 
 	if(!c && n->typecheck != 0)
 		fmtprint(fp, " tc(%d)", n->typecheck);
@@ -1121,9 +1155,6 @@ Jconv(Fmt *fp)
 
 	if(n->implicit != 0)
 		fmtprint(fp, " implicit(%d)", n->implicit);
-
-	if(!c && n->pun != 0)
-		fmtprint(fp, " pun(%d)", n->pun);
 
 	if(!c && n->used != 0)
 		fmtprint(fp, " used(%d)", n->used);
@@ -1523,7 +1554,7 @@ Nconv(Fmt *fp)
 
 	switch(n->op) {
 	default:
-		if (fp->flags & FmtShort)
+		if(fp->flags & FmtShort)
 			fmtprint(fp, "%O%hJ", n->op, n);
 		else
 			fmtprint(fp, "%O%J", n->op, n);
@@ -1532,13 +1563,13 @@ Nconv(Fmt *fp)
 	case ONAME:
 	case ONONAME:
 		if(n->sym == S) {
-			if (fp->flags & FmtShort)
+			if(fp->flags & FmtShort)
 				fmtprint(fp, "%O%hJ", n->op, n);
 			else
 				fmtprint(fp, "%O%J", n->op, n);
 			break;
 		}
-		if (fp->flags & FmtShort)
+		if(fp->flags & FmtShort)
 			fmtprint(fp, "%O-%S%hJ", n->op, n->sym, n);
 		else
 			fmtprint(fp, "%O-%S%J", n->op, n->sym, n);
@@ -2754,8 +2785,7 @@ copyexpr(Node *n, Type *t, NodeList **init)
 {
 	Node *a, *l;
 	
-	l = nod(OXXX, N, N);
-	tempname(l, t);
+	l = temp(t);
 	a = nod(OAS, l, n);
 	typecheck(&a, Etop);
 	walkexpr(&a, init);
@@ -2806,10 +2836,12 @@ setmaxarg(Type *t)
 		maxarg = w;
 }
 
-/* unicode-aware case-insensitive strcmp */
+/*
+ * unicode-aware case-insensitive strcmp
+ */
 
 static int
-cistrcmp(char *p, char *q)
+ucistrcmp(char *p, char *q)
 {
 	Rune rp, rq;
 
@@ -2851,7 +2883,7 @@ lookdot0(Sym *s, Type *t, Type **save, int ignorecase)
 	c = 0;
 	if(u->etype == TSTRUCT || u->etype == TINTER) {
 		for(f=u->type; f!=T; f=f->down)
-			if(f->sym == s || (ignorecase && cistrcmp(f->sym->name, s->name) == 0)) {
+			if(f->sym == s || (ignorecase && ucistrcmp(f->sym->name, s->name) == 0)) {
 				if(save)
 					*save = f;
 				c++;
@@ -2860,7 +2892,7 @@ lookdot0(Sym *s, Type *t, Type **save, int ignorecase)
 	u = methtype(t);
 	if(u != T) {
 		for(f=u->method; f!=T; f=f->down)
-			if(f->embedded == 0 && (f->sym == s || (ignorecase && cistrcmp(f->sym->name, s->name) == 0))) {
+			if(f->embedded == 0 && (f->sym == s || (ignorecase && ucistrcmp(f->sym->name, s->name) == 0))) {
 				if(save)
 					*save = f;
 				c++;
@@ -3176,7 +3208,7 @@ genwrapper(Type *rcvr, Type *method, Sym *newnam, int iface)
 	int isddd;
 	Val v;
 
-	if(debug['r'])
+	if(0 && debug['r'])
 		print("genwrapper rcvrtype=%T method=%T newnam=%S\n",
 			rcvr, method, newnam);
 
@@ -3410,8 +3442,13 @@ list1(Node *n)
 
 	if(n == nil)
 		return nil;
-	if(n->op == OBLOCK && n->ninit == nil)
-		return n->list;
+	if(n->op == OBLOCK && n->ninit == nil) {
+		// Flatten list and steal storage.
+		// Poison pointer to catch errant uses.
+		l = n->list;
+		n->list = (NodeList*)1;
+		return l;
+	}
 	l = mal(sizeof *l);
 	l->n = n;
 	l->end = l;
@@ -3453,7 +3490,7 @@ listsort(NodeList** l, int(*f)(Node*, Node*))
 	listsort(&l1, f);
 	listsort(&l2, f);
 
-	if ((*f)(l1->n, l2->n) < 0) {
+	if((*f)(l1->n, l2->n) < 0) {
 		*l = l1;
 	} else {
 		*l = l2;
@@ -3469,7 +3506,7 @@ listsort(NodeList** l, int(*f)(Node*, Node*))
 		
 		// l1 is last one from l1 that is < l2
 		le = l1->next;		// le is the rest of l1, first one that is >= l2
-		if (le != nil)
+		if(le != nil)
 			le->end = (*l)->end;
 
 		(*l)->end = l1;		// cut *l at l1

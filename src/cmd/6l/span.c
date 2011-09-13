@@ -88,7 +88,10 @@ span1(Sym *s)
 						loop++;
 						q->back ^= 2;
 					}
-					s->p[q->pc+1] = v;
+					if(q->as == AJCXZL)
+						s->p[q->pc+2] = v;
+					else
+						s->p[q->pc+1] = v;
 				} else {
 					bp = s->p + q->pc + q->mark - 4;
 					*bp++ = v;
@@ -1439,10 +1442,11 @@ found:
 
 	case Zbr:
 	case Zjmp:
+	case Zloop:
 		// TODO: jump across functions needs reloc
 		q = p->pcond;
 		if(q == nil) {
-			diag("jmp/branch without target");
+			diag("jmp/branch/loop without target");
 			errorexit();
 		}
 		if(q->as == ATEXT) {
@@ -1466,8 +1470,12 @@ found:
 		if(p->back & 1) {
 			v = q->pc - (p->pc + 2);
 			if(v >= -128) {
+				if(p->as == AJCXZL)
+					*andptr++ = 0x67;
 				*andptr++ = op;
 				*andptr++ = v;
+			} else if(t[2] == Zloop) {
+				diag("loop too far: %P", p);
 			} else {
 				v -= 5-2;
 				if(t[2] == Zbr) {
@@ -1487,8 +1495,12 @@ found:
 		p->forwd = q->comefrom;
 		q->comefrom = p;
 		if(p->back & 2)	{ // short
+			if(p->as == AJCXZL)
+				*andptr++ = 0x67;
 			*andptr++ = op;
 			*andptr++ = 0;
+		} else if(t[2] == Zloop) {
+			diag("loop too far: %P", p);
 		} else {
 			if(t[2] == Zbr)
 				*andptr++ = 0x0f;
@@ -1518,19 +1530,6 @@ found:
 			*andptr++ = v>>24;
 		}
 */
-		break;
-
-	case Zloop:
-		q = p->pcond;
-		if(q == nil) {
-			diag("loop without target");
-			errorexit();
-		}
-		v = q->pc - p->pc - 2;
-		if(v < -128 && v > 127)
-			diag("loop too far: %P", p);
-		*andptr++ = op;
-		*andptr++ = v;
 		break;
 
 	case Zbyte:

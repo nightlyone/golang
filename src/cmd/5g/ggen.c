@@ -4,6 +4,8 @@
 
 #undef	EXTERN
 #define	EXTERN
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 #include "opt.h"
 
@@ -544,7 +546,7 @@ cgen_shift(int op, Node *nl, Node *nr, Node *res)
 	}
 
 	// test for shift being 0
-	p1 = gins(ATST, &n1, N);
+	gins(ATST, &n1, N);
 	p3 = gbranch(ABEQ, T);
 
 	// test and fix up large shifts

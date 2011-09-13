@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include <u.h>
+#include <libc.h>
 #include "go.h"
 
 /*
@@ -28,10 +30,6 @@ dumpobj(void)
 	Bprint(bout, "\n!\n");
 
 	outhist(bout);
-
-	// add nil plist w AEND to catch
-	// auto-generated trampolines, data
-	newplist();
 
 	dumpglobls();
 	dumptypestructs();
@@ -127,6 +125,7 @@ static void
 outhist(Biobuf *b)
 {
 	Hist *h;
+	int i, depth = 0;
 	char *p, ds[] = {'c', ':', '/', 0};
 
 	for(h = hist; h != H; h = h->link) {
@@ -156,13 +155,21 @@ outhist(Biobuf *b)
 					outzfile(b, p+1);
 				} else {
 					// relative name, like dir/file.go
-					if(h->offset == 0 && pathname && pathname[0] == '/') {
+					if(h->offset >= 0 && pathname && pathname[0] == '/') {
 						zfile(b, "/", 1);	// leading "/"
 						outzfile(b, pathname+1);
 					}
 					outzfile(b, p);
 				}
 			}
+			if(h->offset > 0) {
+				//line directive
+				depth++;
+			}
+		} else if(depth > 0) {
+			for(i = 0; i < depth; i++)
+				zhist(b, h->line, h->offset);
+			depth = 0;
 		}
 		zhist(b, h->line, h->offset);
 	}
@@ -259,7 +266,7 @@ stringsym(char *s, int len)
 		tmp.lit.len = len;
 		memmove(tmp.lit.s, s, len);
 		tmp.lit.s[len] = '\0';
-		snprint(namebuf, sizeof(namebuf), "\"%Z\"", &tmp);
+		snprint(namebuf, sizeof(namebuf), "\"%Z\"", &tmp.lit);
 		pkg = gostringpkg;
 	}
 	sym = pkglookup(namebuf, pkg);
@@ -268,8 +275,7 @@ stringsym(char *s, int len)
 	if(sym->flags & SymUniq)
 		return sym;
 	sym->flags |= SymUniq;
-	
-	data();
+
 	off = 0;
 	
 	// string header
@@ -286,7 +292,6 @@ stringsym(char *s, int len)
 	off = duint8(sym, off, 0);  // terminating NUL for runtime
 	off = (off+widthptr-1)&~(widthptr-1);  // round to pointer alignment
 	ggloblsym(sym, off, 1);
-	text();
-	
+
 	return sym;	
 }

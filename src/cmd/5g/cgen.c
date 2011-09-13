@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 
 /*
@@ -850,6 +852,7 @@ bgen(Node *n, int true, Prog *to)
 	Node n1, n2, n3, n4, tmp;
 	Prog *p1, *p2;
 
+	USED(n4);			// in unreachable code below
 	if(debug['g']) {
 		dump("\nbgen", n);
 	}
@@ -859,9 +862,6 @@ bgen(Node *n, int true, Prog *to)
 
 	if(n->ninit != nil)
 		genlist(n->ninit);
-
-	nl = n->left;
-	nr = n->right;
 
 	if(n->type == T) {
 		convlit(&n, types[TBOOL]);
@@ -875,7 +875,6 @@ bgen(Node *n, int true, Prog *to)
 		patch(gins(AEND, N, N), to);
 		goto ret;
 	}
-	nl = N;
 	nr = N;
 
 	switch(n->op) {
@@ -984,6 +983,7 @@ bgen(Node *n, int true, Prog *to)
 			regfree(&n1);
 			break;
 
+#ifdef	NOTDEF
 			a = optoas(a, types[tptr]);
 			regalloc(&n1, types[tptr], N);
 			regalloc(&n3, types[tptr], N);
@@ -1001,6 +1001,7 @@ bgen(Node *n, int true, Prog *to)
 			regfree(&n3);
 			regfree(&n1);
 			break;
+#endif
 		}
 
 		if(isinter(nl->type)) {
@@ -1019,6 +1020,7 @@ bgen(Node *n, int true, Prog *to)
 			regfree(&n1);
 			break;
 
+#ifdef	NOTDEF
 			a = optoas(a, types[tptr]);
 			regalloc(&n1, types[tptr], N);
 			regalloc(&n3, types[tptr], N);
@@ -1036,6 +1038,7 @@ bgen(Node *n, int true, Prog *to)
 			regfree(&n3);
 			regfree(&n4);
 			break;
+#endif
 		}
 
 		if(iscomplex[nl->type->etype]) {
@@ -1198,8 +1201,6 @@ sgen(Node *n, Node *res, int32 w)
 		dump("r", n);
 		dump("res", res);
 	}
-	if(w == 0)
-		return;
 	if(w < 0)
 		fatal("sgen copy %d", w);
 	if(n->ullman >= UINF && res->ullman >= UINF)
@@ -1207,12 +1208,20 @@ sgen(Node *n, Node *res, int32 w)
 	if(n->type == T)
 		fatal("sgen: missing type");
 
+	if(w == 0) {
+		// evaluate side effects only.
+		regalloc(&dst, types[tptr], N);
+		agen(res, &dst);
+		agen(n, &dst);
+		regfree(&dst);
+		return;
+	}
+
 	// determine alignment.
 	// want to avoid unaligned access, so have to use
 	// smaller operations for less aligned types.
 	// for example moving [4]byte must use 4 MOVB not 1 MOVW.
 	align = n->type->align;
-	op = 0;
 	switch(align) {
 	default:
 		fatal("sgen: invalid alignment %d for %T", align, n->type);
@@ -1313,7 +1322,6 @@ sgen(Node *n, Node *res, int32 w)
 			p->from.type = D_OREG;
 			p->from.offset = dir;
 			p->scond |= C_PBIT;
-			ploop = p;
 	
 			p = gins(op, &tmp, &dst);
 			p->to.type = D_OREG;

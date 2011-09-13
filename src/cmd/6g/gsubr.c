@@ -28,6 +28,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 
 // TODO(rsc): Can make this bigger if we move
@@ -46,6 +48,10 @@ clearp(Prog *p)
 	pcloc++;
 }
 
+static int ddumped;
+static Prog *dfirst;
+static Prog *dpc;
+
 /*
  * generate and return proc with p->as = as,
  * linked into program. pc is next instruction.
@@ -55,10 +61,22 @@ prog(int as)
 {
 	Prog *p;
 
-	p = pc;
-	pc = mal(sizeof(*pc));
-
-	clearp(pc);
+	if(as == ADATA || as == AGLOBL) {
+		if(ddumped)
+			fatal("already dumped data");
+		if(dpc == nil) {
+			dpc = mal(sizeof(*dpc));
+			dfirst = dpc;
+		}
+		p = dpc;
+		dpc = mal(sizeof(*dpc));
+		p->link = dpc;
+	} else {
+		p = pc;
+		pc = mal(sizeof(*pc));
+		clearp(pc);
+		p->link = pc;
+	}
 
 	if(lineno == 0) {
 		if(debug['K'])
@@ -67,8 +85,19 @@ prog(int as)
 
 	p->as = as;
 	p->lineno = lineno;
-	p->link = pc;
 	return p;
+}
+
+void
+dumpdata(void)
+{
+	ddumped = 1;
+	if(dfirst == nil)
+		return;
+	newplist();
+	*pc = *dfirst;
+	pc = dpc;
+	clearp(pc);
 }
 
 /*
@@ -79,6 +108,8 @@ Prog*
 gbranch(int as, Type *t)
 {
 	Prog *p;
+	
+	USED(t);
 
 	p = prog(as);
 	p->to.type = D_BRANCH;
@@ -1098,7 +1129,6 @@ naddr(Node *n, Addr *a, int canemitcode)
 			a->width = n->type->width;
 			a->gotype = ngotype(n);
 		}
-		a->pun = n->pun;
 		a->offset = n->xoffset;
 		a->sym = n->sym;
 		if(a->sym == S)
