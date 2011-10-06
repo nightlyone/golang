@@ -119,10 +119,10 @@ enum
  */
 struct	Lock
 {
-	uint32	key;
 #ifdef __WINDOWS__
-	void*	event;
+	M*	waitm;	// linked list of waiting M's
 #else
+	uint32	key;
 	uint32	sema;	// for OS X
 #endif
 };
@@ -212,6 +212,7 @@ struct	G
 	uintptr	sigcode1;
 	uintptr	sigpc;
 	uintptr	gopc;	// pc of go statement that created this goroutine
+	uintptr	end[];
 };
 struct	M
 {
@@ -251,6 +252,13 @@ struct	M
 	uint32	freglo[16];	// D[i] lsb and F[i]
 	uint32	freghi[16];	// D[i] msb and F[i+16]
 	uint32	fflag;		// floating point compare flags
+
+#ifdef __WINDOWS__
+	void*	thread;		// thread handle
+	void*	event;		// event for signalling
+	M*	nextwaitm;	// next M waiting for lock
+#endif
+	uintptr	end[];
 };
 
 struct	Stktop
@@ -307,7 +315,8 @@ struct	WinCall
 	void	(*fn)(void*);
 	uintptr	n;	// number of parameters
 	void*	args;	// parameters
-	uintptr	r;	// return value
+	uintptr	r1;	// return values
+	uintptr	r2;
 	uintptr	err;	// error number
 };
 

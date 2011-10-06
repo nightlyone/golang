@@ -181,9 +181,27 @@ func (p *parser) maybeConcat(r int, flags Flags) bool {
 func (p *parser) newLiteral(r int, flags Flags) *Regexp {
 	re := p.newRegexp(OpLiteral)
 	re.Flags = flags
+	if flags&FoldCase != 0 {
+		r = minFoldRune(r)
+	}
 	re.Rune0[0] = r
 	re.Rune = re.Rune0[:1]
 	return re
+}
+
+// minFoldRune returns the minimum rune fold-equivalent to r.
+func minFoldRune(r int) int {
+	if r < minFold || r > maxFold {
+		return r
+	}
+	min := r
+	r0 := r
+	for r = unicode.SimpleFold(r); r != r0; r = unicode.SimpleFold(r) {
+		if min > r {
+			min = r
+		}
+	}
+	return min
 }
 
 // literal pushes a literal regexp for the rune r on the stack
@@ -200,27 +218,32 @@ func (p *parser) op(op Op) *Regexp {
 	return p.push(re)
 }
 
-// repeat replaces the top stack element with itself repeated
-// according to op.
-func (p *parser) repeat(op Op, min, max int, opstr, t, lastRepeat string) (string, os.Error) {
+// repeat replaces the top stack element with itself repeated according to op, min, max.
+// before is the regexp suffix starting at the repetition operator.
+// after is the regexp suffix following after the repetition operator.
+// repeat returns an updated 'after' and an error, if any.
+func (p *parser) repeat(op Op, min, max int, before, after, lastRepeat string) (string, os.Error) {
 	flags := p.flags
 	if p.flags&PerlX != 0 {
-		if len(t) > 0 && t[0] == '?' {
-			t = t[1:]
+		if len(after) > 0 && after[0] == '?' {
+			after = after[1:]
 			flags ^= NonGreedy
 		}
 		if lastRepeat != "" {
 			// In Perl it is not allowed to stack repetition operators:
 			// a** is a syntax error, not a doubled star, and a++ means
 			// something else entirely, which we don't support!
-			return "", &Error{ErrInvalidRepeatOp, lastRepeat[:len(lastRepeat)-len(t)]}
+			return "", &Error{ErrInvalidRepeatOp, lastRepeat[:len(lastRepeat)-len(after)]}
 		}
 	}
 	n := len(p.stack)
 	if n == 0 {
-		return "", &Error{ErrMissingRepeatArgument, opstr}
+		return "", &Error{ErrMissingRepeatArgument, before[:len(before)-len(after)]}
 	}
 	sub := p.stack[n-1]
+	if sub.Op >= opPseudo {
+		return "", &Error{ErrMissingRepeatArgument, before[:len(before)-len(after)]}
+	}
 	re := p.newRegexp(op)
 	re.Min = min
 	re.Max = max
@@ -228,7 +251,7 @@ func (p *parser) repeat(op Op, min, max int, opstr, t, lastRepeat string) (strin
 	re.Sub = re.Sub0[:1]
 	re.Sub[0] = sub
 	p.stack[n-1] = re
-	return t, nil
+	return after, nil
 }
 
 // concat replaces the top of the stack (above the topmost '|' or '(') with its concatenation.
@@ -704,6 +727,7 @@ func Parse(s string, flags Flags) (*Regexp, os.Error) {
 				return nil, err
 			}
 		case '*', '+', '?':
+			before := t
 			switch t[0] {
 			case '*':
 				op = OpStar
@@ -712,21 +736,31 @@ func Parse(s string, flags Flags) (*Regexp, os.Error) {
 			case '?':
 				op = OpQuest
 			}
-			if t, err = p.repeat(op, min, max, t[:1], t[1:], lastRepeat); err != nil {
+			after := t[1:]
+			if after, err = p.repeat(op, min, max, before, after, lastRepeat); err != nil {
 				return nil, err
 			}
+			repeat = before
+			t = after
 		case '{':
 			op = OpRepeat
-			min, max, tt, ok := p.parseRepeat(t)
+			before := t
+			min, max, after, ok := p.parseRepeat(t)
 			if !ok {
 				// If the repeat cannot be parsed, { is a literal.
 				p.literal('{')
 				t = t[1:]
 				break
 			}
-			if t, err = p.repeat(op, min, max, t[:len(t)-len(tt)], tt, lastRepeat); err != nil {
+			if min < 0 || min > 1000 || max > 1000 || max >= 0 && min > max {
+				// Numbers were too big, or max is present and min > max.
+				return nil, &Error{ErrInvalidRepeatSize, before[:len(before)-len(after)]}
+			}
+			if after, err = p.repeat(op, min, max, before, after, lastRepeat); err != nil {
 				return nil, err
 			}
+			repeat = before
+			t = after
 		case '\\':
 			if p.flags&PerlX != 0 && len(t) >= 2 {
 				switch t[1] {
@@ -815,12 +849,14 @@ func Parse(s string, flags Flags) (*Regexp, os.Error) {
 
 // parseRepeat parses {min} (max=min) or {min,} (max=-1) or {min,max}.
 // If s is not of that form, it returns ok == false.
+// If s has the right form but the values are too big, it returns min == -1, ok == true.
 func (p *parser) parseRepeat(s string) (min, max int, rest string, ok bool) {
 	if s == "" || s[0] != '{' {
 		return
 	}
 	s = s[1:]
-	if min, s, ok = p.parseInt(s); !ok {
+	var ok1 bool
+	if min, s, ok1 = p.parseInt(s); !ok1 {
 		return
 	}
 	if s == "" {
@@ -835,8 +871,11 @@ func (p *parser) parseRepeat(s string) (min, max int, rest string, ok bool) {
 		}
 		if s[0] == '}' {
 			max = -1
-		} else if max, s, ok = p.parseInt(s); !ok {
+		} else if max, s, ok1 = p.parseInt(s); !ok1 {
 			return
+		} else if max < 0 {
+			// parseInt found too big a number
+			min = -1
 		}
 	}
 	if s == "" || s[0] != '}' {
@@ -981,16 +1020,22 @@ func (p *parser) parseInt(s string) (n int, rest string, ok bool) {
 	if len(s) >= 2 && s[0] == '0' && '0' <= s[1] && s[1] <= '9' {
 		return
 	}
+	t := s
 	for s != "" && '0' <= s[0] && s[0] <= '9' {
-		// Avoid overflow.
-		if n >= 1e8 {
-			return
-		}
-		n = n*10 + int(s[0]) - '0'
 		s = s[1:]
 	}
 	rest = s
 	ok = true
+	// Have digits, compute value.
+	t = t[:len(t)-len(s)]
+	for i := 0; i < len(t); i++ {
+		// Avoid overflow.
+		if n >= 1e8 {
+			n = -1
+			break
+		}
+		n = n*10 + int(t[i]) - '0'
+	}
 	return
 }
 
@@ -1125,6 +1170,8 @@ func (p *parser) parseRightParen() os.Error {
 	if re2.Op != opLeftParen {
 		return &Error{ErrMissingParen, p.wholeRegexp}
 	}
+	// Restore flags at time of paren.
+	p.flags = re2.Flags
 	if re2.Cap == 0 {
 		// Just for grouping.
 		p.push(re1)
@@ -1330,9 +1377,18 @@ func (p *parser) appendGroup(r []int, g charGroup) []int {
 	return r
 }
 
+var anyTable = &unicode.RangeTable{
+	[]unicode.Range16{{0, 1<<16 - 1, 1}},
+	[]unicode.Range32{{1 << 16, unicode.MaxRune, 1}},
+}
+
 // unicodeTable returns the unicode.RangeTable identified by name
 // and the table of additional fold-equivalent code points.
 func unicodeTable(name string) (*unicode.RangeTable, *unicode.RangeTable) {
+	// Special case: "Any" means any.
+	if name == "Any" {
+		return anyTable, anyTable
+	}
 	if t := unicode.Categories[name]; t != nil {
 		return t, unicode.FoldCategory[name]
 	}

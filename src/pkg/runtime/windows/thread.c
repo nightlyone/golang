@@ -6,49 +6,67 @@
 #include "type.h"
 #include "defs.h"
 #include "os.h"
-#include "cgocall.h"
 
 #pragma dynimport runtime·CloseHandle CloseHandle "kernel32.dll"
 #pragma dynimport runtime·CreateEvent CreateEventA "kernel32.dll"
 #pragma dynimport runtime·CreateThread CreateThread "kernel32.dll"
+#pragma dynimport runtime·CreateWaitableTimer CreateWaitableTimerA "kernel32.dll"
+#pragma dynimport runtime·DuplicateHandle DuplicateHandle "kernel32.dll"
 #pragma dynimport runtime·ExitProcess ExitProcess "kernel32.dll"
 #pragma dynimport runtime·FreeEnvironmentStringsW FreeEnvironmentStringsW "kernel32.dll"
 #pragma dynimport runtime·GetEnvironmentStringsW GetEnvironmentStringsW "kernel32.dll"
 #pragma dynimport runtime·GetProcAddress GetProcAddress "kernel32.dll"
 #pragma dynimport runtime·GetStdHandle GetStdHandle "kernel32.dll"
+#pragma dynimport runtime·GetThreadContext GetThreadContext "kernel32.dll"
 #pragma dynimport runtime·LoadLibraryEx LoadLibraryExA "kernel32.dll"
 #pragma dynimport runtime·QueryPerformanceCounter QueryPerformanceCounter "kernel32.dll"
 #pragma dynimport runtime·QueryPerformanceFrequency QueryPerformanceFrequency "kernel32.dll"
+#pragma dynimport runtime·ResumeThread ResumeThread "kernel32.dll"
 #pragma dynimport runtime·SetConsoleCtrlHandler SetConsoleCtrlHandler "kernel32.dll"
 #pragma dynimport runtime·SetEvent SetEvent "kernel32.dll"
+#pragma dynimport runtime·SetThreadPriority SetThreadPriority "kernel32.dll"
+#pragma dynimport runtime·SetWaitableTimer SetWaitableTimer "kernel32.dll"
+#pragma dynimport runtime·SuspendThread SuspendThread "kernel32.dll"
+#pragma dynimport runtime·timeBeginPeriod timeBeginPeriod "winmm.dll"
 #pragma dynimport runtime·WaitForSingleObject WaitForSingleObject "kernel32.dll"
 #pragma dynimport runtime·WriteFile WriteFile "kernel32.dll"
 
 extern void *runtime·CloseHandle;
 extern void *runtime·CreateEvent;
 extern void *runtime·CreateThread;
+extern void *runtime·CreateWaitableTimer;
+extern void *runtime·DuplicateHandle;
 extern void *runtime·ExitProcess;
 extern void *runtime·FreeEnvironmentStringsW;
 extern void *runtime·GetEnvironmentStringsW;
 extern void *runtime·GetProcAddress;
 extern void *runtime·GetStdHandle;
+extern void *runtime·GetThreadContext;
 extern void *runtime·LoadLibraryEx;
 extern void *runtime·QueryPerformanceCounter;
 extern void *runtime·QueryPerformanceFrequency;
+extern void *runtime·ResumeThread;
 extern void *runtime·SetConsoleCtrlHandler;
 extern void *runtime·SetEvent;
+extern void *runtime·SetThreadPriority;
+extern void *runtime·SetWaitableTimer;
+extern void *runtime·SuspendThread;
+extern void *runtime·timeBeginPeriod;
 extern void *runtime·WaitForSingleObject;
 extern void *runtime·WriteFile;
 
 static int64 timerfreq;
-static void destroylock(Lock *l);
 
 void
 runtime·osinit(void)
 {
+	// -1 = current process, -2 = current thread
+	runtime·stdcall(runtime·DuplicateHandle, 7,
+		(uintptr)-1, (uintptr)-2, (uintptr)-1, &m->thread,
+		(uintptr)0, (uintptr)0, (uintptr)DUPLICATE_SAME_ACCESS);
 	runtime·stdcall(runtime·QueryPerformanceFrequency, 1, &timerfreq);
 	runtime·stdcall(runtime·SetConsoleCtrlHandler, 2, runtime·ctrlhandler, (uintptr)1);
-	runtime·destroylock = destroylock;
+	runtime·stdcall(runtime·timeBeginPeriod, 1, (uintptr)1);
 }
 
 void
@@ -121,22 +139,50 @@ initevent(void **pevent)
 	}
 }
 
+#define LOCK_HELD ((M*)-1)
+
 static void
 eventlock(Lock *l)
 {
 	// Allocate event if needed.
-	if(l->event == 0)
-		initevent(&l->event);
+	if(m->event == nil)
+		initevent(&m->event);
 
-	if(runtime·xadd(&l->key, 1) > 1)	// someone else has it; wait
-		runtime·stdcall(runtime·WaitForSingleObject, 2, l->event, (uintptr)-1);
+	for(;;) {
+		m->nextwaitm = runtime·atomicloadp(&l->waitm);
+		if(m->nextwaitm == nil) {
+			if(runtime·casp(&l->waitm, nil, LOCK_HELD))
+				return;
+		// Someone else has it.
+		// l->waitm points to a linked list of M's waiting
+		// for this lock, chained through m->nextwaitm.
+		// Queue this M.
+		} else if(runtime·casp(&l->waitm, m->nextwaitm, m))
+			break;
+	}
+
+	// Wait.
+	runtime·stdcall(runtime·WaitForSingleObject, 2, m->event, (uintptr)-1);
 }
 
 static void
 eventunlock(Lock *l)
 {
-	if(runtime·xadd(&l->key, -1) > 0)	// someone else is waiting
-		runtime·stdcall(runtime·SetEvent, 1, l->event);
+	M *mp;
+
+	for(;;) {
+		mp = runtime·atomicloadp(&l->waitm);
+		if(mp == LOCK_HELD) {
+			if(runtime·casp(&l->waitm, LOCK_HELD, nil))
+				return;
+		// Other M's are waiting for the lock.
+		// Dequeue a M.
+		} else if(runtime·casp(&l->waitm, mp, mp->nextwaitm))
+			break;
+	}
+
+	// Wake that M.
+	runtime·stdcall(runtime·SetEvent, 1, mp->event);
 }
 
 void
@@ -157,17 +203,10 @@ runtime·unlock(Lock *l)
 	eventunlock(l);
 }
 
-static void
-destroylock(Lock *l)
-{
-	if(l->event != 0)
-		runtime·stdcall(runtime·CloseHandle, 1, l->event);
-}
-
 void
 runtime·noteclear(Note *n)
 {
-	n->lock.key = 0;	// memset(n, 0, sizeof *n)
+	n->lock.waitm = nil;
 	eventlock(&n->lock);
 }
 
@@ -193,11 +232,13 @@ runtime·newosproc(M *m, G *g, void *stk, void (*fn)(void))
 	USED(g);	// assuming g = m->g0
 	USED(fn);	// assuming fn = mstart
 
-	thandle = runtime·stdcall(runtime·CreateThread, 6, (uintptr)0, (uintptr)0, runtime·tstart_stdcall, m, (uintptr)0, (uintptr)0);
-	if(thandle == 0) {
+	thandle = runtime·stdcall(runtime·CreateThread, 6,
+		nil, nil, runtime·tstart_stdcall, m, nil, nil);
+	if(thandle == nil) {
 		runtime·printf("runtime: failed to create new OS thread (have %d already; errno=%d)\n", runtime·mcount(), runtime·getlasterror());
 		runtime·throw("runtime.newosproc");
 	}
+	runtime·atomicstorep(&m->thread, thandle);
 }
 
 // Called to initialize a new m (including the bootstrap m).
@@ -228,21 +269,7 @@ runtime·stdcall(void *fn, int32 count, ...)
 	c.n = count;
 	c.args = (uintptr*)&count + 1;
 	runtime·asmcgocall(runtime·asmstdcall, &c);
-	return (void*)c.r;
-}
-
-uintptr
-runtime·syscall(void *fn, uintptr nargs, void *args, uintptr *err)
-{
-	WinCall c;
-
-	c.fn = fn;
-	c.n = nargs;
-	c.args = args;
-	runtime·cgocall(runtime·asmstdcall, &c);
-	if(err)
-		*err = c.err;
-	return c.r;
+	return (void*)c.r1;
 }
 
 uint32
@@ -318,6 +345,89 @@ runtime·ctrlhandler1(uint32 type)
 		return 1;
 	runtime·exit(2);	// SIGINT, SIGTERM, etc
 	return 0;
+}
+
+extern void runtime·dosigprof(Context *r, G *gp);
+extern void runtime·profileloop(void);
+static void *profiletimer;
+
+static void
+profilem(M *mp)
+{
+	extern M runtime·m0;
+	extern uint32 runtime·tls0[];
+	byte rbuf[sizeof(Context)+15];
+	Context *r;
+	void *tls;
+	G *gp;
+
+	tls = mp->tls;
+	if(mp == &runtime·m0)
+		tls = runtime·tls0;
+	gp = *(G**)tls;
+
+	if(gp != nil && gp != mp->g0 && gp->status != Gsyscall) {
+		// align Context to 16 bytes
+		r = (Context*)((uintptr)(&rbuf[15]) & ~15);
+		r->ContextFlags = CONTEXT_CONTROL;
+		runtime·stdcall(runtime·GetThreadContext, 2, mp->thread, r);
+		runtime·dosigprof(r, gp);
+	}
+}
+
+void
+runtime·profileloop1(void)
+{
+	M *mp, *allm;
+	void *thread;
+
+	runtime·stdcall(runtime·SetThreadPriority, 2,
+		(uintptr)-2, (uintptr)THREAD_PRIORITY_HIGHEST);
+
+	for(;;) {
+		runtime·stdcall(runtime·WaitForSingleObject, 2, profiletimer, (uintptr)-1);
+		allm = runtime·atomicloadp(&runtime·allm);
+		for(mp = allm; mp != nil; mp = mp->alllink) {
+			thread = runtime·atomicloadp(&mp->thread);
+			if(thread == nil)
+				continue;
+			runtime·stdcall(runtime·SuspendThread, 1, thread);
+			if(mp->profilehz != 0)
+				profilem(mp);
+			runtime·stdcall(runtime·ResumeThread, 1, thread);
+		}
+	}
+}
+
+void
+runtime·resetcpuprofiler(int32 hz)
+{
+	static Lock lock;
+	void *timer, *thread;
+	int32 ms;
+	int64 due;
+
+	runtime·lock(&lock);
+	if(profiletimer == nil) {
+		timer = runtime·stdcall(runtime·CreateWaitableTimer, 3, nil, nil, nil);
+		runtime·atomicstorep(&profiletimer, timer);
+		thread = runtime·stdcall(runtime·CreateThread, 6,
+			nil, nil, runtime·profileloop, nil, nil, nil);
+		runtime·stdcall(runtime·CloseHandle, 1, thread);
+	}
+	runtime·unlock(&lock);
+
+	ms = 0;
+	due = 1LL<<63;
+	if(hz > 0) {
+		ms = 1000 / hz;
+		if(ms == 0)
+			ms = 1;
+		due = ms * -10000;
+	}
+	runtime·stdcall(runtime·SetWaitableTimer, 6,
+		profiletimer, &due, (uintptr)ms, nil, nil, nil);
+	runtime·atomicstore((uint32*)&m->profilehz, hz);
 }
 
 void

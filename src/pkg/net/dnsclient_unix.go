@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build darwin freebsd linux openbsd
+
 // DNS client: see RFC 1035.
 // Has to be linked into package net for Dial.
 
@@ -213,6 +215,18 @@ func goLookupHost(name string) (addrs []string, err os.Error) {
 // depending on our lookup code, so that Go and C get the same
 // answers.
 func goLookupIP(name string) (addrs []IP, err os.Error) {
+	// Use entries from /etc/hosts if possible.
+	haddrs := lookupStaticHost(name)
+	if len(haddrs) > 0 {
+		for _, haddr := range haddrs {
+			if ip := ParseIP(haddr); ip != nil {
+				addrs = append(addrs, ip)
+			}
+		}
+		if len(addrs) > 0 {
+			return
+		}
+	}
 	onceLoadConfig.Do(loadConfig)
 	if dnserr != nil || cfg == nil {
 		err = dnserr

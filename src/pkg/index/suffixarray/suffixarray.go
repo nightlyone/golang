@@ -18,20 +18,93 @@ package suffixarray
 
 import (
 	"bytes"
-	"regexp"
+	"exp/regexp"
+	"gob"
+	"io"
+	"os"
 	"sort"
 )
 
 // Index implements a suffix array for fast substring search.
 type Index struct {
 	data []byte
-	sa   []int // suffix array for data
+	sa   []int32 // suffix array for data; len(sa) == len(data)
 }
 
 // New creates a new Index for data.
 // Index creation time is O(N*log(N)) for N = len(data).
 func New(data []byte) *Index {
 	return &Index{data, qsufsort(data)}
+}
+
+// Read and Write slice the data into successive portions of length gobN,
+// so gob can allocate smaller buffers for its I/O.
+const gobN = 1 << 16 // slightly better than say 1 << 20 (BenchmarkSaveRestore)
+
+// Read reads the index from r into x; x must not be nil.
+func (x *Index) Read(r io.Reader) os.Error {
+	d := gob.NewDecoder(r)
+	var n int
+	if err := d.Decode(&n); err != nil {
+		return err
+	}
+	if 2*n < cap(x.data) || cap(x.data) < n {
+		// new data is significantly smaller or larger then
+		// existing buffers - allocate new ones
+		x.data = make([]byte, n)
+		x.sa = make([]int32, n)
+	} else {
+		// re-use existing buffers
+		x.data = x.data[0:n]
+		x.sa = x.sa[0:n]
+	}
+	for i := 0; i < n; {
+		j := i + gobN
+		if j > n {
+			j = n
+		}
+		// data holds next piece of x.data; its length is updated by Decode
+		data := x.data[i:j]
+		if err := d.Decode(&data); err != nil {
+			return err
+		}
+		if len(data) != j-i {
+			return os.NewError("suffixarray.Read: inconsistent data format")
+		}
+		// sa holds next piece of x.data; its length is updated by Decode
+		sa := x.sa[i:j]
+		if err := d.Decode(&sa); err != nil {
+			return err
+		}
+		if len(sa) != j-i {
+			return os.NewError("suffixarray.Read: inconsistent data format")
+		}
+		i = j
+	}
+	return nil
+}
+
+// Write writes the index x to w.
+func (x *Index) Write(w io.Writer) os.Error {
+	e := gob.NewEncoder(w)
+	n := len(x.data)
+	if err := e.Encode(n); err != nil {
+		return err
+	}
+	for i := 0; i < n; {
+		j := i + gobN
+		if j > n {
+			j = n
+		}
+		if err := e.Encode(x.data[i:j]); err != nil {
+			return err
+		}
+		if err := e.Encode(x.sa[i:j]); err != nil {
+			return err
+		}
+		i = j
+	}
+	return nil
 }
 
 // Bytes returns the data over which the index was created.
@@ -47,7 +120,7 @@ func (x *Index) at(i int) []byte {
 
 // lookupAll returns a slice into the matching region of the index.
 // The runtime is O(log(N)*len(s)).
-func (x *Index) lookupAll(s []byte) []int {
+func (x *Index) lookupAll(s []byte) []int32 {
 	// find matching suffix index range [i:j]
 	// find the first index where s would be the prefix
 	i := sort.Search(len(x.sa), func(i int) bool { return bytes.Compare(x.at(i), s) >= 0 })
@@ -65,12 +138,15 @@ func (x *Index) lookupAll(s []byte) []int {
 func (x *Index) Lookup(s []byte, n int) (result []int) {
 	if len(s) > 0 && n != 0 {
 		matches := x.lookupAll(s)
-		if len(matches) < n || n < 0 {
+		if n < 0 || len(matches) < n {
 			n = len(matches)
 		}
+		// 0 <= n <= len(matches)
 		if n > 0 {
 			result = make([]int, n)
-			copy(result, matches)
+			for i, x := range matches[0:n] {
+				result[i] = int(x)
+			}
 		}
 	}
 	return

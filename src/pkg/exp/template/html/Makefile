@@ -6,8 +6,16 @@ include ../../../../Make.inc
 
 TARG=exp/template/html
 GOFILES=\
+	clone.go\
+	content.go\
 	context.go\
+	css.go\
+	doc.go\
+	error.go\
 	escape.go\
+	html.go\
 	js.go\
+	transition.go\
+	url.go\
 
 include ../../../../Make.pkg

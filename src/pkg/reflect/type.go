@@ -10,6 +10,9 @@
 // A call to ValueOf returns a Value representing the run-time data.
 // Zero takes a Type and returns a Value representing a zero value
 // for that type.
+//
+// See "The Laws of Reflection" for an introduction to reflection in Go:
+// http://blog.golang.org/2011/09/laws-of-reflection.html
 package reflect
 
 import (
@@ -713,7 +716,7 @@ type StructTag string
 // Get returns the value associated with key in the tag string.
 // If there is no such key in the tag, Get returns the empty string.
 // If the tag does not have the conventional format, the value
-// returned by Get is unspecified, 
+// returned by Get is unspecified.
 func (tag StructTag) Get(key string) string {
 	for tag != "" {
 		// skip leading space
