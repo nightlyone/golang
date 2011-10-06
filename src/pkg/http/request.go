@@ -64,8 +64,15 @@ func (e *badStringError) String() string { return fmt.Sprintf("%s %q", e.what, e
 
 // Headers that Request.Write handles itself and should be skipped.
 var reqWriteExcludeHeader = map[string]bool{
-	"Host":              true,
+	"Host":              true, // not in Header map anyway
 	"User-Agent":        true,
+	"Content-Length":    true,
+	"Transfer-Encoding": true,
+	"Trailer":           true,
+}
+
+var reqWriteExcludeHeaderDump = map[string]bool{
+	"Host":              true, // not in Header map anyway
 	"Content-Length":    true,
 	"Transfer-Encoding": true,
 	"Trailer":           true,
@@ -273,12 +280,61 @@ func (req *Request) Write(w io.Writer) os.Error {
 }
 
 // WriteProxy is like Write but writes the request in the form
-// expected by an HTTP proxy.  It includes the scheme and host
-// name in the URI instead of using a separate Host: header line.
-// If req.RawURL is non-empty, WriteProxy uses it unchanged
-// instead of URL but still omits the Host: header.
+// expected by an HTTP proxy.  In particular, WriteProxy writes the
+// initial Request-URI line of the request with an absolute URI, per
+// section 5.1.2 of RFC 2616, including the scheme and host.  If
+// req.RawURL is non-empty, WriteProxy uses it unchanged.  In either
+// case, WriteProxy also writes a Host header, using either req.Host
+// or req.URL.Host.
 func (req *Request) WriteProxy(w io.Writer) os.Error {
 	return req.write(w, true)
+}
+
+func (req *Request) dumpWrite(w io.Writer) os.Error {
+	urlStr := req.RawURL
+	if urlStr == "" {
+		urlStr = valueOrDefault(req.URL.EncodedPath(), "/")
+		if req.URL.RawQuery != "" {
+			urlStr += "?" + req.URL.RawQuery
+		}
+	}
+
+	bw := bufio.NewWriter(w)
+	fmt.Fprintf(bw, "%s %s HTTP/%d.%d\r\n", valueOrDefault(req.Method, "GET"), urlStr,
+		req.ProtoMajor, req.ProtoMinor)
+
+	host := req.Host
+	if host == "" && req.URL != nil {
+		host = req.URL.Host
+	}
+	if host != "" {
+		fmt.Fprintf(bw, "Host: %s\r\n", host)
+	}
+
+	// Process Body,ContentLength,Close,Trailer
+	tw, err := newTransferWriter(req)
+	if err != nil {
+		return err
+	}
+	err = tw.WriteHeader(bw)
+	if err != nil {
+		return err
+	}
+
+	err = req.Header.WriteSubset(bw, reqWriteExcludeHeaderDump)
+	if err != nil {
+		return err
+	}
+
+	io.WriteString(bw, "\r\n")
+
+	// Write body and trailer
+	err = tw.WriteBody(bw)
+	if err != nil {
+		return err
+	}
+	bw.Flush()
+	return nil
 }
 
 func (req *Request) write(w io.Writer, usingProxy bool) os.Error {
@@ -608,14 +664,14 @@ func ReadRequest(b *bufio.Reader) (req *Request, err os.Error) {
 	return req, nil
 }
 
-// MaxBytesReader is similar to io.LimitReader, but is intended for
+// MaxBytesReader is similar to io.LimitReader but is intended for
 // limiting the size of incoming request bodies. In contrast to
-// io.LimitReader, MaxBytesReader is a ReadCloser, returns a non-EOF
-// error if the body is too large, and also takes care of closing the
-// underlying io.ReadCloser connection (if applicable, usually a TCP
-// connection) when the limit is hit.  This prevents clients from
-// accidentally or maliciously sending a large request and wasting
-// server resources.
+// io.LimitReader, MaxBytesReader's result is a ReadCloser, returns a
+// non-EOF error for a Read beyond the limit, and Closes the
+// underlying reader when its Close method is called.
+//
+// MaxBytesReader prevents clients from accidentally or maliciously
+// sending a large request and wasting server resources.
 func MaxBytesReader(w ResponseWriter, r io.ReadCloser, n int64) io.ReadCloser {
 	return &maxBytesReader{w: w, r: r, n: n}
 }
@@ -673,7 +729,7 @@ func (r *Request) ParseForm() (err os.Error) {
 		switch {
 		case ct == "text/plain" || ct == "application/x-www-form-urlencoded" || ct == "":
 			var reader io.Reader = r.Body
-			maxFormSize := int64((1 << 63) - 1)
+			maxFormSize := int64(1<<63 - 1)
 			if _, ok := r.Body.(*maxBytesReader); !ok {
 				maxFormSize = int64(10 << 20) // 10 MB is a lot of text.
 				reader = io.LimitReader(r.Body, maxFormSize+1)

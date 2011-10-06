@@ -2,9 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package html is a specialization of template that automates the
-// construction of safe HTML output.
-// INCOMPLETE.
 package html
 
 import (
@@ -12,93 +9,212 @@ import (
 	"fmt"
 	"html"
 	"os"
-	"strings"
 	"template"
 	"template/parse"
 )
 
 // Escape rewrites each action in the template to guarantee that the output is
-// HTML-escaped.
+// properly escaped.
 func Escape(t *template.Template) (*template.Template, os.Error) {
-	c := escapeList(context{}, t.Tree.Root)
-	if c.errStr != "" {
-		return nil, fmt.Errorf("%s:%d: %s", t.Name(), c.errLine, c.errStr)
+	var s template.Set
+	s.Add(t)
+	if _, err := EscapeSet(&s, t.Name()); err != nil {
+		return nil, err
 	}
-	if c.state != stateText {
-		return nil, fmt.Errorf("%s ends in a non-text context: %v", t.Name(), c)
-	}
-	t.Funcs(funcMap)
+	// TODO: if s contains cloned dependencies due to self-recursion
+	// cross-context, error out.
 	return t, nil
+}
+
+// EscapeSet rewrites the template set to guarantee that the output of any of
+// the named templates is properly escaped.
+// Names should include the names of all templates that might be Executed but
+// need not include helper templates.
+// If no error is returned, then the named templates have been modified. 
+// Otherwise the named templates have been rendered unusable.
+func EscapeSet(s *template.Set, names ...string) (*template.Set, os.Error) {
+	if len(names) == 0 {
+		// TODO: Maybe add a method to Set to enumerate template names
+		// and use those instead.
+		return nil, &Error{ErrNoNames, "", 0, "must specify names of top level templates"}
+	}
+	e := newEscaper(s)
+	for _, name := range names {
+		c, _ := e.escapeTree(context{}, name, 0)
+		var err os.Error
+		if c.err != nil {
+			err, c.err.Name = c.err, name
+		} else if c.state != stateText {
+			err = &Error{ErrEndContext, name, 0, fmt.Sprintf("ends in a non-text context: %v", c)}
+		}
+		if err != nil {
+			// Prevent execution of unsafe templates.
+			for _, name := range names {
+				if t := s.Template(name); t != nil {
+					t.Tree = nil
+				}
+			}
+			return nil, err
+		}
+	}
+	e.commit()
+	return s, nil
 }
 
 // funcMap maps command names to functions that render their inputs safe.
 var funcMap = template.FuncMap{
-	"exp_template_html_urlfilter":       urlFilter,
-	"exp_template_html_jsvalescaper":    jsValEscaper,
-	"exp_template_html_jsstrescaper":    jsStrEscaper,
+	"exp_template_html_attrescaper":     attrEscaper,
+	"exp_template_html_commentescaper":  commentEscaper,
+	"exp_template_html_cssescaper":      cssEscaper,
+	"exp_template_html_cssvaluefilter":  cssValueFilter,
+	"exp_template_html_htmlnamefilter":  htmlNameFilter,
+	"exp_template_html_htmlescaper":     htmlEscaper,
 	"exp_template_html_jsregexpescaper": jsRegexpEscaper,
+	"exp_template_html_jsstrescaper":    jsStrEscaper,
+	"exp_template_html_jsvalescaper":    jsValEscaper,
+	"exp_template_html_nospaceescaper":  htmlNospaceEscaper,
+	"exp_template_html_rcdataescaper":   rcdataEscaper,
+	"exp_template_html_urlescaper":      urlEscaper,
+	"exp_template_html_urlfilter":       urlFilter,
+	"exp_template_html_urlnormalizer":   urlNormalizer,
 }
 
+// equivEscapers matches contextual escapers to equivalent template builtins.
+var equivEscapers = map[string]string{
+	"exp_template_html_attrescaper":    "html",
+	"exp_template_html_htmlescaper":    "html",
+	"exp_template_html_nospaceescaper": "html",
+	"exp_template_html_rcdataescaper":  "html",
+	"exp_template_html_urlescaper":     "urlquery",
+	"exp_template_html_urlnormalizer":  "urlquery",
+}
+
+// escaper collects type inferences about templates and changes needed to make
+// templates injection safe.
+type escaper struct {
+	// set is the template set being escaped.
+	set *template.Set
+	// output[templateName] is the output context for a templateName that
+	// has been mangled to include its input context.
+	output map[string]context
+	// derived[c.mangle(name)] maps to a template derived from the template
+	// named name templateName for the start context c.
+	derived map[string]*template.Template
+	// called[templateName] is a set of called mangled template names.
+	called map[string]bool
+	// xxxNodeEdits are the accumulated edits to apply during commit.
+	// Such edits are not applied immediately in case a template set
+	// executes a given template in different escaping contexts.
+	actionNodeEdits   map[*parse.ActionNode][]string
+	templateNodeEdits map[*parse.TemplateNode]string
+	textNodeEdits     map[*parse.TextNode][]byte
+}
+
+// newEscaper creates a blank escaper for the given set.
+func newEscaper(s *template.Set) *escaper {
+	return &escaper{
+		s,
+		map[string]context{},
+		map[string]*template.Template{},
+		map[string]bool{},
+		map[*parse.ActionNode][]string{},
+		map[*parse.TemplateNode]string{},
+		map[*parse.TextNode][]byte{},
+	}
+}
+
+// filterFailsafe is an innocuous word that is emitted in place of unsafe values
+// by sanitizer functions. It is not a keyword in any programming language,
+// contains no special characters, is not empty, and when it appears in output
+// it is distinct enough that a developer can find the source of the problem
+// via a search engine.
+const filterFailsafe = "ZgotmplZ"
+
 // escape escapes a template node.
-func escape(c context, n parse.Node) context {
+func (e *escaper) escape(c context, n parse.Node) context {
 	switch n := n.(type) {
 	case *parse.ActionNode:
-		return escapeAction(c, n)
+		return e.escapeAction(c, n)
 	case *parse.IfNode:
-		return escapeBranch(c, &n.BranchNode, "if")
+		return e.escapeBranch(c, &n.BranchNode, "if")
 	case *parse.ListNode:
-		return escapeList(c, n)
+		return e.escapeList(c, n)
 	case *parse.RangeNode:
-		return escapeBranch(c, &n.BranchNode, "range")
+		return e.escapeBranch(c, &n.BranchNode, "range")
+	case *parse.TemplateNode:
+		return e.escapeTemplate(c, n)
 	case *parse.TextNode:
-		return escapeText(c, n.Text)
+		return e.escapeText(c, n)
 	case *parse.WithNode:
-		return escapeBranch(c, &n.BranchNode, "with")
+		return e.escapeBranch(c, &n.BranchNode, "with")
 	}
-	// TODO: handle a *parse.TemplateNode. Should Escape take a *template.Set?
 	panic("escaping " + n.String() + " is unimplemented")
 }
 
 // escapeAction escapes an action template node.
-func escapeAction(c context, n *parse.ActionNode) context {
-	s := make([]string, 0, 2)
+func (e *escaper) escapeAction(c context, n *parse.ActionNode) context {
+	c = nudge(c)
+	s := make([]string, 0, 3)
 	switch c.state {
-	case stateURL:
+	case stateError:
+		return c
+	case stateURL, stateCSSDqStr, stateCSSSqStr, stateCSSDqURL, stateCSSSqURL, stateCSSURL:
 		switch c.urlPart {
 		case urlPartNone:
 			s = append(s, "exp_template_html_urlfilter")
-		case urlPartQueryOrFrag:
-			s = append(s, "urlquery")
+			fallthrough
 		case urlPartPreQuery:
-			s = append(s, "html")
+			switch c.state {
+			case stateCSSDqStr, stateCSSSqStr:
+				s = append(s, "exp_template_html_cssescaper")
+			case stateCSSDqURL, stateCSSSqURL, stateCSSURL:
+				s = append(s, "exp_template_html_urlnormalizer")
+			}
+		case urlPartQueryOrFrag:
+			s = append(s, "exp_template_html_urlescaper")
 		case urlPartUnknown:
 			return context{
-				state:   stateError,
-				errLine: n.Line,
-				errStr:  fmt.Sprintf("%s appears in an ambiguous URL context", n),
+				state: stateError,
+				err:   errorf(ErrAmbigContext, n.Line, "%s appears in an ambiguous URL context", n),
 			}
 		default:
 			panic(c.urlPart.String())
 		}
 	case stateJS:
 		s = append(s, "exp_template_html_jsvalescaper")
-		if c.delim != delimNone {
-			s = append(s, "html")
-		}
+		// A slash after a value starts a div operator.
+		c.jsCtx = jsCtxDivOp
 	case stateJSDqStr, stateJSSqStr:
 		s = append(s, "exp_template_html_jsstrescaper")
 	case stateJSRegexp:
 		s = append(s, "exp_template_html_jsregexpescaper")
-	case stateJSBlockCmt, stateJSLineCmt:
-		return context{
-			state:   stateError,
-			errLine: n.Line,
-			errStr:  fmt.Sprintf("%s appears inside a comment", n),
-		}
+	case stateCSS:
+		s = append(s, "exp_template_html_cssvaluefilter")
+	case stateText:
+		s = append(s, "exp_template_html_htmlescaper")
+	case stateRCDATA:
+		s = append(s, "exp_template_html_rcdataescaper")
+	case stateAttr:
+		// Handled below in delim check.
+	case stateAttrName, stateTag:
+		c.state = stateAttrName
+		s = append(s, "exp_template_html_htmlnamefilter")
 	default:
-		s = append(s, "html")
+		if isComment(c.state) {
+			s = append(s, "exp_template_html_commentescaper")
+		} else {
+			panic("unexpected state " + c.state.String())
+		}
 	}
-	ensurePipelineContains(n.Pipe, s)
+	switch c.delim {
+	case delimNone:
+		// No extra-escaping needed for raw text content.
+	case delimSpaceOrTagEnd:
+		s = append(s, "exp_template_html_nospaceescaper")
+	default:
+		s = append(s, "exp_template_html_attrescaper")
+	}
+	e.editActionNode(n, s)
 	return c
 }
 
@@ -117,7 +233,10 @@ func ensurePipelineContains(p *parse.PipeNode, s []string) {
 	idents := p.Cmds
 	for i := n - 1; i >= 0; i-- {
 		if cmd := p.Cmds[i]; len(cmd.Args) != 0 {
-			if _, ok := cmd.Args[0].(*parse.IdentifierNode); ok {
+			if id, ok := cmd.Args[0].(*parse.IdentifierNode); ok {
+				if id.Ident == "noescape" {
+					return
+				}
 				continue
 			}
 		}
@@ -125,7 +244,7 @@ func ensurePipelineContains(p *parse.PipeNode, s []string) {
 	}
 	dups := 0
 	for _, id := range idents {
-		if s[dups] == (id.Args[0].(*parse.IdentifierNode)).Ident {
+		if escFnsEq(s[dups], (id.Args[0].(*parse.IdentifierNode)).Ident) {
 			dups++
 			if dups == len(s) {
 				return
@@ -136,7 +255,7 @@ func ensurePipelineContains(p *parse.PipeNode, s []string) {
 	copy(newCmds, p.Cmds)
 	// Merge existing identifier commands with the sanitizers needed.
 	for _, id := range idents {
-		i := indexOfStr((id.Args[0].(*parse.IdentifierNode)).Ident, s)
+		i := indexOfStr((id.Args[0].(*parse.IdentifierNode)).Ident, s, escFnsEq)
 		if i != -1 {
 			for _, name := range s[:i] {
 				newCmds = append(newCmds, newIdentCmd(name))
@@ -152,14 +271,25 @@ func ensurePipelineContains(p *parse.PipeNode, s []string) {
 	p.Cmds = newCmds
 }
 
-// indexOfStr is the least i such that strs[i] == s or -1 if s is not in strs.
-func indexOfStr(s string, strs []string) int {
+// indexOfStr is the first i such that eq(s, strs[i]) or -1 if s was not found.
+func indexOfStr(s string, strs []string, eq func(a, b string) bool) int {
 	for i, t := range strs {
-		if s == t {
+		if eq(s, t) {
 			return i
 		}
 	}
 	return -1
+}
+
+// escFnsEq returns whether the two escaping functions are equivalent.
+func escFnsEq(a, b string) bool {
+	if e := equivEscapers[a]; e != "" {
+		a = e
+	}
+	if e := equivEscapers[b]; e != "" {
+		b = e
+	}
+	return a == b
 }
 
 // newIdentCmd produces a command containing a single identifier node.
@@ -168,6 +298,33 @@ func newIdentCmd(identifier string) *parse.CommandNode {
 		NodeType: parse.NodeCommand,
 		Args:     []parse.Node{parse.NewIdentifier(identifier)},
 	}
+}
+
+// nudge returns the context that would result from following empty string
+// transitions from the input context.
+// For example, parsing:
+//     `<a href=`
+// will end in context{stateBeforeValue, attrURL}, but parsing one extra rune:
+//     `<a href=x`
+// will end in context{stateURL, delimSpaceOrTagEnd, ...}.
+// There are two transitions that happen when the 'x' is seen:
+// (1) Transition from a before-value state to a start-of-value state without
+//     consuming any character.
+// (2) Consume 'x' and transition past the first value character.
+// In this case, nudging produces the context after (1) happens.
+func nudge(c context) context {
+	switch c.state {
+	case stateTag:
+		// In `<foo {{.}}`, the action should emit an attribute.
+		c.state = stateAttrName
+	case stateBeforeValue:
+		// In `<foo bar={{.}}`, the action is an undelimited value.
+		c.state, c.delim, c.attr = attrStartStates[c.attr], delimSpaceOrTagEnd, attrNone
+	case stateAfterName:
+		// In `<foo bar {{.}}`, the action is an attribute name.
+		c.state, c.attr = stateAttrName, attrNone
+	}
+	return c
 }
 
 // join joins the two contexts of a branch template node. The result is an
@@ -192,43 +349,186 @@ func join(a, b context, line int, nodeName string) context {
 		return c
 	}
 
+	c = a
+	c.jsCtx = b.jsCtx
+	if c.eq(b) {
+		// The contexts differ only by jsCtx.
+		c.jsCtx = jsCtxUnknown
+		return c
+	}
+
+	// Allow a nudged context to join with an unnudged one.
+	// This means that
+	//   <p title={{if .C}}{{.}}{{end}}
+	// ends in an unquoted value state even though the else branch
+	// ends in stateBeforeValue.
+	if c, d := nudge(a), nudge(b); !(c.eq(a) && d.eq(b)) {
+		if e := join(c, d, line, nodeName); e.state != stateError {
+			return e
+		}
+	}
+
 	return context{
-		state:   stateError,
-		errLine: line,
-		errStr:  fmt.Sprintf("{{%s}} branches end in different contexts: %v, %v", nodeName, a, b),
+		state: stateError,
+		err:   errorf(ErrBranchEnd, line, "{{%s}} branches end in different contexts: %v, %v", nodeName, a, b),
 	}
 }
 
 // escapeBranch escapes a branch template node: "if", "range" and "with".
-func escapeBranch(c context, n *parse.BranchNode, nodeName string) context {
-	c0 := escapeList(c, n.List)
+func (e *escaper) escapeBranch(c context, n *parse.BranchNode, nodeName string) context {
+	c0 := e.escapeList(c, n.List)
 	if nodeName == "range" && c0.state != stateError {
 		// The "true" branch of a "range" node can execute multiple times.
 		// We check that executing n.List once results in the same context
 		// as executing n.List twice.
-		c0 = join(c0, escapeList(c0, n.List), n.Line, nodeName)
+		c1, _ := e.escapeListConditionally(c0, n.List, nil)
+		c0 = join(c0, c1, n.Line, nodeName)
 		if c0.state == stateError {
 			// Make clear that this is a problem on loop re-entry
 			// since developers tend to overlook that branch when
 			// debugging templates.
-			c0.errLine = n.Line
-			c0.errStr = "on range loop re-entry: " + c0.errStr
+			c0.err.Line = n.Line
+			c0.err.Description = "on range loop re-entry: " + c0.err.Description
 			return c0
 		}
 	}
-	c1 := escapeList(c, n.ElseList)
+	c1 := e.escapeList(c, n.ElseList)
 	return join(c0, c1, n.Line, nodeName)
 }
 
 // escapeList escapes a list template node.
-func escapeList(c context, n *parse.ListNode) context {
+func (e *escaper) escapeList(c context, n *parse.ListNode) context {
 	if n == nil {
 		return c
 	}
 	for _, m := range n.Nodes {
-		c = escape(c, m)
+		c = e.escape(c, m)
 	}
 	return c
+}
+
+// escapeListConditionally escapes a list node but only preserves edits and
+// inferences in e if the inferences and output context satisfy filter.
+// It returns the best guess at an output context, and the result of the filter
+// which is the same as whether e was updated.
+func (e *escaper) escapeListConditionally(c context, n *parse.ListNode, filter func(*escaper, context) bool) (context, bool) {
+	e1 := newEscaper(e.set)
+	// Make type inferences available to f.
+	for k, v := range e.output {
+		e1.output[k] = v
+	}
+	c = e1.escapeList(c, n)
+	ok := filter != nil && filter(e1, c)
+	if ok {
+		// Copy inferences and edits from e1 back into e.
+		for k, v := range e1.output {
+			e.output[k] = v
+		}
+		for k, v := range e1.derived {
+			e.derived[k] = v
+		}
+		for k, v := range e1.called {
+			e.called[k] = v
+		}
+		for k, v := range e1.actionNodeEdits {
+			e.editActionNode(k, v)
+		}
+		for k, v := range e1.templateNodeEdits {
+			e.editTemplateNode(k, v)
+		}
+		for k, v := range e1.textNodeEdits {
+			e.editTextNode(k, v)
+		}
+	}
+	return c, ok
+}
+
+// escapeTemplate escapes a {{template}} call node.
+func (e *escaper) escapeTemplate(c context, n *parse.TemplateNode) context {
+	c, name := e.escapeTree(c, n.Name, n.Line)
+	if name != n.Name {
+		e.editTemplateNode(n, name)
+	}
+	return c
+}
+
+// escapeTree escapes the named template starting in the given context as
+// necessary and returns its output context.
+func (e *escaper) escapeTree(c context, name string, line int) (context, string) {
+	// Mangle the template name with the input context to produce a reliable
+	// identifier.
+	dname := c.mangle(name)
+	e.called[dname] = true
+	if out, ok := e.output[dname]; ok {
+		// Already escaped.
+		return out, dname
+	}
+	t := e.template(name)
+	if t == nil {
+		return context{
+			state: stateError,
+			err:   errorf(ErrNoSuchTemplate, line, "no such template %s", name),
+		}, dname
+	}
+	if dname != name {
+		// Use any template derived during an earlier call to EscapeSet
+		// with different top level templates, or clone if necessary.
+		dt := e.template(dname)
+		if dt == nil {
+			dt = template.New(dname)
+			dt.Tree = &parse.Tree{Name: dname, Root: cloneList(t.Root)}
+			e.derived[dname] = dt
+		}
+		t = dt
+	}
+	return e.computeOutCtx(c, t), dname
+}
+
+// computeOutCtx takes a template and its start context and computes the output
+// context while storing any inferences in e.
+func (e *escaper) computeOutCtx(c context, t *template.Template) context {
+	// Propagate context over the body.
+	c1, ok := e.escapeTemplateBody(c, t)
+	if !ok {
+		// Look for a fixed point by assuming c1 as the output context.
+		if c2, ok2 := e.escapeTemplateBody(c1, t); ok2 {
+			c1, ok = c2, true
+		}
+		// Use c1 as the error context if neither assumption worked.
+	}
+	if !ok && c1.state != stateError {
+		return context{
+			state: stateError,
+			// TODO: Find the first node with a line in t.Tree.Root
+			err: errorf(ErrOutputContext, 0, "cannot compute output context for template %s", t.Name()),
+		}
+	}
+	return c1
+}
+
+// escapeTemplateBody escapes the given template assuming the given output
+// context, and returns the best guess at the output context and whether the
+// assumption was correct.
+func (e *escaper) escapeTemplateBody(c context, t *template.Template) (context, bool) {
+	filter := func(e1 *escaper, c1 context) bool {
+		if c1.state == stateError {
+			// Do not update the input escaper, e.
+			return false
+		}
+		if !e1.called[t.Name()] {
+			// If t is not recursively called, then c1 is an
+			// accurate output context.
+			return true
+		}
+		// c1 is accurate if it matches our assumed output context.
+		return c.eq(c1)
+	}
+	// We need to assume an output context so that recursive template calls
+	// take the fast path out of escapeTree instead of infinitely recursing.
+	// Naively assuming that the input context is the same as the output
+	// works >90% of the time.
+	e.output[t.Name()] = c
+	return e.escapeListConditionally(c, t.Tree.Root, filter)
 }
 
 // delimEnds maps each delim to a string of characters that terminate it.
@@ -246,394 +546,154 @@ var delimEnds = [...]string{
 }
 
 // escapeText escapes a text template node.
-func escapeText(c context, s []byte) context {
-	for len(s) > 0 {
-		if c.delim == delimNone {
-			c, s = transitionFunc[c.state](c, s)
-			continue
-		}
-
-		i := bytes.IndexAny(s, delimEnds[c.delim])
-		if i == -1 {
-			// Remain inside the attribute.
-			// Decode the value so non-HTML rules can easily handle
-			//     <button onclick="alert(&quot;Hi!&quot;)">
-			// without having to entity decode token boundaries.
-			d := c.delim
-			c.delim = delimNone
-			c = escapeText(c, []byte(html.UnescapeString(string(s))))
-			if c.state != stateError {
-				c.delim = d
+func (e *escaper) escapeText(c context, n *parse.TextNode) context {
+	s, written, i, b := n.Text, 0, 0, new(bytes.Buffer)
+	for i != len(s) {
+		c1, nread := contextAfterText(c, s[i:])
+		i1 := i + nread
+		if c.state == stateText || c.state == stateRCDATA {
+			end := i1
+			if c1.state != c.state {
+				for j := end - 1; j >= i; j-- {
+					if s[j] == '<' {
+						end = j
+						break
+					}
+				}
 			}
-			return c
+			for j := i; j < end; j++ {
+				if s[j] == '<' {
+					b.Write(s[written:j])
+					b.WriteString("&lt;")
+					written = j + 1
+				}
+			}
+		} else if isComment(c.state) && c.delim == delimNone {
+			switch c.state {
+			case stateJSBlockCmt:
+				// http://es5.github.com/#x7.4:
+				// "Comments behave like white space and are
+				// discarded except that, if a MultiLineComment
+				// contains a line terminator character, then
+				// the entire comment is considered to be a
+				// LineTerminator for purposes of parsing by
+				// the syntactic grammar."
+				if bytes.IndexAny(s[written:i1], "\n\r\u2028\u2029") != -1 {
+					b.WriteByte('\n')
+				} else {
+					b.WriteByte(' ')
+				}
+			case stateCSSBlockCmt:
+				b.WriteByte(' ')
+			}
+			written = i1
 		}
-		if c.delim != delimSpaceOrTagEnd {
-			// Consume any quote.
-			i++
+		if c.state != c1.state && isComment(c1.state) && c1.delim == delimNone {
+			// Preserve the portion between written and the comment start.
+			cs := i1 - 2
+			if c1.state == stateHTMLCmt {
+				// "<!--" instead of "/*" or "//"
+				cs -= 2
+			}
+			b.Write(s[written:cs])
+			written = i1
 		}
-		c, s = context{state: stateTag}, s[i:]
+		c, i = c1, i1
+	}
+
+	if written != 0 && c.state != stateError {
+		if !isComment(c.state) || c.delim != delimNone {
+			b.Write(n.Text[written:])
+		}
+		e.editTextNode(n, b.Bytes())
 	}
 	return c
 }
 
-// transitionFunc is the array of context transition functions for text nodes.
-// A transition function takes a context and template text input, and returns
-// the updated context and any unconsumed text.
-var transitionFunc = [...]func(context, []byte) (context, []byte){
-	stateText:       tText,
-	stateTag:        tTag,
-	stateURL:        tURL,
-	stateJS:         tJS,
-	stateJSDqStr:    tJSStr,
-	stateJSSqStr:    tJSStr,
-	stateJSRegexp:   tJSRegexp,
-	stateJSBlockCmt: tJSBlockCmt,
-	stateJSLineCmt:  tJSLineCmt,
-	stateAttr:       tAttr,
-	stateError:      tError,
-}
-
-// tText is the context transition function for the text state.
-func tText(c context, s []byte) (context, []byte) {
-	for {
-		i := bytes.IndexByte(s, '<')
-		if i == -1 || i+1 == len(s) {
-			return c, nil
+// contextAfterText starts in context c, consumes some tokens from the front of
+// s, then returns the context after those tokens and the unprocessed suffix.
+func contextAfterText(c context, s []byte) (context, int) {
+	if c.delim == delimNone {
+		c1, i := tSpecialTagEnd(c, s)
+		if i == 0 {
+			// A special end tag (`</script>`) has been seen and
+			// all content preceding it has been consumed.
+			return c1, 0
 		}
+		// Consider all content up to any end tag.
+		return transitionFunc[c.state](c, s[:i])
+	}
+
+	i := bytes.IndexAny(s, delimEnds[c.delim])
+	if i == -1 {
+		// Remain inside the attribute.
+		// Decode the value so non-HTML rules can easily handle
+		//     <button onclick="alert(&quot;Hi!&quot;)">
+		// without having to entity decode token boundaries.
+		for u := []byte(html.UnescapeString(string(s))); len(u) != 0; {
+			c1, i1 := transitionFunc[c.state](c, u)
+			c, u = c1, u[i1:]
+		}
+		return c, len(s)
+	}
+	if c.delim != delimSpaceOrTagEnd {
+		// Consume any quote.
 		i++
-		if s[i] == '/' {
-			if i+1 == len(s) {
-				return c, nil
-			}
-			i++
-		}
-		j := eatTagName(s, i)
-		if j != i {
-			// We've found an HTML tag.
-			return context{state: stateTag}, s[j:]
-		}
-		s = s[j:]
 	}
-	panic("unreachable")
+	// On exiting an attribute, we discard all state information
+	// except the state and element.
+	return context{state: stateTag, element: c.element}, i
 }
 
-// tTag is the context transition function for the tag state.
-func tTag(c context, s []byte) (context, []byte) {
-	// Find the attribute name.
-	attrStart := eatWhiteSpace(s, 0)
-	i, err := eatAttrName(s, attrStart)
-	if err != nil {
-		return context{
-			state:  stateError,
-			errStr: err.String(),
-		}, nil
+// editActionNode records a change to an action pipeline for later commit.
+func (e *escaper) editActionNode(n *parse.ActionNode, cmds []string) {
+	if _, ok := e.actionNodeEdits[n]; ok {
+		panic(fmt.Sprintf("node %s shared between templates", n))
 	}
-	if i == len(s) {
-		return context{state: stateTag}, nil
-	}
-	state := stateAttr
-	canonAttrName := strings.ToLower(string(s[attrStart:i]))
-	if urlAttr[canonAttrName] {
-		state = stateURL
-	} else if strings.HasPrefix(canonAttrName, "on") {
-		state = stateJS
-	}
-
-	// Look for the start of the value.
-	i = eatWhiteSpace(s, i)
-	if i == len(s) {
-		return context{state: stateTag}, s[i:]
-	}
-	if s[i] == '>' {
-		return context{state: stateText}, s[i+1:]
-	} else if s[i] != '=' {
-		// Possible due to a valueless attribute or '/' in "<input />".
-		return context{state: stateTag}, s[i:]
-	}
-	// Consume the "=".
-	i = eatWhiteSpace(s, i+1)
-
-	// Find the attribute delimiter.
-	delim := delimSpaceOrTagEnd
-	if i < len(s) {
-		switch s[i] {
-		case '\'':
-			delim, i = delimSingleQuote, i+1
-		case '"':
-			delim, i = delimDoubleQuote, i+1
-		}
-	}
-
-	return context{state: state, delim: delim}, s[i:]
+	e.actionNodeEdits[n] = cmds
 }
 
-// tAttr is the context transition function for the attribute state.
-func tAttr(c context, s []byte) (context, []byte) {
-	return c, nil
+// editTemplateNode records a change to a {{template}} callee for later commit.
+func (e *escaper) editTemplateNode(n *parse.TemplateNode, callee string) {
+	if _, ok := e.templateNodeEdits[n]; ok {
+		panic(fmt.Sprintf("node %s shared between templates", n))
+	}
+	e.templateNodeEdits[n] = callee
 }
 
-// tURL is the context transition function for the URL state.
-func tURL(c context, s []byte) (context, []byte) {
-	if bytes.IndexAny(s, "#?") >= 0 {
-		c.urlPart = urlPartQueryOrFrag
-	} else if c.urlPart == urlPartNone {
-		c.urlPart = urlPartPreQuery
+// editTextNode records a change to a text node for later commit.
+func (e *escaper) editTextNode(n *parse.TextNode, text []byte) {
+	if _, ok := e.textNodeEdits[n]; ok {
+		panic(fmt.Sprintf("node %s shared between templates", n))
 	}
-	return c, nil
+	e.textNodeEdits[n] = text
 }
 
-// tJS is the context transition function for the JS state.
-func tJS(c context, s []byte) (context, []byte) {
-	// TODO: delegate to tSpecialTagEnd to find any </script> once that CL
-	// has been merged.
-
-	i := bytes.IndexAny(s, `"'/`)
-	if i == -1 {
-		// Entire input is non string, comment, regexp tokens.
-		c.jsCtx = nextJSCtx(s, c.jsCtx)
-		return c, nil
+// commit applies changes to actions and template calls needed to contextually
+// autoescape content and adds any derived templates to the set.
+func (e *escaper) commit() {
+	for name, _ := range e.output {
+		e.template(name).Funcs(funcMap)
 	}
-	c.jsCtx = nextJSCtx(s[:i], c.jsCtx)
-	switch s[i] {
-	case '"':
-		c.state, c.jsCtx = stateJSDqStr, jsCtxRegexp
-	case '\'':
-		c.state, c.jsCtx = stateJSSqStr, jsCtxRegexp
-	case '/':
-		switch {
-		case i+1 < len(s) && s[i+1] == '/':
-			c.state = stateJSLineCmt
-		case i+1 < len(s) && s[i+1] == '*':
-			c.state = stateJSBlockCmt
-		case c.jsCtx == jsCtxRegexp:
-			c.state = stateJSRegexp
-		default:
-			c.jsCtx = jsCtxRegexp
-		}
-	default:
-		panic("unreachable")
+	for _, t := range e.derived {
+		e.set.Add(t)
 	}
-	return c, s[i+1:]
+	for n, s := range e.actionNodeEdits {
+		ensurePipelineContains(n.Pipe, s)
+	}
+	for n, name := range e.templateNodeEdits {
+		n.Name = name
+	}
+	for n, s := range e.textNodeEdits {
+		n.Text = s
+	}
 }
 
-// tJSStr is the context transition function for the JS string states.
-func tJSStr(c context, s []byte) (context, []byte) {
-	// TODO: delegate to tSpecialTagEnd to find any </script> once that CL
-	// has been merged.
-
-	quoteAndEsc := `\"`
-	if c.state == stateJSSqStr {
-		quoteAndEsc = `\'`
+// template returns the named template given a mangled template name.
+func (e *escaper) template(name string) *template.Template {
+	t := e.set.Template(name)
+	if t == nil {
+		t = e.derived[name]
 	}
-
-	b := s
-	for {
-		i := bytes.IndexAny(b, quoteAndEsc)
-		if i == -1 {
-			return c, nil
-		}
-		if b[i] == '\\' {
-			i++
-			if i == len(b) {
-				return context{
-					state:  stateError,
-					errStr: fmt.Sprintf("unfinished escape sequence in JS string: %q", s),
-				}, nil
-			}
-		} else {
-			c.state, c.jsCtx = stateJS, jsCtxDivOp
-			return c, b[i+1:]
-		}
-		b = b[i+1:]
-	}
-	panic("unreachable")
-}
-
-// tJSRegexp is the context transition function for the /RegExp/ literal state.
-func tJSRegexp(c context, s []byte) (context, []byte) {
-	// TODO: delegate to tSpecialTagEnd to find any </script> once that CL
-	// has been merged.
-
-	b := s
-	inCharset := false
-	for {
-		i := bytes.IndexAny(b, `/[\]`)
-		if i == -1 {
-			break
-		}
-		switch b[i] {
-		case '/':
-			if !inCharset {
-				c.state, c.jsCtx = stateJS, jsCtxDivOp
-				return c, b[i+1:]
-			}
-		case '\\':
-			i++
-			if i == len(b) {
-				return context{
-					state:  stateError,
-					errStr: fmt.Sprintf("unfinished escape sequence in JS regexp: %q", s),
-				}, nil
-			}
-		case '[':
-			inCharset = true
-		case ']':
-			inCharset = false
-		default:
-			panic("unreachable")
-		}
-		b = b[i+1:]
-	}
-
-	if inCharset {
-		// This can be fixed by making context richer if interpolation
-		// into charsets is desired.
-		return context{
-			state:  stateError,
-			errStr: fmt.Sprintf("unfinished JS regexp charset: %q", s),
-		}, nil
-	}
-
-	return c, nil
-}
-
-var blockCommentEnd = []byte("*/")
-
-// tJSBlockCmt is the context transition function for the JS /*comment*/ state.
-func tJSBlockCmt(c context, s []byte) (context, []byte) {
-	// TODO: delegate to tSpecialTagEnd to find any </script> once that CL
-	// has been merged.
-
-	i := bytes.Index(s, blockCommentEnd)
-	if i == -1 {
-		return c, nil
-	}
-	c.state = stateJS
-	return c, s[i+2:]
-}
-
-// tJSLineCmt is the context transition function for the JS //comment state.
-func tJSLineCmt(c context, s []byte) (context, []byte) {
-	// TODO: delegate to tSpecialTagEnd to find any </script> once that CL
-	// has been merged.
-
-	i := bytes.IndexAny(s, "\r\n\u2028\u2029")
-	if i == -1 {
-		return c, nil
-	}
-	c.state = stateJS
-	// Per section 7.4 of EcmaScript 5 : http://es5.github.com/#x7.4
-	// "However, the LineTerminator at the end of the line is not
-	// considered to be part of the single-line comment; it is recognised
-	// separately by the lexical grammar and becomes part of the stream of
-	// input elements for the syntactic grammar."
-	return c, s[i:]
-}
-
-// tError is the context transition function for the error state.
-func tError(c context, s []byte) (context, []byte) {
-	return c, nil
-}
-
-// eatAttrName returns the largest j such that s[i:j] is an attribute name.
-// It returns an error if s[i:] does not look like it begins with an
-// attribute name, such as encountering a quote mark without a preceding
-// equals sign.
-func eatAttrName(s []byte, i int) (int, os.Error) {
-	for j := i; j < len(s); j++ {
-		switch s[j] {
-		case ' ', '\t', '\n', '\f', '\r', '=', '>':
-			return j, nil
-		case '\'', '"', '<':
-			// These result in a parse warning in HTML5 and are
-			// indicative of serious problems if seen in an attr
-			// name in a template.
-			return 0, fmt.Errorf("%q in attribute name: %.32q", s[j:j+1], s)
-		default:
-			// No-op.
-		}
-	}
-	return len(s), nil
-}
-
-// eatTagName returns the largest j such that s[i:j] is a tag name.
-func eatTagName(s []byte, i int) int {
-	for j := i; j < len(s); j++ {
-		x := s[j]
-		switch {
-		case 'a' <= x && x <= 'z':
-			// No-op.
-		case 'A' <= x && x <= 'Z':
-			// No-op.
-		case '0' <= x && x <= '9' && i != j:
-			// No-op.
-		default:
-			return j
-		}
-	}
-	return len(s)
-}
-
-// eatWhiteSpace returns the largest j such that s[i:j] is white space.
-func eatWhiteSpace(s []byte, i int) int {
-	for j := i; j < len(s); j++ {
-		switch s[j] {
-		case ' ', '\t', '\n', '\f', '\r':
-			// No-op.
-		default:
-			return j
-		}
-	}
-	return len(s)
-}
-
-// urlAttr is the set of attribute names whose values are URLs.
-// It consists of all "%URI"-typed attributes from
-// http://www.w3.org/TR/html4/index/attributes.html
-// as well as those attributes defined at
-// http://dev.w3.org/html5/spec/index.html#attributes-1
-// whose Value column in that table matches
-// "Valid [non-empty] URL potentially surrounded by spaces".
-var urlAttr = map[string]bool{
-	"action":     true,
-	"archive":    true,
-	"background": true,
-	"cite":       true,
-	"classid":    true,
-	"codebase":   true,
-	"data":       true,
-	"formaction": true,
-	"href":       true,
-	"icon":       true,
-	"longdesc":   true,
-	"manifest":   true,
-	"poster":     true,
-	"profile":    true,
-	"src":        true,
-	"usemap":     true,
-}
-
-// urlFilter returns the HTML equivalent of its input unless it contains an
-// unsafe protocol in which case it defangs the entire URL.
-func urlFilter(args ...interface{}) string {
-	ok := false
-	var s string
-	if len(args) == 1 {
-		s, ok = args[0].(string)
-	}
-	if !ok {
-		s = fmt.Sprint(args...)
-	}
-	i := strings.IndexRune(s, ':')
-	if i >= 0 && strings.IndexRune(s[:i], '/') < 0 {
-		protocol := strings.ToLower(s[:i])
-		if protocol != "http" && protocol != "https" && protocol != "mailto" {
-			// Return a value that someone investigating a bug
-			// report can put into a search engine.
-			return "#ZgotmplZ"
-		}
-	}
-	// TODO: Once we handle <style>#id { background: url({{.Img}}) }</style>
-	// we will need to stop this from HTML escaping and pipeline sanitizers.
-	return template.HTMLEscapeString(s)
+	return t
 }

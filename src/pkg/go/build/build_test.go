@@ -27,7 +27,7 @@ var buildPkgs = []struct {
 		&DirInfo{
 			GoFiles:      []string{"pkgtest.go"},
 			SFiles:       []string{"sqrt_" + runtime.GOARCH + ".s"},
-			PkgName:      "pkgtest",
+			Package:      "pkgtest",
 			Imports:      []string{"os"},
 			TestImports:  []string{"fmt", "pkgtest"},
 			TestGoFiles:  sortstr([]string{"sqrt_test.go", "sqrt_" + runtime.GOARCH + "_test.go"}),
@@ -38,7 +38,7 @@ var buildPkgs = []struct {
 		"go/build/cmdtest",
 		&DirInfo{
 			GoFiles: []string{"main.go"},
-			PkgName: "main",
+			Package: "main",
 			Imports: []string{"go/build/pkgtest"},
 		},
 	},
@@ -48,7 +48,7 @@ var buildPkgs = []struct {
 			CgoFiles: []string{"cgotest.go"},
 			CFiles:   []string{"cgotest.c"},
 			Imports:  []string{"C", "unsafe"},
-			PkgName:  "cgotest",
+			Package:  "cgotest",
 		},
 	},
 }
@@ -59,8 +59,7 @@ func TestBuild(t *testing.T) {
 	for _, tt := range buildPkgs {
 		tree := Path[0] // Goroot
 		dir := filepath.Join(tree.SrcDir(), tt.dir)
-
-		info, err := ScanDir(dir, true)
+		info, err := ScanDir(dir)
 		if err != nil {
 			t.Errorf("ScanDir(%#q): %v", tt.dir, err)
 			continue

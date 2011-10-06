@@ -68,7 +68,10 @@ the destination variable must be able to represent the value or the decode
 operation will fail.
 
 Structs, arrays and slices are also supported.  Strings and arrays of bytes are
-supported with a special, efficient representation (see below).
+supported with a special, efficient representation (see below).  When a slice is
+decoded, if the existing slice has capacity the slice will be extended in place;
+if not, a new array is allocated.  Regardless, the length of the resuling slice
+reports the number of elements decoded.
 
 Functions and channels cannot be sent in a gob.  Attempting
 to encode a value that contains one will fail.
@@ -221,6 +224,9 @@ In summary, a gob stream looks like
 
 where * signifies zero or more repetitions and the type id of a value must
 be predefined or be defined before the value in the stream.
+
+See "Gobs of data" for a design discussion of the gob wire format:
+http://blog.golang.org/2011/03/gobs-of-data.html
 */
 package gob
 

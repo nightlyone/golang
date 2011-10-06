@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build darwin freebsd linux openbsd
+
 package net
 
 import (
@@ -52,7 +54,7 @@ func LookupCNAME(name string) (cname string, err os.Error) {
 // LookupSRV tries to resolve an SRV query of the given service,
 // protocol, and domain name, as specified in RFC 2782. In most cases
 // the proto argument can be the same as the corresponding
-// Addr.Network(). The returned records are sorted by priority 
+// Addr.Network(). The returned records are sorted by priority
 // and randomized by weight within a priority.
 func LookupSRV(service, proto, name string) (cname string, addrs []*SRV, err os.Error) {
 	target := "_" + service + "._" + proto + "." + name
@@ -72,16 +74,29 @@ func LookupSRV(service, proto, name string) (cname string, addrs []*SRV, err os.
 
 // LookupMX returns the DNS MX records for the given domain name sorted by preference.
 func LookupMX(name string) (mx []*MX, err os.Error) {
-	_, rr, err := lookup(name, dnsTypeMX)
+	_, records, err := lookup(name, dnsTypeMX)
 	if err != nil {
 		return
 	}
-	mx = make([]*MX, len(rr))
-	for i := range rr {
-		r := rr[i].(*dnsRR_MX)
+	mx = make([]*MX, len(records))
+	for i, rr := range records {
+		r := rr.(*dnsRR_MX)
 		mx[i] = &MX{r.Mx, r.Pref}
 	}
 	byPref(mx).sort()
+	return
+}
+
+// LookupTXT returns the DNS TXT records for the given domain name.
+func LookupTXT(name string) (txt []string, err os.Error) {
+	_, records, err := lookup(name, dnsTypeTXT)
+	if err != nil {
+		return
+	}
+	txt = make([]string, len(records))
+	for i, r := range records {
+		txt[i] = r.(*dnsRR_TXT).Txt
+	}
 	return
 }
 
