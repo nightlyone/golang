@@ -60,7 +60,7 @@
  #define _LARGEFILE_SOURCE
  #define _LARGEFILE64_SOURCE
  #define _FILE_OFFSET_BITS 64
-@@ -43,7 +41,7 @@ includes_Linux='
+@@ -44,7 +42,7 @@ includes_Linux='
  #include <netpacket/packet.h>
  '
  
@@ -69,7 +69,7 @@
  #define _DARWIN_C_SOURCE
  #define KERNEL
  #define _DARWIN_USE_64_BIT_INODE
-@@ -65,7 +63,7 @@ includes_Darwin='
+@@ -66,7 +64,7 @@ includes_Darwin='
  #include <termios.h>
  '
  
@@ -78,7 +78,7 @@
  #include <sys/types.h>
  #include <sys/event.h>
  #include <sys/socket.h>
-@@ -133,7 +131,7 @@ done
+@@ -134,7 +132,7 @@ done
  
  # Write godefs input.
  (
