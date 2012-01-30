@@ -18,3 +18,11 @@ golang-weekly-tools: statically-linked-binary ./usr/bin/goinstall
 golang-weekly-tools: unstripped-binary-or-object ./usr/bin/goinstall
 golang-weekly-tools: statically-linked-binary ./usr/bin/govet
 golang-weekly-tools: unstripped-binary-or-object ./usr/bin/govet
+golang-weekly-tools: unstripped-binary-or-object usr/bin/ebnflint
+golang-weekly-tools: statically-linked-binary usr/bin/ebnflint
+golang-weekly-tools: statically-linked-binary usr/bin/goapi
+golang-weekly-tools: statically-linked-binary usr/bin/gotype
+golang-weekly-tools: unstripped-binary-or-object ./usr/bin/ebnflint
+golang-weekly-tools: statically-linked-binary ./usr/bin/ebnflint
+golang-weekly-tools: statically-linked-binary ./usr/bin/goapi
+golang-weekly-tools: statically-linked-binary ./usr/bin/gotype
