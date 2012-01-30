@@ -1,5 +1,4 @@
 pkg /usr/lib/go/
-bin/godefs /usr/bin/
 bin/gopack /usr/bin/
 bin/gotest /usr/bin/
 bin/cgo /usr/bin/
