@@ -1,7 +1,20 @@
+golang-weekly (2012.01.27-1) unstable; urgency=low
+
+  * Imported Upstream version 2012.01.27 (Closes: #656412)
+  * Fix cut&paste error in golang-weekly-tools description
+    (Closes: #655117)
+  * Refresh patches for a new release
+  * Use new syntax in IPv6 patch
+  * Install new tools and remove the removed
+  * debconf-gettextize the package
+  * Add new lintian overrides for new tools
+
+ -- Ondřej Surý <ondrej@debian.org>  Mon, 30 Jan 2012 16:19:14 +0100
+
 golang-weekly (2011.09.21-1) unstable; urgency=low
 
   * Imported Upstream version 2011.09.21
-  * Refresh patches to the new release
+  * Refresh patches for a new release
 
  -- Ondřej Surý <ondrej@debian.org>  Thu, 06 Oct 2011 09:38:08 +0200
 
