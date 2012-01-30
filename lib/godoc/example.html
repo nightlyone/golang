@@ -1,0 +1,14 @@
+<div class="example">
+	<div class="collapsed">
+		<p class="exampleHeading">▹ Example</p>
+	</div>
+	<div class="expanded">
+		<p class="exampleHeading">▾ Example</p>
+		<p>Code:</p>
+		<pre class="code">{{.Code}}</pre>
+		{{if .Output}}
+		<p>Output:</p>
+		<pre class="output">{{html .Output}}</pre>
+		{{end}}
+	</div>
+</div>

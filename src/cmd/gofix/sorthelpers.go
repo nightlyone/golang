@@ -9,12 +9,15 @@ import (
 )
 
 func init() {
-	register(fix{
-		"sorthelpers",
-		sorthelpers,
-		`Adapt code from sort.Sort[Ints|Float64s|Strings] to sort.[Ints|Float64s|Strings].
+	register(sorthelpersFix)
+}
+
+var sorthelpersFix = fix{
+	"sorthelpers",
+	"2011-07-08",
+	sorthelpers,
+	`Adapt code from sort.Sort[Ints|Float64s|Strings] to sort.[Ints|Float64s|Strings].
 `,
-	})
 }
 
 func sorthelpers(f *ast.File) (fixed bool) {

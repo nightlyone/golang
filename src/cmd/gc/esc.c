@@ -35,6 +35,8 @@
 static void escfunc(Node *func);
 static void esclist(NodeList *l);
 static void esc(Node *n);
+static void escloopdepthlist(NodeList *l);
+static void escloopdepth(Node *n);
 static void escassign(Node *dst, Node *src);
 static void esccall(Node*);
 static void escflows(Node *dst, Node *src);
@@ -62,6 +64,7 @@ escapes(void)
 	NodeList *l;
 
 	theSink.op = ONAME;
+	theSink.orig = &theSink;
 	theSink.class = PEXTERN;
 	theSink.sym = lookup(".sink");
 	theSink.escloopdepth = -1;
@@ -88,7 +91,7 @@ escapes(void)
 	if(debug['m']) {
 		for(l=noesc; l; l=l->next)
 			if(l->n->esc == EscNone)
-				warnl(l->n->lineno, "%S %#N does not escape",
+				warnl(l->n->lineno, "%S %hN does not escape",
 					(l->n->curfn && l->n->curfn->nname) ? l->n->curfn->nname->sym : S,
 					l->n);
 	}
@@ -138,9 +141,62 @@ escfunc(Node *func)
 		escassign(curfn, n);
 	}
 
+	escloopdepthlist(curfn->nbody);
 	esclist(curfn->nbody);
 	curfn = savefn;
 	loopdepth = saveld;
+}
+
+// Mark labels that have no backjumps to them as not increasing loopdepth.
+// Walk hasn't generated (goto|label)->left->sym->label yet, so we'll cheat
+// and set it to one of the following two.  Then in esc we'll clear it again.
+static Label looping;
+static Label nonlooping;
+
+static void
+escloopdepthlist(NodeList *l)
+{
+	for(; l; l=l->next)
+		escloopdepth(l->n);
+}
+
+static void
+escloopdepth(Node *n)
+{
+	if(n == N)
+		return;
+
+	escloopdepthlist(n->ninit);
+
+	switch(n->op) {
+	case OLABEL:
+		if(!n->left || !n->left->sym)
+			fatal("esc:label without label: %+N", n);
+		// Walk will complain about this label being already defined, but that's not until
+		// after escape analysis. in the future, maybe pull label & goto analysis out of walk and put before esc
+		// if(n->left->sym->label != nil)
+		//	fatal("escape analysis messed up analyzing label: %+N", n);
+		n->left->sym->label = &nonlooping;
+		break;
+	case OGOTO:
+		if(!n->left || !n->left->sym)
+			fatal("esc:goto without label: %+N", n);
+		// If we come past one that's uninitialized, this must be a (harmless) forward jump
+		// but if it's set to nonlooping the label must have preceded this goto.
+		if(n->left->sym->label == &nonlooping)
+			n->left->sym->label = &looping;
+		break;
+	}
+
+	escloopdepth(n->left);
+	escloopdepth(n->right);
+	escloopdepthlist(n->list);
+	escloopdepth(n->ntest);
+	escloopdepth(n->nincr);
+	escloopdepthlist(n->nbody);
+	escloopdepthlist(n->nelse);
+	escloopdepthlist(n->rlist);
+
 }
 
 static void
@@ -178,7 +234,7 @@ esc(Node *n)
 		loopdepth--;
 
 	if(debug['m'] > 1)
-		print("%L:[%d] %#S esc: %#N\n", lineno, loopdepth,
+		print("%L:[%d] %S esc: %N\n", lineno, loopdepth,
 		      (curfn && curfn->nname) ? curfn->nname->sym : S, n);
 
 	switch(n->op) {
@@ -188,9 +244,20 @@ esc(Node *n)
 			n->left->escloopdepth = loopdepth;
 		break;
 
-	case OLABEL:  // TODO: new loop/scope only if there are backjumps to it.
-		loopdepth++;
-		break;
+	case OLABEL:
+		if(n->left->sym->label == &nonlooping) {
+			if(debug['m'] > 1)
+				print("%L:%N non-looping label\n", lineno, n);
+		} else if(n->left->sym->label == &looping) {
+			if(debug['m'] > 1)
+				print("%L: %N looping label\n", lineno, n);
+			loopdepth++;
+		}
+		// See case OLABEL in escloopdepth above
+		// else if(n->left->sym->label == nil)
+		//	fatal("escape anaylysis missed or messed up a label: %+N", n);
+
+		n->left->sym->label = nil;
 
 	case ORANGE:
 		// Everything but fixed array is a dereference.
@@ -222,7 +289,6 @@ esc(Node *n)
 	case OAS2RECV:		// v, ok = <-ch
 	case OAS2MAPR:		// v, ok = m[k]
 	case OAS2DOTTYPE:	// v, ok = x.(type)
-	case OAS2MAPW:		// m[k] = x, ok
 		escassign(n->list->n, n->rlist->n);
 		break;
 
@@ -239,6 +305,7 @@ esc(Node *n)
 	case OPROC:
 		// go f(x) - f and x escape
 		escassign(&theSink, n->left->left);
+		escassign(&theSink, n->left->right);  // ODDDARG for call
 		for(ll=n->left->list; ll; ll=ll->next)
 			escassign(&theSink, ll->n);
 		break;
@@ -291,6 +358,14 @@ esc(Node *n)
 		for(ll=n->list; ll; ll=ll->next)
 			escassign(n, ll->n->right);
 		break;
+	
+	case OPTRLIT:
+		n->esc = EscNone;  // until proven otherwise
+		noesc = list(noesc, n);
+		n->escloopdepth = loopdepth;
+		// Contents make it to memory, lose track.
+		escassign(&theSink, n->left);
+		break;
 
 	case OMAPLIT:
 		n->esc = EscNone;  // until proven otherwise
@@ -331,7 +406,7 @@ escassign(Node *dst, Node *src)
 		return;
 
 	if(debug['m'] > 1)
-		print("%L:[%d] %#S escassign: %hN = %hN\n", lineno, loopdepth,
+		print("%L:[%d] %S escassign: %hN = %hN\n", lineno, loopdepth,
 		      (curfn && curfn->nname) ? curfn->nname->sym : S, dst, src);
 
 	setlineno(dst);
@@ -387,6 +462,7 @@ escassign(Node *dst, Node *src)
 	case ONAME:
 	case OPARAM:
 	case ODDDARG:
+	case OPTRLIT:
 	case OARRAYLIT:
 	case OMAPLIT:
 	case OSTRUCTLIT:
@@ -394,10 +470,14 @@ escassign(Node *dst, Node *src)
 		escflows(dst, src);
 		break;
 
+	case ODOT:
+		// A non-pointer escaping from a struct does not concern us.
+		if(src->type && !haspointers(src->type))
+			break;
+		// fallthrough
 	case OCONV:
 	case OCONVIFACE:
 	case OCONVNOP:
-	case ODOT:
 	case ODOTMETH:	// treat recv.meth as a value with recv in it, only happens in ODEFER and OPROC
 			// iface.method already leaks iface in esccall, no need to put in extra ODOTINTER edge here
 	case ODOTTYPE:
@@ -609,7 +689,7 @@ escflood(Node *dst)
 	}
 
 	if(debug['m']>1)
-		print("\nescflood:%d: dst %hN scope:%#S[%d]\n", walkgen, dst,
+		print("\nescflood:%d: dst %hN scope:%S[%d]\n", walkgen, dst,
 		      (dst->curfn && dst->curfn->nname) ? dst->curfn->nname->sym : S,
 		      dst->escloopdepth);
 
@@ -630,7 +710,7 @@ escwalk(int level, Node *dst, Node *src)
 	src->walkgen = walkgen;
 
 	if(debug['m']>1)
-		print("escwalk: level:%d depth:%d %.*s %hN scope:%#S[%d]\n",
+		print("escwalk: level:%d depth:%d %.*s %hN scope:%S[%d]\n",
 		      level, pdepth, pdepth, "\t\t\t\t\t\t\t\t\t\t", src,
 		      (src->curfn && src->curfn->nname) ? src->curfn->nname->sym : S, src->escloopdepth);
 
@@ -647,12 +727,13 @@ escwalk(int level, Node *dst, Node *src)
 		}
 		break;
 
+	case OPTRLIT:
 	case OADDR:
 		if(leaks) {
 			src->esc = EscHeap;
 			addrescapes(src->left);
 			if(debug['m'])
-				warnl(src->lineno, "%#N escapes to heap", src);
+				warnl(src->lineno, "%hN escapes to heap", src);
 		}
 		escwalk(level-1, dst, src->left);
 		break;
@@ -671,7 +752,7 @@ escwalk(int level, Node *dst, Node *src)
 		if(leaks) {
 			src->esc = EscHeap;
 			if(debug['m'])
-				warnl(src->lineno, "%#N escapes to heap", src);
+				warnl(src->lineno, "%hN escapes to heap", src);
 		}
 		break;
 

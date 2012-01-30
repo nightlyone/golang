@@ -125,10 +125,12 @@ EXTERN	int32	nsymbol;
 EXTERN	char*	thestring;
 EXTERN	int	ndynexp;
 EXTERN	int	havedynamic;
+EXTERN	int	iscgo;
 
 EXTERN	Segment	segtext;
 EXTERN	Segment	segdata;
 EXTERN	Segment	segsym;
+EXTERN	Segment segdwarf;
 
 void	addlib(char *src, char *obj);
 void	addlibpath(char *srcref, char *objref, char *file, char *pkg);

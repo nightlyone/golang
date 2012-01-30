@@ -1,4 +1,8 @@
-<!-- A Tutorial for the Go Programming Language -->
+<!--{
+	"Title": "A Tutorial for the Go Programming Language"
+}-->
+{{donotedit}}
+
 <h2>Introduction</h2>
 <p>
 This document is a tutorial introduction to the basics of the Go programming
@@ -9,11 +13,8 @@ After you've read this tutorial, you should look at
 <a href='/doc/effective_go.html'>Effective Go</a>,
 which digs deeper into how the language is used and
 talks about the style and idioms of programming in Go.
-Also, slides from a 3-day course about Go are available.
-They provide some background and a lot of examples:
-<a href='/doc/GoCourseDay1.pdf'>Day 1</a>,
-<a href='/doc/GoCourseDay2.pdf'>Day 2</a>,
-<a href='/doc/GoCourseDay3.pdf'>Day 3</a>.
+An interactive introduction to Go is available, called
+<a href='http://tour.golang.org/'>A Tour of Go</a>.
 <p>
 The presentation here proceeds through a series of modest programs to illustrate
 key features of the language.  All the programs work (at time of writing) and are
@@ -87,7 +88,7 @@ Here's how to compile and run our program.  With <code>6g</code>, say,
 <pre>
 $ 6g helloworld.go  # compile; object goes into helloworld.6
 $ 6l helloworld.6   # link; output goes into 6.out
-$ 6.out
+$ ./6.out
 Hello, world; or Καλημέρα κόσμε; or こんにちは 世界
 $
 </pre>
@@ -96,7 +97,7 @@ With <code>gccgo</code> it looks a little more traditional.
 <p>
 <pre>
 $ gccgo helloworld.go
-$ a.out
+$ ./a.out
 Hello, world; or Καλημέρα κόσμε; or こんにちは 世界
 $
 </pre>
@@ -288,19 +289,21 @@ Using slices one can write this function (from <code>sum.go</code>):
 Note how the return type (<code>int</code>) is defined for <code>sum</code> by stating it
 after the parameter list.
 <p>
-To call the function, we slice the array.  This intricate call (we'll show
+To call the function, we slice the array.  This code (we'll show
 a simpler way in a moment) constructs
 an array and slices it:
 <p>
 <pre>
-s := sum([3]int{1,2,3}[:])
+x := [3]int{1,2,3}
+s := sum(x[:])
 </pre>
 <p>
 If you are creating a regular array but want the compiler to count the
 elements for you, use <code>...</code> as the array size:
 <p>
 <pre>
-s := sum([...]int{1,2,3}[:])
+x := [...]int{1,2,3}
+s := sum(x[:])
 </pre>
 <p>
 That's fussier than necessary, though.
@@ -418,8 +421,9 @@ assigned to a variable.
 <p>
 <h2>An I/O Package</h2>
 <p>
-Next we'll look at a simple package for doing file I/O with an
-open/close/read/write interface.  Here's the start of <code>file.go</code>:
+Next we'll look at a simple package for doing Unix file I/O with an
+open/close/read/write interface.
+Here's the start of <code>file.go</code>:
 <p>
 {{code "progs/file.go" `/package/` `/^}/`}}
 <p>
@@ -432,6 +436,11 @@ and reproduce the rudiments of its file I/O.
 <p>
 The other item is the low-level, external <code>syscall</code> package, which provides
 a primitive interface to the underlying operating system's calls.
+The <code>syscall</code> package is very system-dependent, and the way it's
+used here works only on Unix-like systems,
+but the general ideas explored here apply broadly.
+(A Windows version is available in
+<a href="progs/file_windows.go"><code>file_windows.go</code></a>.)
 <p>
 Next is a type definition: the <code>type</code> keyword introduces a type declaration,
 in this case a data structure called <code>File</code>.
@@ -470,7 +479,7 @@ composite literal, as is done here in the <code>return</code> statement from <co
 <p>
 We can use the factory to construct some familiar, exported variables of type <code>*File</code>:
 <p>
-{{code "progs/file.go" `/var/` `/^.$/`}}
+{{code "progs/file.go" `/var/` `/^\)/`}}
 <p>
 The <code>newFile</code> function was not exported because it's internal. The proper,
 exported factory to use is <code>OpenFile</code> (we'll explain that name in a moment):
@@ -490,11 +499,13 @@ to see that).  Finally, <code>OpenFile</code> returns two values: a pointer to t
 and the error.  If <code>syscall.Open</code> fails, the file descriptor <code>r</code> will
 be negative and <code>newFile</code> will return <code>nil</code>.
 <p>
-About those errors:  The <code>os</code> library includes a general notion of an error.
+About those errors:  The Go language includes a general notion of an error:
+a pre-defined type <code>error</code> with properties (described below)
+that make it a good basis for representing and handling errors.
 It's a good idea to use its facility in your own interfaces, as we do here, for
 consistent error handling throughout Go code.   In <code>Open</code> we use a
 conversion to translate Unix's integer <code>errno</code> value into the integer type
-<code>os.Errno</code>, which implements <code>os.Error</code>.
+<code>os.Errno</code>, which is an implementation of <code>error</code>
 <p>
 Why <code>OpenFile</code> and not <code>Open</code>? To mimic Go's <code>os</code> package, which
 our exercise is emulating. The <code>os</code> package takes the opportunity
@@ -527,7 +538,7 @@ array, not just for <code>structs</code>.   We'll see an example with arrays lat
 The <code>String</code> method is so called because of a printing convention we'll
 describe later.
 <p>
-The methods use the public variable <code>os.EINVAL</code> to return the (<code>os.Error</code>
+The methods use the public variable <code>os.EINVAL</code> to return the (<code>error</code>
 version of the) Unix error code <code>EINVAL</code>.  The <code>os</code> library defines a standard
 set of such error values.
 <p>
@@ -547,7 +558,7 @@ Now we can compile and run the program. On Unix, this would be the result:
 $ 6g file.go                       # compile file package
 $ 6g helloworld3.go                # compile main package
 $ 6l -o helloworld3 helloworld3.6  # link - no need to mention "file"
-$ helloworld3
+$ ./helloworld3
 hello, world
 can't open file; err=No such file or directory
 $
@@ -692,7 +703,7 @@ implements <code>Printf</code>, <code>Fprintf</code>, and so on.
 Within the <code>fmt</code> package, <code>Printf</code> is declared with this signature:
 <p>
 <pre>
-Printf(format string, v ...interface{}) (n int, errno os.Error)
+Printf(format string, v ...interface{}) (n int, errno error)
 </pre>
 <p>
 The token <code>...</code> introduces a variable-length argument list that in C would
@@ -801,6 +812,21 @@ If the value does not satisfy the interface, <code>ok</code> will be false.
 In this snippet the name <code>Stringer</code> follows the convention that we add ''[e]r''
 to interfaces describing simple method sets like this.
 <p>
+A related interface is that defined by the <code>error</code> builtin type, which is just
+<p>
+<pre>
+type error interface {
+    Error() string
+}
+</pre>
+<p>
+Other than the method name (<code>Error</code> vs. <code>String</code>), this looks like
+a <code>Stringer</code>; the different name guarantees that types that implement <code>Stringer</code>
+don't accidentally satisfy the <code>error</code> interface.
+Naturally, <code>Printf</code> and its relatives recognize the <code>error</code> interface,
+just as they do <code>Stringer</code>,
+so it's trivial to print an error as a string.
+<p>
 One last wrinkle.  To complete the suite, besides <code>Printf</code> etc. and <code>Sprintf</code>
 etc., there are also <code>Fprintf</code> etc.  Unlike in C, <code>Fprintf</code>'s first argument is
 not a file.  Instead, it is a variable of type <code>io.Writer</code>, which is an
@@ -808,7 +834,7 @@ interface type defined in the <code>io</code> library:
 <p>
 <pre>
 type Writer interface {
-    Write(p []byte) (n int, err os.Error)
+    Write(p []byte) (n int, err error)
 }
 </pre>
 <p>
@@ -951,10 +977,34 @@ a long-running operation, starting a goroutine to do the actual work.
 <p>
 {{code "progs/server.go" `/func.server/` `/^}/`}}
 <p>
-We construct a server in a familiar way, starting it and returning a channel
+There's a new feature in the signature of <code>server</code>: the type of the
+<code>service</code> channel specifies the direction of communication.
+A channel of plain <code>chan</code> type can be used both for sending and receiving.
+However, the type used when declaring a channel can be decorated with an arrow to
+indicate that the channel can be used only to send (<code>chan&lt;-</code>) or to
+receive (<code>&lt;-chan</code>) data.
+The arrow points towards or away from the <code>chan</code> to indicate whether data flows into or out of
+the channel.
+In the <code>server</code> function, <code>service &lt;-chan *request</code> is a "receive only" channel
+that the function can use only to <em>read</em> new requests.
+<p>
+We instantiate a server in a familiar way, starting it and returning a channel
 connected to it:
 <p>
 {{code "progs/server.go" `/func.startServer/` `/^}/`}}
+<p>
+The returned channel is send only, even though the channel was created bidirectionally.
+The read end is passed to <code>server</code>, while the send end is returned
+to the caller of <code>startServer</code>, so the two halves of the channel
+are distinguished, just as we did in <code>startServer</code>.
+<p>
+Bidirectional channels can be assigned to unidirectional channels but not the
+other way around, so if you annotate your channel directions when you declare
+them, such as in function signatures, the type system can help you set up and
+use channels correctly.
+Note that it's pointless to <code>make</code> unidirectional channels, since you can't
+use them to communicate. Their purpose is served by variables assigned from bidirectional channels
+to distinguish the input and output halves.
 <p>
 Here's a simple test.  It starts a server with an addition operator and sends out
 <code>N</code> requests without waiting for the replies.  Only after all the requests are sent

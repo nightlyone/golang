@@ -5,9 +5,8 @@
 package token
 
 import (
-	"gob"
+	"encoding/gob"
 	"io"
-	"os"
 )
 
 type serializedFile struct {
@@ -24,10 +23,19 @@ type serializedFileSet struct {
 	Files []serializedFile
 }
 
+func (s *serializedFileSet) Read(r io.Reader) error {
+	return gob.NewDecoder(r).Decode(s)
+}
+
+func (s *serializedFileSet) Write(w io.Writer) error {
+	return gob.NewEncoder(w).Encode(s)
+}
+
 // Read reads the fileset from r into s; s must not be nil.
-func (s *FileSet) Read(r io.Reader) os.Error {
+// If r does not also implement io.ByteReader, it will be wrapped in a bufio.Reader.
+func (s *FileSet) Read(r io.Reader) error {
 	var ss serializedFileSet
-	if err := gob.NewDecoder(r).Decode(&ss); err != nil {
+	if err := ss.Read(r); err != nil {
 		return err
 	}
 
@@ -46,7 +54,7 @@ func (s *FileSet) Read(r io.Reader) os.Error {
 }
 
 // Write writes the fileset s to w.
-func (s *FileSet) Write(w io.Writer) os.Error {
+func (s *FileSet) Write(w io.Writer) error {
 	var ss serializedFileSet
 
 	s.mutex.Lock()
@@ -58,5 +66,5 @@ func (s *FileSet) Write(w io.Writer) os.Error {
 	ss.Files = files
 	s.mutex.Unlock()
 
-	return gob.NewEncoder(w).Encode(ss)
+	return ss.Write(w)
 }

@@ -65,7 +65,7 @@ test:
 	gotest
 
 testshort:
-	gotest -test.short -test.timeout=120
+	gotest -test.short -test.timeout=2m
 
 bench:
 	gotest -test.bench=. -test.run="Do not run tests"
@@ -83,10 +83,10 @@ $(TARGDIR)/$(TARG).a: _obj/$(TARG).a
 	cp _obj/$(TARG).a "$@"
 
 _go_.$O: $(GOFILES) $(PREREQ)
-	$(GC) $(GCIMPORTS) -p $(TARG) -o $@ $(GOFILES)
+	$(GC) $(GCFLAGS) $(GCIMPORTS) -p $(TARG) -o $@ $(GOFILES)
 
 _gotest_.$O: $(GOFILES) $(GOTESTFILES) $(PREREQ)
-	$(GC) $(GCIMPORTS) -p $(TARG) -o $@ $(GOFILES) $(GOTESTFILES)
+	$(GC) $(GCFLAGS) $(GCIMPORTS) -p $(TARG) -o $@ $(GOFILES) $(GOTESTFILES)
 
 _obj/$(TARG).a: _go_.$O $(OFILES)
 	@mkdir -p _obj/$(dir)
@@ -149,10 +149,10 @@ endif
 
 # Compile rules for gcc source files.
 %.o: %.c
-	$(HOST_CC) $(_CGO_CFLAGS_$(GOARCH)) -g -fPIC -O2 -o $@ -c $(CGO_CFLAGS) $(_CGO_CFLAGS) $*.c
+	$(HOST_CC) $(_CGO_CFLAGS_$(GOARCH)) -g -fPIC -O2 -o $@ -c -I_obj $(CGO_CFLAGS) $(_CGO_CFLAGS) $*.c
 
 %.o: _obj/%.c
-	$(HOST_CC) $(_CGO_CFLAGS_$(GOARCH)) -I . -g -fPIC -O2 -o $@ -c $(CGO_CFLAGS) $(_CGO_CFLAGS) $^
+	$(HOST_CC) $(_CGO_CFLAGS_$(GOARCH)) -I . -g -fPIC -O2 -o $@ -c -I_obj $(CGO_CFLAGS) $(_CGO_CFLAGS) $^
 
 # To find out which symbols are needed from external libraries
 # and which libraries are needed, we build a simple a.out that
@@ -162,7 +162,7 @@ endif
 # After main we have to define all the symbols that will be provided
 # by Go code.  That's crosscall2 and any exported symbols.
 
-_cgo1_.o: _cgo_main.o $(CGO_OFILES)
+_cgo1_.o: _cgo_main.o $(CGO_OFILES) $(CGO_DEPS)
 	$(HOST_CC) $(_CGO_CFLAGS_$(GOARCH)) -g -fPIC -O2 -o $@ $^ $(CGO_LDFLAGS) $(_CGO_LDFLAGS)
 
 _obj/_cgo_import.c: _cgo1_.o
@@ -245,5 +245,5 @@ endif
 %.$O: _obj/%.c $(HFILES)
 	$(CC) $(CFLAGS) -I . -o "$@" _obj/$*.c
 
-%.$O: %.s
-	$(AS) $*.s
+%.$O: %.s $(HFILES)
+	$(AS) $(AFLAGS) $*.s

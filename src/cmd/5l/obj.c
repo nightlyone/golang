@@ -136,6 +136,11 @@ main(int argc, char *argv[])
 	case 'V':
 		print("%cl version %s\n", thechar, getgoversion());
 		errorexit();
+	case 'X':
+		// TODO: golang.org/issue/2676
+		EARGF(usage());
+		EARGF(usage());
+		break;
 	} ARGEND
 
 	USED(argc);
@@ -585,6 +590,10 @@ loop:
 			errorexit();
 		}
 		cursym = s;
+		if(s->type != 0 && s->type != SXREF && (p->reg & DUPOK)) {
+			skip = 1;
+			goto casedef;
+		}
 		if(ntext++ == 0 && s->type != 0 && s->type != SXREF) {
 			/* redefinition, so file has probably been seen before */
 			if(debug['v'])
@@ -592,13 +601,8 @@ loop:
 			return;
 		}
 		skip = 0;
-		if(s->type != 0 && s->type != SXREF) {
-			if(p->reg & DUPOK) {
-				skip = 1;
-				goto casedef;
-			}
+		if(s->type != 0 && s->type != SXREF)
 			diag("redefinition: %s\n%P", s->name, p);
-		}
 		if(etextp)
 			etextp->next = s;
 		else

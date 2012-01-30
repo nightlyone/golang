@@ -24,7 +24,7 @@ dirpat=$(echo $dirs C | awk '{
 }')
 
 for dir in $dirs; do (
-	cd $dir || exit 1
+	cd $dir >/dev/null || exit 1
 
 	sources=$(sed -n 's/^[ 	]*\([^ 	]*\.go\)[ 	]*\\*[ 	]*$/\1/p' Makefile)
 	sources=$(echo $sources | sed 's/\$(GOOS)/'$GOOS'/g')
@@ -47,3 +47,8 @@ for dir in $dirs; do (
 ) done > $TMP
 
 mv $TMP $OUT
+
+if (egrep -v '^(exp|old)/' $OUT | egrep -q " (exp|old)/"); then
+	echo "$0: $OUT contains dependencies to exp or old packages"
+        exit 1
+fi

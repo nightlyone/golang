@@ -6,7 +6,8 @@ include ../../Make.inc
 
 TARG=testing
 GOFILES=\
-        benchmark.go\
+	benchmark.go\
+	example.go\
 	testing.go\
 
 include ../../Make.pkg

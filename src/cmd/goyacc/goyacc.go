@@ -45,12 +45,12 @@ package main
 //
 
 import (
+	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
-	"bufio"
 	"os"
 	"strings"
-	"bytes"
 )
 
 // the following are adjustable
@@ -506,19 +506,20 @@ outer:
 		// non-literals
 		c := tokset[i].name[0]
 		if c != ' ' && c != '$' {
-			fmt.Fprintf(ftable, "const\t%v\t= %v\n", tokset[i].name, tokset[i].value)
+			fmt.Fprintf(ftable, "const %v = %v\n", tokset[i].name, tokset[i].value)
 		}
 	}
 
 	// put out names of token names
-	fmt.Fprintf(ftable, "var\t%sToknames\t =[]string {\n", prefix)
+	ftable.WriteRune('\n')
+	fmt.Fprintf(ftable, "var %sToknames = []string{\n", prefix)
 	for i := TOKSTART; i <= ntokens; i++ {
 		fmt.Fprintf(ftable, "\t\"%v\",\n", tokset[i].name)
 	}
 	fmt.Fprintf(ftable, "}\n")
 
 	// put out names of state names
-	fmt.Fprintf(ftable, "var\t%sStatenames\t =[]string {\n", prefix)
+	fmt.Fprintf(ftable, "var %sStatenames = []string{", prefix)
 	//	for i:=TOKSTART; i<=ntokens; i++ {
 	//		fmt.Fprintf(ftable, "\t\"%v\",\n", tokset[i].name);
 	//	}
@@ -595,7 +596,7 @@ outer:
 				break
 			}
 			levprd[nprod] |= ACTFLAG
-			fmt.Fprintf(fcode, "\ncase %v:", nprod)
+			fmt.Fprintf(fcode, "\n\tcase %v:", nprod)
 			cpyact(curprod, mem)
 
 			// action within rule...
@@ -652,8 +653,8 @@ outer:
 			if tempty != nontrst[curprod[0]-NTBASE].value {
 				errorf("default action causes potential type clash")
 			}
-			fmt.Fprintf(fcode, "\ncase %v:", nprod)
-			fmt.Fprintf(fcode, "\n\t%sVAL.%v = %sS[%spt-0].%v;",
+			fmt.Fprintf(fcode, "\n\tcase %v:", nprod)
+			fmt.Fprintf(fcode, "\n\t\t%sVAL.%v = %sS[%spt-0].%v",
 				prefix, typeset[tempty], prefix, prefix, typeset[tempty])
 		}
 		moreprod()
@@ -671,9 +672,10 @@ outer:
 
 	fmt.Fprintf(fcode, "\n\t}")
 
-	fmt.Fprintf(ftable, "const	%sEofCode	= 1\n", prefix)
-	fmt.Fprintf(ftable, "const	%sErrCode	= 2\n", prefix)
-	fmt.Fprintf(ftable, "const	%sMaxDepth	= %v\n", prefix, stacksize)
+	ftable.WriteRune('\n')
+	fmt.Fprintf(ftable, "const %sEofCode = 1\n", prefix)
+	fmt.Fprintf(ftable, "const %sErrCode = 2\n", prefix)
+	fmt.Fprintf(ftable, "const %sMaxDepth = %v\n", prefix, stacksize)
 
 	//
 	// copy any postfix code
@@ -811,7 +813,8 @@ func defin(nt int, s string) int {
 var peekline = 0
 
 func gettok() int {
-	var i, match, c int
+	var i int
+	var match, c rune
 
 	tokname = ""
 	for {
@@ -917,25 +920,25 @@ func gettok() int {
 
 		getword(c)
 		// find a reserved word
-		for c = 0; c < len(resrv); c++ {
-			if tokname == resrv[c].name {
+		for i := range resrv {
+			if tokname == resrv[i].name {
 				if tokflag {
 					fmt.Printf(">>> %%%v %v %v\n", tokname,
-						resrv[c].value-PRIVATE, lineno)
+						resrv[i].value-PRIVATE, lineno)
 				}
-				return resrv[c].value
+				return resrv[i].value
 			}
 		}
 		errorf("invalid escape, or illegal reserved word: %v", tokname)
 
 	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		numbval = c - '0'
+		numbval = int(c - '0')
 		for {
 			c = getrune(finput)
 			if !isdigit(c) {
 				break
 			}
-			numbval = numbval*10 + c - '0'
+			numbval = numbval*10 + int(c-'0')
 		}
 		ungetrune(finput, c)
 		if tokflag {
@@ -951,7 +954,7 @@ func gettok() int {
 		if tokflag {
 			fmt.Printf(">>> OPERATOR %v %v\n", string(c), lineno)
 		}
-		return c
+		return int(c)
 	}
 
 	// look ahead to distinguish IDENTIFIER from IDENTCOLON
@@ -980,7 +983,7 @@ func gettok() int {
 	return IDENTIFIER
 }
 
-func getword(c int) {
+func getword(c rune) {
 	tokname = ""
 	for isword(c) || isdigit(c) || c == '_' || c == '.' || c == '$' {
 		tokname += string(c)
@@ -1039,7 +1042,7 @@ func cpyunion() {
 	if !lflag {
 		fmt.Fprintf(ftable, "\n//line %v:%v\n", infile, lineno)
 	}
-	fmt.Fprintf(ftable, "type\t%sSymType\tstruct", prefix)
+	fmt.Fprintf(ftable, "type %sSymType struct", prefix)
 
 	level := 0
 
@@ -1055,7 +1058,7 @@ out:
 			lineno++
 		case '{':
 			if level == 0 {
-				fmt.Fprintf(ftable, "\n\tyys\tint;")
+				fmt.Fprintf(ftable, "\n\tyys int")
 			}
 			level++
 		case '}':
@@ -1065,7 +1068,7 @@ out:
 			}
 		}
 	}
-	fmt.Fprintf(ftable, "\n")
+	fmt.Fprintf(ftable, "\n\n")
 }
 
 //
@@ -1105,7 +1108,7 @@ func cpycode() {
 // skipcom is called after reading a '/'
 //
 func skipcom() int {
-	var c int
+	var c rune
 
 	c = getrune(finput)
 	if c == '/' {
@@ -1163,7 +1166,7 @@ func dumpprod(curprod []int, max int) {
 func cpyact(curprod []int, max int) {
 
 	if !lflag {
-		fmt.Fprintf(fcode, "\n//line %v:%v\n", infile, lineno)
+		fmt.Fprintf(fcode, "\n\t\t//line %v:%v\n\t\t", infile, lineno)
 	}
 
 	lno := lineno
@@ -1177,14 +1180,13 @@ loop:
 		switch c {
 		case ';':
 			if brac == 0 {
-				ftable.WriteRune(c)
+				fcode.WriteRune(c)
 				return
 			}
 
 		case '{':
 			if brac == 0 {
 			}
-			ftable.WriteRune('\t')
 			brac++
 
 		case '$':
@@ -1220,7 +1222,7 @@ loop:
 			j := 0
 			if isdigit(c) {
 				for isdigit(c) {
-					j = j*10 + c - '0'
+					j = j*10 + int(c-'0')
 					c = getrune(finput)
 				}
 				ungetrune(finput, c)
@@ -1345,7 +1347,9 @@ loop:
 			errorf("action does not terminate")
 
 		case '\n':
+			fmt.Fprint(fcode, "\n\t")
 			lineno++
+			continue loop
 		}
 
 		fcode.WriteRune(c)
@@ -2072,7 +2076,7 @@ func output() {
 	var c, u, v int
 
 	fmt.Fprintf(ftable, "\n//line yacctab:1\n")
-	fmt.Fprintf(ftable, "var\t%sExca = []int {\n", prefix)
+	fmt.Fprintf(ftable, "var %sExca = []int{\n", prefix)
 
 	noset := mkset()
 
@@ -2145,10 +2149,12 @@ func output() {
 	}
 
 	fmt.Fprintf(ftable, "}\n")
-	fmt.Fprintf(ftable, "const\t%sNprod\t= %v\n", prefix, nprod)
-	fmt.Fprintf(ftable, "const\t%sPrivate\t= %v\n", prefix, PRIVATE)
-	fmt.Fprintf(ftable, "var\t%sTokenNames []string\n", prefix)
-	fmt.Fprintf(ftable, "var\t%sStates []string\n", prefix)
+	ftable.WriteRune('\n')
+	fmt.Fprintf(ftable, "const %sNprod = %v\n", prefix, nprod)
+	fmt.Fprintf(ftable, "const %sPrivate = %v\n", prefix, PRIVATE)
+	ftable.WriteRune('\n')
+	fmt.Fprintf(ftable, "var %sTokenNames []string\n", prefix)
+	fmt.Fprintf(ftable, "var %sStates []string\n", prefix)
 }
 
 //
@@ -2264,7 +2270,7 @@ func wract(i int) {
 				continue
 			}
 			if flag == 0 {
-				fmt.Fprintf(ftable, "-1, %v,\n", i)
+				fmt.Fprintf(ftable, "\t-1, %v,\n", i)
 			}
 			flag++
 			fmt.Fprintf(ftable, "\t%v, %v,\n", p, p1)
@@ -2723,7 +2729,8 @@ nextn:
 // write out the optimized parser
 //
 func aoutput() {
-	fmt.Fprintf(ftable, "const\t%sLast\t= %v\n", prefix, maxa+1)
+	ftable.WriteRune('\n')
+	fmt.Fprintf(ftable, "const %sLast = %v\n\n", prefix, maxa+1)
 	arout("Act", amem, maxa+1)
 	arout("Pact", indgo, nstate)
 	arout("Pgo", pgo, nnonter+1)
@@ -2805,7 +2812,7 @@ func others() {
 	arout("Tok2", temp1, c+1)
 
 	// table 3 has everything else
-	fmt.Fprintf(ftable, "var\t%sTok3\t= []int {\n", prefix)
+	fmt.Fprintf(ftable, "var %sTok3 = []int{\n\t", prefix)
 	c = 0
 	for i = 1; i <= ntokens; i++ {
 		j = tokset[i].value
@@ -2816,19 +2823,25 @@ func others() {
 			continue
 		}
 
-		fmt.Fprintf(ftable, "%4d,%4d,", j, i)
+		if c%5 != 0 {
+			ftable.WriteRune(' ')
+		}
+		fmt.Fprintf(ftable, "%d, %d,", j, i)
 		c++
 		if c%5 == 0 {
-			ftable.WriteRune('\n')
+			fmt.Fprint(ftable, "\n\t")
 		}
 	}
-	fmt.Fprintf(ftable, "%4d,\n };\n", 0)
+	if c%5 != 0 {
+		ftable.WriteRune(' ')
+	}
+	fmt.Fprintf(ftable, "%d,\n}\n", 0)
 
 	// copy parser text
-	c = getrune(finput)
-	for c != EOF {
-		ftable.WriteRune(c)
-		c = getrune(finput)
+	ch := getrune(finput)
+	for ch != EOF {
+		ftable.WriteRune(ch)
+		ch = getrune(finput)
 	}
 
 	// copy yaccpar
@@ -2842,15 +2855,16 @@ func others() {
 
 func arout(s string, v []int, n int) {
 	s = prefix + s
-	fmt.Fprintf(ftable, "var\t%v\t= []int {\n", s)
+	fmt.Fprintf(ftable, "var %v = []int{\n", s)
 	for i := 0; i < n; i++ {
 		if i%10 == 0 {
-			ftable.WriteRune('\n')
+			fmt.Fprintf(ftable, "\n\t")
+		} else {
+			ftable.WriteRune(' ')
 		}
-		fmt.Fprintf(ftable, "%4d", v[i])
-		ftable.WriteRune(',')
+		fmt.Fprintf(ftable, "%d,", v[i])
 	}
-	fmt.Fprintf(ftable, "\n};\n")
+	fmt.Fprintf(ftable, "\n}\n")
 }
 
 //
@@ -2963,11 +2977,11 @@ func prlook(p Lkset) {
 //
 // utility routines
 //
-var peekrune int
+var peekrune rune
 
-func isdigit(c int) bool { return c >= '0' && c <= '9' }
+func isdigit(c rune) bool { return c >= '0' && c <= '9' }
 
-func isword(c int) bool {
+func isword(c rune) bool {
 	return c >= 0xa0 || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
@@ -2997,8 +3011,8 @@ func putrune(f *bufio.Writer, c int) {
 	}
 }
 
-func getrune(f *bufio.Reader) int {
-	var r int
+func getrune(f *bufio.Reader) rune {
+	var r rune
 
 	if peekrune != 0 {
 		if peekrune == EOF {
@@ -3020,7 +3034,7 @@ func getrune(f *bufio.Reader) int {
 	return c
 }
 
-func ungetrune(f *bufio.Reader, c int) {
+func ungetrune(f *bufio.Reader, c rune) {
 	if f != finput {
 		panic("ungetc - not finput")
 	}
@@ -3257,10 +3271,9 @@ $$default:
 					}
 				}
 
-				/* the current p has no shift onn "error", pop stack */
+				/* the current p has no shift on "error", pop stack */
 				if $$Debug >= 2 {
-					fmt.Printf("error recovery pops state %d, uncovers %d\n",
-						$$S[$$p].yys, $$S[$$p-1].yys)
+					fmt.Printf("error recovery pops state %d\n", $$S[$$p].yys)
 				}
 				$$p--
 			}
@@ -3286,7 +3299,7 @@ $$default:
 
 	$$nt := $$n
 	$$pt := $$p
-	_ = $$pt		// guard against "declared and not used"
+	_ = $$pt // guard against "declared and not used"
 
 	$$p -= $$R2[$$n]
 	$$VAL = $$S[$$p+1]

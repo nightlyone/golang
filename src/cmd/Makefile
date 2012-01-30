@@ -16,9 +16,7 @@ DIRS=\
 	cc\
 	cov\
 	gc\
-	godefs\
 	gopack\
-	gotry\
 	nm\
 	prof\
 	
@@ -39,18 +37,16 @@ CLEANDIRS=\
 	8g\
 	8l\
 	cgo\
-	ebnflint\
 	godoc\
 	gofix\
 	gofmt\
 	goinstall\
 	gotest\
-	gotype\
 	goyacc\
-	hgpatch\
 
 install: $(patsubst %,%.install,$(DIRS))
 clean: $(patsubst %,%.clean,$(CLEANDIRS))
+nuke: $(patsubst %,%.nuke,$(CLEANDIRS))
 
 %.install:
 	@echo
@@ -58,12 +54,15 @@ clean: $(patsubst %,%.clean,$(CLEANDIRS))
 	@echo
 	$(MAKE) -C $* install
 
-gc.install $(O)c.install: cc.install
+gc.install 5c.install 6c.install 8c.install: cc.install
 $(O)g.install: gc.install
 $(O)a.install $(O)c.install $(O)g.install: $(O)l.install
 
 %.clean:
 	$(MAKE) -C $* clean
+
+%.nuke:
+	$(MAKE) -C $* nuke
 
 echo-dirs:
 	@echo $(DIRS)

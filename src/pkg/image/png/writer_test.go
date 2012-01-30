@@ -8,12 +8,12 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/color"
 	"io/ioutil"
-	"os"
 	"testing"
 )
 
-func diff(m0, m1 image.Image) os.Error {
+func diff(m0, m1 image.Image) error {
 	b0, b1 := m0.Bounds(), m1.Bounds()
 	if !b0.Size().Eq(b1.Size()) {
 		return fmt.Errorf("dimensions differ: %v vs %v", b0, b1)
@@ -34,7 +34,7 @@ func diff(m0, m1 image.Image) os.Error {
 	return nil
 }
 
-func encodeDecode(m image.Image) (image.Image, os.Error) {
+func encodeDecode(m image.Image) (image.Image, error) {
 	b := bytes.NewBuffer(nil)
 	err := Encode(b, m)
 	if err != nil {
@@ -85,7 +85,7 @@ func TestSubImage(t *testing.T) {
 	m0 := image.NewRGBA(image.Rect(0, 0, 256, 256))
 	for y := 0; y < 256; y++ {
 		for x := 0; x < 256; x++ {
-			m0.Set(x, y, image.RGBAColor{uint8(x), uint8(y), 0, 255})
+			m0.Set(x, y, color.RGBA{uint8(x), uint8(y), 0, 255})
 		}
 	}
 	m0 = m0.SubImage(image.Rect(50, 30, 250, 130)).(*image.RGBA)
@@ -103,11 +103,10 @@ func TestSubImage(t *testing.T) {
 
 func BenchmarkEncodePaletted(b *testing.B) {
 	b.StopTimer()
-	img := image.NewPaletted(image.Rect(0, 0, 640, 480),
-		[]image.Color{
-			image.RGBAColor{0, 0, 0, 255},
-			image.RGBAColor{255, 255, 255, 255},
-		})
+	img := image.NewPaletted(image.Rect(0, 0, 640, 480), color.Palette{
+		color.RGBA{0, 0, 0, 255},
+		color.RGBA{255, 255, 255, 255},
+	})
 	b.SetBytes(640 * 480 * 1)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
@@ -122,11 +121,11 @@ func BenchmarkEncodeRGBOpaque(b *testing.B) {
 	bo := img.Bounds()
 	for y := bo.Min.Y; y < bo.Max.Y; y++ {
 		for x := bo.Min.X; x < bo.Max.X; x++ {
-			img.Set(x, y, image.RGBAColor{0, 0, 0, 255})
+			img.Set(x, y, color.RGBA{0, 0, 0, 255})
 		}
 	}
 	if !img.Opaque() {
-		panic("expected image to be opaque")
+		b.Fatal("expected image to be opaque")
 	}
 	b.SetBytes(640 * 480 * 4)
 	b.StartTimer()
@@ -139,7 +138,7 @@ func BenchmarkEncodeRGBA(b *testing.B) {
 	b.StopTimer()
 	img := image.NewRGBA(image.Rect(0, 0, 640, 480))
 	if img.Opaque() {
-		panic("expected image to not be opaque")
+		b.Fatal("expected image to not be opaque")
 	}
 	b.SetBytes(640 * 480 * 4)
 	b.StartTimer()

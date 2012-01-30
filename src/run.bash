@@ -31,21 +31,55 @@ xcd() {
 }
 
 if $rebuild; then
+	if $USE_GO_TOOL; then
+		echo
+		echo '# Package builds'
+		time go install -a -v std
+	else
+		(xcd pkg
+			gomake clean
+			time gomake install
+		) || exit $?
+	fi
+fi
+
+if $USE_GO_TOOL; then
+	echo
+	echo '# Package tests'
+	time go test std -short
+else
 	(xcd pkg
-		gomake clean
-		time gomake install
+	gomake testshort
 	) || exit $?
 fi
 
-(xcd pkg
-gomake testshort
-) || exit $?
+if $USE_GO_TOOL; then
+	echo
+	echo '# runtime -cpu=1,2,4'
+	go test runtime -short -cpu=1,2,4
+else
+	(xcd pkg/runtime;
+	gotest -short -cpu=1,2,4
+	) || exit $?
+fi
 
-(xcd pkg/sync;
-GOMAXPROCS=10 gomake testshort
-) || exit $?
+if $USE_GO_TOOL; then
+	echo
+	echo '# sync -cpu=10'
+	go test sync -short -cpu=10
+else
+	(xcd pkg/sync;
+	GOMAXPROCS=10 gomake testshort
+	) || exit $?
+fi
 
-(xcd cmd/ebnflint
+if $USE_GO_TOOL; then
+	echo
+	echo '# Build bootstrap scripts'
+	./buildscript.sh
+fi
+
+(xcd pkg/exp/ebnflint
 time gomake test
 ) || exit $?
 
@@ -63,10 +97,17 @@ gomake clean
 ) || exit $?
 
 [ "$CGO_ENABLED" != 1 ] ||
-[ "$GOHOSTOS" == windows ] ||
 (xcd ../misc/cgo/test
 gomake clean
 gotest
+) || exit $?
+
+[ "$CGO_ENABLED" != 1 ] ||
+[ "$GOHOSTOS" == windows ] ||
+[ "$GOHOSTOS" == darwin ] ||
+(xcd ../misc/cgo/testso
+gomake clean
+./test.bash
 ) || exit $?
 
 (xcd ../doc/progs
@@ -89,11 +130,14 @@ do
 done
 
 [ "$GOARCH" == arm ] ||
-(xcd ../test/bench
+(xcd ../test/bench/shootout
 ./timing.sh -test
 ) || exit $?
 
-[ "$GOHOSTOS" == windows ] ||
+(xcd ../test/bench/go1
+gomake test
+) || exit $?
+
 (xcd ../test
 ./run
 ) || exit $?

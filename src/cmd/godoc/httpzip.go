@@ -26,21 +26,27 @@ package main
 import (
 	"archive/zip"
 	"fmt"
-	"http"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"sort"
 	"strings"
+	"time"
 )
 
-// We cannot import syscall on app engine.
-// TODO(gri) Once we have a truly abstract FileInfo implementation
-//           this won't be needed anymore.
-const (
-	S_IFDIR = 0x4000 // == syscall.S_IFDIR
-	S_IFREG = 0x8000 // == syscall.S_IFREG
-)
+type fileInfo struct {
+	name  string
+	mode  os.FileMode
+	size  int64
+	mtime time.Time
+}
+
+func (fi *fileInfo) Name() string       { return fi.name }
+func (fi *fileInfo) Mode() os.FileMode  { return fi.mode }
+func (fi *fileInfo) Size() int64        { return fi.size }
+func (fi *fileInfo) ModTime() time.Time { return fi.mtime }
+func (fi *fileInfo) IsDir() bool        { return fi.mode.IsDir() }
 
 // httpZipFile is the zip-file based implementation of http.File
 type httpZipFile struct {
@@ -50,19 +56,19 @@ type httpZipFile struct {
 	list          zipList
 }
 
-func (f *httpZipFile) Close() os.Error {
-	if f.info.IsRegular() {
+func (f *httpZipFile) Close() error {
+	if !f.info.IsDir() {
 		return f.ReadCloser.Close()
 	}
 	f.list = nil
 	return nil
 }
 
-func (f *httpZipFile) Stat() (*os.FileInfo, os.Error) {
-	return &f.info, nil
+func (f *httpZipFile) Stat() (os.FileInfo, error) {
+	return f.info, nil
 }
 
-func (f *httpZipFile) Readdir(count int) ([]os.FileInfo, os.Error) {
+func (f *httpZipFile) Readdir(count int) ([]os.FileInfo, error) {
 	var list []os.FileInfo
 	dirname := f.path + "/"
 	prevname := ""
@@ -76,29 +82,30 @@ func (f *httpZipFile) Readdir(count int) ([]os.FileInfo, os.Error) {
 			break // not in the same directory anymore
 		}
 		name := e.Name[len(dirname):] // local name
-		var mode uint32
-		var size, mtime_ns int64
+		var mode os.FileMode
+		var size int64
+		var mtime time.Time
 		if i := strings.IndexRune(name, '/'); i >= 0 {
 			// We infer directories from files in subdirectories.
 			// If we have x/y, return a directory entry for x.
 			name = name[0:i] // keep local directory name only
-			mode = S_IFDIR
-			// no size or mtime_ns for directories
+			mode = os.ModeDir
+			// no size or mtime for directories
 		} else {
-			mode = S_IFREG
+			mode = 0
 			size = int64(e.UncompressedSize)
-			mtime_ns = e.Mtime_ns()
+			mtime = e.ModTime()
 		}
 		// If we have x/y and x/z, don't return two directory entries for x.
 		// TODO(gri): It should be possible to do this more efficiently
 		// by determining the (fs.list) range of local directory entries
 		// (via two binary searches).
 		if name != prevname {
-			list = append(list, os.FileInfo{
-				Name:     name,
-				Mode:     mode,
-				Size:     size,
-				Mtime_ns: mtime_ns,
+			list = append(list, &fileInfo{
+				name,
+				mode,
+				size,
+				mtime,
 			})
 			prevname = name
 			count--
@@ -106,14 +113,14 @@ func (f *httpZipFile) Readdir(count int) ([]os.FileInfo, os.Error) {
 	}
 
 	if count >= 0 && len(list) == 0 {
-		return nil, os.EOF
+		return nil, io.EOF
 	}
 
 	return list, nil
 }
 
-func (f *httpZipFile) Seek(offset int64, whence int) (int64, os.Error) {
-	return 0, fmt.Errorf("Seek not implemented for zip file entry: %s", f.info.Name)
+func (f *httpZipFile) Seek(offset int64, whence int) (int64, error) {
+	return 0, fmt.Errorf("Seek not implemented for zip file entry: %s", f.info.Name())
 }
 
 // httpZipFS is the zip-file based implementation of http.FileSystem
@@ -123,7 +130,7 @@ type httpZipFS struct {
 	root string
 }
 
-func (fs *httpZipFS) Open(name string) (http.File, os.Error) {
+func (fs *httpZipFS) Open(name string) (http.File, error) {
 	// fs.root does not start with '/'.
 	path := path.Join(fs.root, name) // path is clean
 	index, exact := fs.list.lookup(path)
@@ -141,11 +148,11 @@ func (fs *httpZipFS) Open(name string) (http.File, os.Error) {
 		}
 		return &httpZipFile{
 			path,
-			os.FileInfo{
-				Name:     name,
-				Mode:     S_IFREG,
-				Size:     int64(f.UncompressedSize),
-				Mtime_ns: f.Mtime_ns(),
+			&fileInfo{
+				name,
+				0,
+				int64(f.UncompressedSize),
+				f.ModTime(),
 			},
 			rc,
 			nil,
@@ -155,17 +162,18 @@ func (fs *httpZipFS) Open(name string) (http.File, os.Error) {
 	// not an exact match - must be a directory
 	return &httpZipFile{
 		path,
-		os.FileInfo{
-			Name: name,
-			Mode: S_IFDIR,
-			// no size or mtime_ns for directories
+		&fileInfo{
+			name,
+			os.ModeDir,
+			0,           // no size for directory
+			time.Time{}, // no mtime for directory
 		},
 		nil,
 		fs.list[index:],
 	}, nil
 }
 
-func (fs *httpZipFS) Close() os.Error {
+func (fs *httpZipFS) Close() error {
 	fs.list = nil
 	return fs.ReadCloser.Close()
 }

@@ -54,7 +54,11 @@ compile(Node *fn)
 			t = structnext(&save);
 		}
 	}
-
+	
+	order(curfn);
+	if(nerrors != 0)
+		goto ret;
+	
 	hasdefer = 0;
 	walk(curfn);
 	if(nerrors != 0)
@@ -70,6 +74,8 @@ compile(Node *fn)
 
 	nodconst(&nod1, types[TINT32], 0);
 	ptxt = gins(ATEXT, isblank(curfn->nname) ? N : curfn->nname, &nod1);
+	if(fn->dupok)
+		ptxt->TEXTFLAG = DUPOK;
 	afunclit(&ptxt->from);
 
 	ginit();
@@ -116,6 +122,10 @@ compile(Node *fn)
 	allocauto(ptxt);
 	if(0)
 		print("allocauto: %lld to %lld\n", oldstksize, (vlong)stksize);
+
+	setlineno(curfn);
+	if(stksize+maxarg > (1ULL<<31))
+		yyerror("stack frame too large (>2GB)");
 
 	defframe(ptxt);
 

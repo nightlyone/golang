@@ -154,6 +154,10 @@ init2(Node *n, NodeList **out)
 {
 	if(n == N || n->initorder == InitDone)
 		return;
+
+	if(n->op == ONAME && n->ninit)
+		fatal("name %S with ninit: %+N\n", n->sym, n);
+
 	init1(n, out);
 	init2(n->left, out);
 	init2(n->right, out);
@@ -262,6 +266,14 @@ staticcopy(Node *l, Node *r, NodeList **out)
 		case ONAME:
 			gdata(l, r, l->type->width);
 			return 1;
+		}
+		break;
+	
+	case OPTRLIT:
+		switch(r->left->op) {
+		default:
+			//dump("not static addr", r);
+			break;
 		case OARRAYLIT:
 		case OSTRUCTLIT:
 		case OMAPLIT:
@@ -294,18 +306,18 @@ staticcopy(Node *l, Node *r, NodeList **out)
 			n1.type = e->expr->type;
 			if(e->expr->op == OLITERAL)
 				gdata(&n1, e->expr, n1.type->width);
-			else if(staticassign(&n1, e->expr, out)) {
-				// Done
-			} else {
-				// Requires computation, but we're
-				// copying someone else's computation.
+			else {
 				ll = nod(OXXX, N, N);
 				*ll = n1;
-				rr = nod(OXXX, N, N);
-				*rr = *orig;
-				rr->type = ll->type;
-				rr->xoffset += e->xoffset;
-				*out = list(*out, nod(OAS, ll, rr));
+				if(!staticassign(ll, e->expr, out)) {
+					// Requires computation, but we're
+					// copying someone else's computation.
+					rr = nod(OXXX, N, N);
+					*rr = *orig;
+					rr->type = ll->type;
+					rr->xoffset += e->xoffset;
+					*out = list(*out, nod(OAS, ll, rr));
+				}
 			}
 		}
 		return 1;
@@ -347,7 +359,14 @@ staticassign(Node *l, Node *r, NodeList **out)
 		case ONAME:
 			gdata(l, r, l->type->width);
 			return 1;
-		
+		}
+	
+	case OPTRLIT:
+		switch(r->left->op) {
+		default:
+			//dump("not static ptrlit", r);
+			break;
+
 		case OARRAYLIT:
 		case OMAPLIT:
 		case OSTRUCTLIT:
@@ -392,12 +411,11 @@ staticassign(Node *l, Node *r, NodeList **out)
 			n1.type = e->expr->type;
 			if(e->expr->op == OLITERAL)
 				gdata(&n1, e->expr, n1.type->width);
-			else if(staticassign(&n1, e->expr, out)) {
-				// done
-			} else {
+			else {
 				a = nod(OXXX, N, N);
 				*a = n1;
-				*out = list(*out, nod(OAS, a, e->expr));
+				if(!staticassign(a, e->expr, out))
+					*out = list(*out, nod(OAS, a, e->expr));
 			}
 		}
 		return 1;
@@ -693,9 +711,10 @@ slicelit(int ctxt, Node *n, Node *var, NodeList **init)
 
 	// set auto to point at new temp or heap (3 assign)
 	if(n->esc == EscNone) {
-		a = temp(t);
-		*init = list(*init, nod(OAS, a, N));  // zero new temp
-		a = nod(OADDR, a, N);
+		a = nod(OAS, temp(t), N);
+		typecheck(&a, Etop);
+		*init = list(*init, a);  // zero new temp
+		a = nod(OADDR, a->left, N);
 	} else {
 		a = nod(ONEW, N, N);
 		a->list = list1(typenod(t));
@@ -917,6 +936,19 @@ anylit(int ctxt, Node *n, Node *var, NodeList **init)
 	switch(n->op) {
 	default:
 		fatal("anylit: not lit");
+
+	case OPTRLIT:
+		if(!isptr[t->etype])
+			fatal("anylit: not ptr");
+
+		a = nod(OAS, var, callnew(t->type));
+		typecheck(&a, Etop);
+		*init = list(*init, a);
+
+		var = nod(OIND, var, N);
+		typecheck(&var, Erv | Easgn);
+		anylit(ctxt, n->left, var, init);
+		break;
 
 	case OSTRUCTLIT:
 		if(t->etype != TSTRUCT)
@@ -1313,6 +1345,7 @@ iszero(Node *n)
 			return n->val.u.bval == 0;
 			
 		case CTINT:
+		case CTRUNE:
 			return mpcmpfixc(n->val.u.xval, 0) == 0;
 	
 		case CTFLT:

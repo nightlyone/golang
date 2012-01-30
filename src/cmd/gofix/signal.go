@@ -10,14 +10,17 @@ import (
 )
 
 func init() {
-	register(fix{
-		"signal",
-		signal,
-		`Adapt code to types moved from os/signal to signal.
+	register(signalFix)
+}
+
+var signalFix = fix{
+	"signal",
+	"2011-06-29",
+	signal,
+	`Adapt code to types moved from os/signal to signal.
 
 http://codereview.appspot.com/4437091
 `,
-	})
 }
 
 func signal(f *ast.File) (fixed bool) {
@@ -34,16 +37,14 @@ func signal(f *ast.File) (fixed bool) {
 
 		sel := s.Sel.String()
 		if sel == "Signal" || sel == "UnixSignal" || strings.HasPrefix(sel, "SIG") {
+			addImport(f, "os")
 			s.X = &ast.Ident{Name: "os"}
 			fixed = true
 		}
 	})
 
-	if fixed {
-		addImport(f, "os")
-		if !usesImport(f, "os/signal") {
-			deleteImport(f, "os/signal")
-		}
+	if fixed && !usesImport(f, "os/signal") {
+		deleteImport(f, "os/signal")
 	}
 	return
 }

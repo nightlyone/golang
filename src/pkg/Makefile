@@ -16,11 +16,8 @@ all: install
 DIRS=\
 	archive/tar\
 	archive/zip\
-	asn1\
-	big\
 	bufio\
 	bytes\
-	cmath\
 	compress/bzip2\
 	compress/flate\
 	compress/gzip\
@@ -29,62 +26,51 @@ DIRS=\
 	container/heap\
 	container/list\
 	container/ring\
-	container/vector\
 	crypto\
 	crypto/aes\
-	crypto/blowfish\
-	crypto/bcrypt\
-	crypto/cast5\
 	crypto/cipher\
 	crypto/des\
 	crypto/dsa\
 	crypto/ecdsa\
 	crypto/elliptic\
 	crypto/hmac\
-	crypto/md4\
 	crypto/md5\
-	crypto/ocsp\
-	crypto/openpgp\
-	crypto/openpgp/armor\
-	crypto/openpgp/elgamal\
-	crypto/openpgp/error\
-	crypto/openpgp/packet\
-	crypto/openpgp/s2k\
 	crypto/rand\
 	crypto/rc4\
-	crypto/ripemd160\
 	crypto/rsa\
 	crypto/sha1\
 	crypto/sha256\
 	crypto/sha512\
 	crypto/subtle\
 	crypto/tls\
-	crypto/twofish\
 	crypto/x509\
 	crypto/x509/pkix\
-	crypto/xtea\
-	csv\
+	database/sql\
+	database/sql/driver\
 	debug/dwarf\
 	debug/macho\
 	debug/elf\
 	debug/gosym\
 	debug/pe\
-	ebnf\
 	encoding/ascii85\
+	encoding/asn1\
 	encoding/base32\
 	encoding/base64\
 	encoding/binary\
-	encoding/git85\
+	encoding/csv\
+	encoding/gob\
 	encoding/hex\
+	encoding/json\
 	encoding/pem\
-	exec\
-	exp/datafmt\
-	exp/gui\
-	exp/gui/x11\
+	encoding/xml\
+	errors\
+	exp/ebnf\
+	exp/ebnflint\
+	exp/gotype\
+	exp/html\
 	exp/norm\
-	exp/regexp\
-	exp/regexp/syntax\
-	exp/template/html\
+	exp/terminal\
+	exp/types\
 	expvar\
 	flag\
 	fmt\
@@ -95,97 +81,91 @@ DIRS=\
 	go/printer\
 	go/scanner\
 	go/token\
-	go/typechecker\
-	go/types\
-	gob\
 	hash\
 	hash/adler32\
 	hash/crc32\
 	hash/crc64\
 	hash/fnv\
 	html\
-	http\
-	http/cgi\
-	http/fcgi\
-	http/pprof\
-	http/httptest\
-	http/spdy\
+	html/template\
 	image\
 	image/bmp\
+	image/color\
 	image/draw\
 	image/gif\
 	image/jpeg\
 	image/png\
 	image/tiff\
-	image/ycbcr\
 	index/suffixarray\
 	io\
 	io/ioutil\
-	json\
 	log\
-	mail\
+	log/syslog\
 	math\
+	math/big\
+	math/cmplx\
+	math/rand\
 	mime\
 	mime/multipart\
 	net\
-	net/dict\
+	net/http\
+	net/http/cgi\
+	net/http/fcgi\
+	net/http/pprof\
+	net/http/httptest\
+	net/http/httputil\
+	net/mail\
+	net/rpc\
+	net/rpc/jsonrpc\
+	net/smtp\
 	net/textproto\
-	netchan\
+	net/url\
+	old/netchan\
+	old/regexp\
 	old/template\
 	os\
+	os/exec\
 	os/signal\
 	os/user\
-	patch\
 	path\
 	path/filepath\
-	rand\
 	reflect\
 	regexp\
-	rpc\
-	rpc/jsonrpc\
+	regexp/syntax\
 	runtime\
 	runtime/cgo\
 	runtime/debug\
 	runtime/pprof\
-	scanner\
-	smtp\
 	sort\
 	strconv\
 	strings\
 	sync\
 	sync/atomic\
 	syscall\
-	syslog\
-	tabwriter\
-	template\
-	template/parse\
 	testing\
 	testing/iotest\
 	testing/quick\
 	testing/script\
+	text/scanner\
+	text/tabwriter\
+	text/template\
+	text/template/parse\
 	time\
-	try\
 	unicode\
-	url\
-	utf16\
-	utf8\
-	websocket\
-	xml\
+	unicode/utf16\
+	unicode/utf8\
 	../cmd/cgo\
-	../cmd/ebnflint\
 	../cmd/godoc\
 	../cmd/gofix\
 	../cmd/gofmt\
 	../cmd/goinstall\
 	../cmd/gotest\
-	../cmd/gotype\
 	../cmd/govet\
 	../cmd/goyacc\
-	../cmd/hgpatch\
 
 ifeq ($(GOOS),linux)
 DIRS+=\
-	os/inotify\
+	exp/inotify\
 
 endif
 
@@ -198,34 +178,25 @@ endif
 
 NOTEST+=\
 	crypto\
-	crypto/openpgp/error\
+	crypto/openpgp/errors\
 	crypto/x509/pkix\
-	exp/gui\
-	exp/gui/x11\
-	go/ast\
+	exp/ebnflint\
 	go/doc\
-	go/token\
 	hash\
-	http/pprof\
-	http/httptest\
 	image/bmp\
 	image/gif\
-	net/dict\
-	rand\
+	net/http/pprof\
+	net/http/httptest\
 	runtime/cgo\
 	syscall\
 	testing\
 	testing/iotest\
-	try\
 	../cmd/cgo\
-	../cmd/ebnflint\
 	../cmd/godoc\
 	../cmd/gotest\
 	../cmd/goyacc\
-	../cmd/hgpatch\
 
 NOBENCH+=\
-	container/vector\
 
 # Disable tests that windows cannot run yet.
 ifeq ($(GOOS),windows)
@@ -238,6 +209,9 @@ TEST=\
 
 BENCH=\
 	$(filter-out $(NOBENCH),$(TEST))
+
+CRAP:
+	echo $(DIRS)
 
 clean.dirs: $(addsuffix .clean, $(DIRS))
 install.dirs: $(addsuffix .install, $(DIRS))

@@ -27,11 +27,8 @@ var (
 	Stderr = newFile(syscall.Stderr, "/dev/stderr")
 )
 
-func OpenFile(name string, mode int, perm uint32) (file *File, err os.Error) {
-	r, e := syscall.Open(name, mode, perm)
-	if e != 0 {
-		err = os.Errno(e)
-	}
+func OpenFile(name string, mode int, perm uint32) (file *File, err error) {
+	r, err := syscall.Open(name, mode, perm)
 	return newFile(r, name), err
 }
 
@@ -42,45 +39,36 @@ const (
 	O_TRUNC  = syscall.O_TRUNC
 )
 
-func Open(name string) (file *File, err os.Error) {
+func Open(name string) (file *File, err error) {
 	return OpenFile(name, O_RDONLY, 0)
 }
 
-func Create(name string) (file *File, err os.Error) {
+func Create(name string) (file *File, err error) {
 	return OpenFile(name, O_RDWR|O_CREATE|O_TRUNC, 0666)
 }
 
-func (file *File) Close() os.Error {
+func (file *File) Close() error {
 	if file == nil {
 		return os.EINVAL
 	}
-	e := syscall.Close(file.fd)
+	err := syscall.Close(file.fd)
 	file.fd = -1 // so it can't be closed again
-	if e != 0 {
-		return os.Errno(e)
-	}
-	return nil
+	return err
 }
 
-func (file *File) Read(b []byte) (ret int, err os.Error) {
+func (file *File) Read(b []byte) (ret int, err error) {
 	if file == nil {
 		return -1, os.EINVAL
 	}
-	r, e := syscall.Read(file.fd, b)
-	if e != 0 {
-		err = os.Errno(e)
-	}
+	r, err := syscall.Read(file.fd, b)
 	return int(r), err
 }
 
-func (file *File) Write(b []byte) (ret int, err os.Error) {
+func (file *File) Write(b []byte) (ret int, err error) {
 	if file == nil {
 		return -1, os.EINVAL
 	}
-	r, e := syscall.Write(file.fd, b)
-	if e != 0 {
-		err = os.Errno(e)
-	}
+	r, err := syscall.Write(file.fd, b)
 	return int(r), err
 }
 

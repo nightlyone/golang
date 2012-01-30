@@ -92,11 +92,6 @@ runtime·makechan_c(ChanType *t, int64 hint)
 	if(hint < 0 || (int32)hint != hint || (elem->size > 0 && hint > ((uintptr)-1) / elem->size))
 		runtime·panicstring("makechan: size out of range");
 
-	if(elem->alg >= nelem(runtime·algarray)) {
-		runtime·printf("chan(alg=%d)\n", elem->alg);
-		runtime·throw("runtime.makechan: unsupported elem type");
-	}
-
 	// calculate rounded size of Hchan
 	n = sizeof(*c);
 	while(n & MAXALIGN)
@@ -104,16 +99,13 @@ runtime·makechan_c(ChanType *t, int64 hint)
 
 	// allocate memory in one call
 	c = (Hchan*)runtime·mal(n + hint*elem->size);
-	if(runtime·destroylock)
-		runtime·addfinalizer(c, (void*)destroychan, 0);
-
 	c->elemsize = elem->size;
-	c->elemalg = &runtime·algarray[elem->alg];
+	c->elemalg = elem->alg;
 	c->elemalign = elem->align;
 	c->dataqsiz = hint;
 
 	if(debug)
-		runtime·printf("makechan: chan=%p; elemsize=%D; elemalg=%d; elemalign=%d; dataqsiz=%d\n",
+		runtime·printf("makechan: chan=%p; elemsize=%D; elemalg=%p; elemalign=%d; dataqsiz=%d\n",
 			c, (int64)elem->size, elem->alg, elem->align, c->dataqsiz);
 
 	return c;
@@ -127,13 +119,6 @@ reflect·makechan(ChanType *t, uint32 size, Hchan *c)
 	c = runtime·makechan_c(t, size);
 	FLUSH(&c);
 }
-
-static void
-destroychan(Hchan *c)
-{
-	runtime·destroylock(&c->Lock);
-}
-
 
 // makechan(t *ChanType, hint int64) (hchan *chan any);
 void
@@ -1024,7 +1009,8 @@ syncsend:
 	selunlock(sel);
 	if(debug)
 		runtime·printf("syncsend: sel=%p c=%p o=%d\n", sel, c, o);
-	c->elemalg->copy(c->elemsize, sg->elem, cas->sg.elem);
+	if(sg->elem != nil)
+		c->elemalg->copy(c->elemsize, sg->elem, cas->sg.elem);
 	gp = sg->g;
 	gp->param = sg;
 	runtime·ready(gp);
@@ -1050,6 +1036,9 @@ runtime·closechan(Hchan *c)
 {
 	SudoG *sg;
 	G* gp;
+
+	if(c == nil)
+		runtime·panicstring("close of nil channel");
 
 	if(runtime·gcwaiting)
 		runtime·gosched();

@@ -43,6 +43,8 @@ struct	Prog
 	uchar	scond;
 };
 
+#define TEXTFLAG reg
+
 #define REGALLOC_R0 0
 #define REGALLOC_RMAX REGEXT
 #define REGALLOC_F0 (REGALLOC_RMAX+1)
@@ -92,7 +94,7 @@ void	igen(Node*, Node*, Node*);
 void agenr(Node *n, Node *a, Node *res);
 vlong	fieldoffset(Type*, Node*);
 void	bgen(Node*, int, Prog*);
-void	sgen(Node*, Node*, int32);
+void	sgen(Node*, Node*, int64);
 void	gmove(Node*, Node*);
 Prog*	gins(int, Node*, Node*);
 int	samaddr(Node*, Node*);

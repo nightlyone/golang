@@ -38,19 +38,22 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/gob"
+	"errors"
 	"go/ast"
 	"go/parser"
-	"go/token"
 	"go/scanner"
-	"gob"
+	"go/token"
 	"index/suffixarray"
 	"io"
 	"os"
 	"path/filepath"
-	"exp/regexp"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ----------------------------------------------------------------------------
@@ -700,8 +703,8 @@ func isWhitelisted(filename string) bool {
 	return whitelisted[key]
 }
 
-func (x *Indexer) visitFile(dirname string, f FileInfo, fulltextIndex bool) {
-	if !f.IsRegular() {
+func (x *Indexer) visitFile(dirname string, f os.FileInfo, fulltextIndex bool) {
+	if f.IsDir() {
 		return
 	}
 
@@ -765,7 +768,7 @@ func canonical(w string) string { return strings.ToLower(w) }
 //
 func NewIndex(dirnames <-chan string, fulltextIndex bool, throttle float64) *Index {
 	var x Indexer
-	th := NewThrottle(throttle, 0.1e9) // run at least 0.1s at a time
+	th := NewThrottle(throttle, 100*time.Millisecond) // run at least 0.1s at a time
 
 	// initialize Indexer
 	// (use some reasonably sized maps to start)
@@ -780,7 +783,7 @@ func NewIndex(dirnames <-chan string, fulltextIndex bool, throttle float64) *Ind
 			continue // ignore this directory
 		}
 		for _, f := range list {
-			if !f.IsDirectory() {
+			if !f.IsDir() {
 				x.visitFile(dirname, f, fulltextIndex)
 			}
 			th.Throttle()
@@ -840,8 +843,16 @@ type fileIndex struct {
 	Fulltext bool
 }
 
+func (x *fileIndex) Write(w io.Writer) error {
+	return gob.NewEncoder(w).Encode(x)
+}
+
+func (x *fileIndex) Read(r io.Reader) error {
+	return gob.NewDecoder(r).Decode(x)
+}
+
 // Write writes the index x to w.
-func (x *Index) Write(w io.Writer) os.Error {
+func (x *Index) Write(w io.Writer) error {
 	fulltext := false
 	if x.suffixes != nil {
 		fulltext = true
@@ -852,7 +863,7 @@ func (x *Index) Write(w io.Writer) os.Error {
 		x.snippets,
 		fulltext,
 	}
-	if err := gob.NewEncoder(w).Encode(fx); err != nil {
+	if err := fx.Write(w); err != nil {
 		return err
 	}
 	if fulltext {
@@ -867,9 +878,14 @@ func (x *Index) Write(w io.Writer) os.Error {
 }
 
 // Read reads the index from r into x; x must not be nil.
-func (x *Index) Read(r io.Reader) os.Error {
+// If r does not also implement io.ByteReader, it will be wrapped in a bufio.Reader.
+func (x *Index) Read(r io.Reader) error {
+	// We use the ability to read bytes as a plausible surrogate for buffering.
+	if _, ok := r.(io.ByteReader); !ok {
+		r = bufio.NewReader(r)
+	}
 	var fx fileIndex
-	if err := gob.NewDecoder(r).Decode(&fx); err != nil {
+	if err := fx.Read(r); err != nil {
 		return err
 	}
 	x.words = fx.Words
@@ -920,13 +936,13 @@ func isIdentifier(s string) bool {
 // identifier, Lookup returns a list of packages, a LookupResult, and a
 // list of alternative spellings, if any. Any and all results may be nil.
 // If the query syntax is wrong, an error is reported.
-func (x *Index) Lookup(query string) (paks HitList, match *LookupResult, alt *AltWords, err os.Error) {
+func (x *Index) Lookup(query string) (paks HitList, match *LookupResult, alt *AltWords, err error) {
 	ss := strings.Split(query, ".")
 
 	// check query syntax
 	for _, s := range ss {
 		if !isIdentifier(s) {
-			err = os.NewError("all query parts must be identifiers")
+			err = errors.New("all query parts must be identifiers")
 			return
 		}
 	}
@@ -954,7 +970,7 @@ func (x *Index) Lookup(query string) (paks HitList, match *LookupResult, alt *Al
 		}
 
 	default:
-		err = os.NewError("query is not a (qualified) identifier")
+		err = errors.New("query is not a (qualified) identifier")
 	}
 
 	return

@@ -41,6 +41,8 @@ struct	Prog
 	void*	reg;		// pointer to containing Reg struct
 };
 
+#define TEXTFLAG from.scale
+
 EXTERN	int32	dynloc;
 EXTERN	uchar	reg[D_NONE];
 EXTERN	int32	pcloc;		// instruction counter
@@ -85,7 +87,7 @@ void	agen(Node*, Node*);
 void	igen(Node*, Node*, Node*);
 vlong	fieldoffset(Type*, Node*);
 void	bgen(Node*, int, Prog*);
-void	sgen(Node*, Node*, int32);
+void	sgen(Node*, Node*, int64);
 void	gmove(Node*, Node*);
 Prog*	gins(int, Node*, Node*);
 int	samaddr(Node*, Node*);

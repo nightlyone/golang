@@ -7,7 +7,6 @@ package norm
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 )
@@ -23,11 +22,11 @@ var bufSizes = []int{1, 2, 3, 4, 5, 6, 7, 8, 100, 101, 102, 103, 4000, 4001, 400
 
 func readFunc(size int) appendFunc {
 	return func(f Form, out []byte, s string) []byte {
-		out = append(out, []byte(s)...)
+		out = append(out, s...)
 		r := f.Reader(bytes.NewBuffer(out))
 		buf := make([]byte, size)
 		result := []byte{}
-		for n, err := 0, os.Error(nil); err == nil; {
+		for n, err := 0, error(nil); err == nil; {
 			n, err = r.Read(buf)
 			result = append(result, buf[:n]...)
 		}
@@ -46,7 +45,7 @@ func TestReader(t *testing.T) {
 
 func writeFunc(size int) appendFunc {
 	return func(f Form, out []byte, s string) []byte {
-		in := append(out, []byte(s)...)
+		in := append(out, s...)
 		result := new(bytes.Buffer)
 		w := f.Writer(result)
 		buf := make([]byte, size)

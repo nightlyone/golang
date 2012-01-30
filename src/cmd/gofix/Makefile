@@ -6,14 +6,27 @@ include ../../Make.inc
 
 TARG=gofix
 GOFILES=\
+	error.go\
 	filepath.go\
 	fix.go\
+	go1pkgrename.go\
+	googlecode.go\
+	hashsum.go\
+	hmacnew.go\
+	htmlerr.go\
 	httpfinalurl.go\
 	httpfs.go\
 	httpheaders.go\
 	httpserver.go\
+	httputil.go\
+	imagecolor.go\
 	imagenew.go\
+	imagetiled.go\
+	imageycbcr.go\
+	iocopyn.go\
 	main.go\
+	mapdelete.go\
+	math.go\
 	netdial.go\
 	netudpgroup.go\
 	oserrorstring.go\
@@ -23,9 +36,13 @@ GOFILES=\
 	signal.go\
 	sorthelpers.go\
 	sortslice.go\
+	strconv.go\
 	stringssplit.go\
+	template.go\
+	timefileinfo.go\
 	typecheck.go\
 	url.go\
+	xmlapi.go\
 
 include ../../Make.cmd
 

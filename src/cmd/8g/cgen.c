@@ -787,6 +787,7 @@ bgen(Node *n, int true, Prog *to)
 	int et, a;
 	Node *nl, *nr, *r;
 	Node n1, n2, tmp, t1, t2, ax;
+	NodeList *ll;
 	Prog *p1, *p2;
 
 	if(debug['g']) {
@@ -902,7 +903,10 @@ bgen(Node *n, int true, Prog *to)
 				p1 = gbranch(AJMP, T);
 				p2 = gbranch(AJMP, T);
 				patch(p1, pc);
+				ll = n->ninit;  // avoid re-genning ninit
+				n->ninit = nil;
 				bgen(n, 1, p2);
+				n->ninit = ll;
 				patch(gbranch(AJMP, T), to);
 				patch(p2, pc);
 				break;
@@ -1126,21 +1130,21 @@ stkof(Node *n)
  *	memmove(&res, &n, w);
  */
 void
-sgen(Node *n, Node *res, int32 w)
+sgen(Node *n, Node *res, int64 w)
 {
 	Node dst, src, tdst, tsrc;
 	int32 c, q, odst, osrc;
 
 	if(debug['g']) {
-		print("\nsgen w=%d\n", w);
+		print("\nsgen w=%ld\n", w);
 		dump("r", n);
 		dump("res", res);
 	}
 	if(n->ullman >= UINF && res->ullman >= UINF)
 		fatal("sgen UINF");
 
-	if(w < 0)
-		fatal("sgen copy %d", w);
+	if(w < 0 || (int32)w != w)
+		fatal("sgen copy %lld", w);
 
 	if(w == 0) {
 		// evaluate side effects only.

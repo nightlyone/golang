@@ -5,7 +5,7 @@
 package main
 
 func init() {
-	addTestCases(netudpgroupTests)
+	addTestCases(netudpgroupTests, netudpgroup)
 }
 
 var netudpgroupTests = []testCase{
@@ -28,6 +28,26 @@ func f() {
 	err := x.JoinGroup(nil, gaddr)
 	err = y.LeaveGroup(nil, gaddr)
 }
+`,
+	},
+	// Innocent function with no body.
+	{
+		Name: "netudpgroup.1",
+		In: `package main
+
+import "net"
+
+func f()
+
+var _ net.IP
+`,
+		Out: `package main
+
+import "net"
+
+func f()
+
+var _ net.IP
 `,
 	},
 }

@@ -6,12 +6,7 @@ include ../../Make.inc
 
 TARG=html
 GOFILES=\
-	const.go\
-	doc.go\
 	entity.go\
 	escape.go\
-	node.go\
-	parse.go\
-	token.go\
 
 include ../../Make.pkg

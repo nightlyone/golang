@@ -14,6 +14,7 @@ TMP1=test_tmp1.go
 TMP2=test_tmp2.go
 TMP3=test_tmp3.go
 COUNT=0
+rm -f _failed
 
 count() {
 	#echo $1
@@ -27,9 +28,8 @@ count() {
 
 error() {
 	echo $1
-	exit 1
+	touch _failed
 }
-
 
 # apply to one file
 apply1() {
@@ -43,7 +43,8 @@ apply1() {
 	bug226.go | bug228.go | bug248.go | bug274.go | bug280.go | \
 	bug282.go | bug287.go | bug298.go | bug299.go | bug300.go | \
 	bug302.go | bug306.go | bug322.go | bug324.go | bug335.go | \
-	bug340.go | bug349.go | bug351.go | bug358.go ) return ;;
+	bug340.go | bug349.go | bug351.go | bug358.go | bug367.go | \
+	bug388.go | bug394.go ) return ;;
 	esac
 	# the following directories are skipped because they contain test
 	# cases for syntax errors and thus won't parse in the first place:
@@ -156,6 +157,11 @@ runtests() {
 # run over all .go files
 runtests "$@"
 cleanup
+
+if [ -f _failed ]; then
+	rm _failed
+	exit 1
+fi
 
 # done
 echo

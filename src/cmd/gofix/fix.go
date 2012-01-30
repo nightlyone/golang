@@ -4,29 +4,47 @@
 
 package main
 
+/*
+receiver named error
+function named error
+method on error
+exiterror
+slice of named type (go/scanner)
+*/
+
 import (
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 )
 
 type fix struct {
 	name string
+	date string // date that fix was introduced, in YYYY-MM-DD format
 	f    func(*ast.File) bool
 	desc string
 }
 
-// main runs sort.Sort(fixes) after init process is done.
-type fixlist []fix
+// main runs sort.Sort(byName(fixes)) before printing list of fixes.
+type byName []fix
 
-func (f fixlist) Len() int           { return len(f) }
-func (f fixlist) Swap(i, j int)      { f[i], f[j] = f[j], f[i] }
-func (f fixlist) Less(i, j int) bool { return f[i].name < f[j].name }
+func (f byName) Len() int           { return len(f) }
+func (f byName) Swap(i, j int)      { f[i], f[j] = f[j], f[i] }
+func (f byName) Less(i, j int) bool { return f[i].name < f[j].name }
 
-var fixes fixlist
+// main runs sort.Sort(byDate(fixes)) before applying fixes.
+type byDate []fix
+
+func (f byDate) Len() int           { return len(f) }
+func (f byDate) Swap(i, j int)      { f[i], f[j] = f[j], f[i] }
+func (f byDate) Less(i, j int) bool { return f[i].date < f[j].date }
+
+var fixes []fix
 
 func register(f fix) {
 	fixes = append(fixes, f)
@@ -73,6 +91,8 @@ func walkBeforeAfter(x interface{}, before, after func(interface{})) {
 		walkBeforeAfter(*n, before, after)
 	case **ast.Ident:
 		walkBeforeAfter(*n, before, after)
+	case **ast.BasicLit:
+		walkBeforeAfter(*n, before, after)
 
 	// pointers to slices
 	case *[]ast.Decl:
@@ -90,7 +110,9 @@ func walkBeforeAfter(x interface{}, before, after func(interface{})) {
 
 	// These are ordered and grouped to match ../../pkg/go/ast/ast.go
 	case *ast.Field:
+		walkBeforeAfter(&n.Names, before, after)
 		walkBeforeAfter(&n.Type, before, after)
+		walkBeforeAfter(&n.Tag, before, after)
 	case *ast.FieldList:
 		for _, field := range n.List {
 			walkBeforeAfter(field, before, after)
@@ -292,6 +314,20 @@ func importPath(s *ast.ImportSpec) string {
 	return ""
 }
 
+// declImports reports whether gen contains an import of path.
+func declImports(gen *ast.GenDecl, path string) bool {
+	if gen.Tok != token.IMPORT {
+		return false
+	}
+	for _, spec := range gen.Specs {
+		impspec := spec.(*ast.ImportSpec)
+		if importPath(impspec) == path {
+			return true
+		}
+	}
+	return false
+}
+
 // isPkgDot returns true if t is the expression "pkg.name"
 // where pkg is an imported identifier.
 func isPkgDot(t ast.Expr, pkg, name string) bool {
@@ -446,66 +482,172 @@ func newPkgDot(pos token.Pos, pkg, name string) ast.Expr {
 	}
 }
 
-// addImport adds the import path to the file f, if absent.
-func addImport(f *ast.File, path string) {
-	if imports(f, path) {
-		return
+// renameTop renames all references to the top-level name old.
+// It returns true if it makes any changes.
+func renameTop(f *ast.File, old, new string) bool {
+	var fixed bool
+
+	// Rename any conflicting imports
+	// (assuming package name is last element of path).
+	for _, s := range f.Imports {
+		if s.Name != nil {
+			if s.Name.Name == old {
+				s.Name.Name = new
+				fixed = true
+			}
+		} else {
+			_, thisName := path.Split(importPath(s))
+			if thisName == old {
+				s.Name = ast.NewIdent(new)
+				fixed = true
+			}
+		}
 	}
+
+	// Rename any top-level declarations.
+	for _, d := range f.Decls {
+		switch d := d.(type) {
+		case *ast.FuncDecl:
+			if d.Recv == nil && d.Name.Name == old {
+				d.Name.Name = new
+				d.Name.Obj.Name = new
+				fixed = true
+			}
+		case *ast.GenDecl:
+			for _, s := range d.Specs {
+				switch s := s.(type) {
+				case *ast.TypeSpec:
+					if s.Name.Name == old {
+						s.Name.Name = new
+						s.Name.Obj.Name = new
+						fixed = true
+					}
+				case *ast.ValueSpec:
+					for _, n := range s.Names {
+						if n.Name == old {
+							n.Name = new
+							n.Obj.Name = new
+							fixed = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Rename top-level old to new, both unresolved names
+	// (probably defined in another file) and names that resolve
+	// to a declaration we renamed.
+	walk(f, func(n interface{}) {
+		id, ok := n.(*ast.Ident)
+		if ok && isTopName(id, old) {
+			id.Name = new
+			fixed = true
+		}
+		if ok && id.Obj != nil && id.Name == old && id.Obj.Name == new {
+			id.Name = id.Obj.Name
+			fixed = true
+		}
+	})
+
+	return fixed
+}
+
+// matchLen returns the length of the longest prefix shared by x and y.
+func matchLen(x, y string) int {
+	i := 0
+	for i < len(x) && i < len(y) && x[i] == y[i] {
+		i++
+	}
+	return i
+}
+
+// addImport adds the import path to the file f, if absent.
+func addImport(f *ast.File, ipath string) (added bool) {
+	if imports(f, ipath) {
+		return false
+	}
+
+	// Determine name of import.
+	// Assume added imports follow convention of using last element.
+	_, name := path.Split(ipath)
+
+	// Rename any conflicting top-level references from name to name_.
+	renameTop(f, name, name+"_")
 
 	newImport := &ast.ImportSpec{
 		Path: &ast.BasicLit{
 			Kind:  token.STRING,
-			Value: strconv.Quote(path),
+			Value: strconv.Quote(ipath),
 		},
 	}
 
-	var impdecl *ast.GenDecl
-
 	// Find an import decl to add to.
-	for _, decl := range f.Decls {
+	var (
+		bestMatch  = -1
+		lastImport = -1
+		impDecl    *ast.GenDecl
+		impIndex   = -1
+	)
+	for i, decl := range f.Decls {
 		gen, ok := decl.(*ast.GenDecl)
-
 		if ok && gen.Tok == token.IMPORT {
-			impdecl = gen
-			break
+			lastImport = i
+			// Do not add to import "C", to avoid disrupting the
+			// association with its doc comment, breaking cgo.
+			if declImports(gen, "C") {
+				continue
+			}
+
+			// Compute longest shared prefix with imports in this block.
+			for j, spec := range gen.Specs {
+				impspec := spec.(*ast.ImportSpec)
+				n := matchLen(importPath(impspec), ipath)
+				if n > bestMatch {
+					bestMatch = n
+					impDecl = gen
+					impIndex = j
+				}
+			}
 		}
 	}
 
-	// No import decl found.  Add one.
-	if impdecl == nil {
-		impdecl = &ast.GenDecl{
+	// If no import decl found, add one after the last import.
+	if impDecl == nil {
+		impDecl = &ast.GenDecl{
 			Tok: token.IMPORT,
 		}
 		f.Decls = append(f.Decls, nil)
-		copy(f.Decls[1:], f.Decls)
-		f.Decls[0] = impdecl
+		copy(f.Decls[lastImport+2:], f.Decls[lastImport+1:])
+		f.Decls[lastImport+1] = impDecl
 	}
 
 	// Ensure the import decl has parentheses, if needed.
-	if len(impdecl.Specs) > 0 && !impdecl.Lparen.IsValid() {
-		impdecl.Lparen = impdecl.Pos()
+	if len(impDecl.Specs) > 0 && !impDecl.Lparen.IsValid() {
+		impDecl.Lparen = impDecl.Pos()
 	}
 
-	// Assume the import paths are alphabetically ordered.
-	// If they are not, the result is ugly, but legal.
-	insertAt := len(impdecl.Specs) // default to end of specs
-	for i, spec := range impdecl.Specs {
-		impspec := spec.(*ast.ImportSpec)
-		if importPath(impspec) > path {
-			insertAt = i
-			break
-		}
+	insertAt := impIndex + 1
+	if insertAt == 0 {
+		insertAt = len(impDecl.Specs)
 	}
-
-	impdecl.Specs = append(impdecl.Specs, nil)
-	copy(impdecl.Specs[insertAt+1:], impdecl.Specs[insertAt:])
-	impdecl.Specs[insertAt] = newImport
+	impDecl.Specs = append(impDecl.Specs, nil)
+	copy(impDecl.Specs[insertAt+1:], impDecl.Specs[insertAt:])
+	impDecl.Specs[insertAt] = newImport
+	if insertAt > 0 {
+		// Assign same position as the previous import,
+		// so that the sorter sees it as being in the same block.
+		prev := impDecl.Specs[insertAt-1]
+		newImport.Path.ValuePos = prev.Pos()
+		newImport.EndPos = prev.Pos()
+	}
 
 	f.Imports = append(f.Imports, newImport)
+	return true
 }
 
 // deleteImport deletes the import path from the file f, if present.
-func deleteImport(f *ast.File, path string) {
+func deleteImport(f *ast.File, path string) (deleted bool) {
 	oldImport := importSpec(f, path)
 
 	// Find the import node that imports path, if any.
@@ -516,13 +658,13 @@ func deleteImport(f *ast.File, path string) {
 		}
 		for j, spec := range gen.Specs {
 			impspec := spec.(*ast.ImportSpec)
-
 			if oldImport != impspec {
 				continue
 			}
 
 			// We found an import spec that imports path.
 			// Delete it.
+			deleted = true
 			copy(gen.Specs[j:], gen.Specs[j+1:])
 			gen.Specs = gen.Specs[:len(gen.Specs)-1]
 
@@ -534,7 +676,13 @@ func deleteImport(f *ast.File, path string) {
 			} else if len(gen.Specs) == 1 {
 				gen.Lparen = token.NoPos // drop parens
 			}
-
+			if j > 0 {
+				// We deleted an entry but now there will be
+				// a blank line-sized hole where the import was.
+				// Close the hole by making the previous
+				// import appear to "end" where this one did.
+				gen.Specs[j-1].(*ast.ImportSpec).EndPos = impspec.End()
+			}
 			break
 		}
 	}
@@ -547,6 +695,22 @@ func deleteImport(f *ast.File, path string) {
 			break
 		}
 	}
+
+	return
+}
+
+// rewriteImport rewrites any import of path oldPath to path newPath.
+func rewriteImport(f *ast.File, oldPath, newPath string) (rewrote bool) {
+	for _, imp := range f.Imports {
+		if importPath(imp) == oldPath {
+			rewrote = true
+			// record old End, beacuse the default is to compute
+			// it using the length of imp.Path.Value.
+			imp.EndPos = imp.End()
+			imp.Path.Value = strconv.Quote(newPath)
+		}
+	}
+	return
 }
 
 func usesImport(f *ast.File, path string) (used bool) {
@@ -579,4 +743,12 @@ func usesImport(f *ast.File, path string) (used bool) {
 	})
 
 	return
+}
+
+func expr(s string) ast.Expr {
+	x, err := parser.ParseExpr(s)
+	if err != nil {
+		panic("parsing " + s + ": " + err.Error())
+	}
+	return x
 }

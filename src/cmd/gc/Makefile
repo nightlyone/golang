@@ -24,15 +24,17 @@ OFILES=\
 	dcl.$O\
 	esc.$O\
 	export.$O\
+	fmt.$O\
 	gen.$O\
 	init.$O\
+	inl.$O\
 	lex.$O\
 	md5.$O\
 	mparith1.$O\
 	mparith2.$O\
 	mparith3.$O\
 	obj.$O\
-	print.$O\
+	order.$O\
 	range.$O\
 	reflect.$O\
 	select.$O\
@@ -43,6 +45,8 @@ OFILES=\
 	unsafe.$O\
 	walk.$O\
 	y1.tab.$O\
+
+HOST_CFLAGS+=-DGOEXPERIMENT='"$(GOEXPERIMENT)"' 
 
 NOINSTALL=1
 include ../../Make.clib
@@ -60,7 +64,7 @@ subr.$O: yerr.h
 builtin.c: builtin.c.boot
 	cp builtin.c.boot builtin.c
 
-subr.$O: opnames.h
+fmt.$O: opnames.h
 
 opnames.h:	mkopnames go.h
 	./mkopnames go.h >opnames.h

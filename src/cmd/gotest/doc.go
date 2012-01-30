@@ -26,6 +26,26 @@ signature,
 
 	func BenchmarkXXX(b *testing.B) { ... }
 
+Example functions may also be written. They are similar to test functions but,
+instead of using *testing.T to report success or failure, their output to
+os.Stdout and os.Stderr is compared against their doc comment.
+
+	// The output of this example function.
+	func ExampleXXX() {
+		fmt.Println("The output of this example function.")
+	}
+
+The following naming conventions are used to declare examples for a function F, 
+a type T and method M on type T:
+	 func ExampleF() { ... }     and    func ExampleF_suffix() { ... } 
+	 func ExampleT() { ... }     and    func ExampleT_suffix() { ... }
+	 func ExampleT_M() { ... }   and    func ExampleT_M_suffix() { ... }
+
+Multiple example functions may be provided by appending a distinct suffix
+to the name.  The suffix must start with a lowercase letter.
+
+Example functions without doc comments are compiled but not executed.
+
 See the documentation of the testing package for more information.
 
 By default, gotest needs no arguments.  It compiles all the .go files
@@ -54,7 +74,8 @@ Usage:
 	6.out [-test.v] [-test.run pattern] [-test.bench pattern] \
 		[-test.cpuprofile=cpu.out] \
 		[-test.memprofile=mem.out] [-test.memprofilerate=1] \
-		[-test.timeout=10] [-test.short] \
+		[-test.parallel=$GOMAXPROCS] \
+		[-test.timeout=10s] [-test.short] \
 		[-test.benchtime=3] [-test.cpu=1,2,3,4]
 
 The -test.v flag causes the tests to be logged as they run.  The
@@ -86,12 +107,17 @@ collection.
 Use -test.run or -test.bench to limit profiling to a particular test
 or benchmark.
 
+The -test.parallel flag allows parallel execution of Test functions
+that call test.Parallel.  The value of the flag is the maximum
+number of tests to run simultaneously; by default, it is set to the
+value of GOMAXPROCS.
+
 The -test.short flag tells long-running tests to shorten their run
 time.  It is off by default but set by all.bash so installations of
 the Go tree can do a sanity check but not spend time running
 exhaustive tests.
 
-The -test.timeout flag sets a timeout for the test in seconds.  If the
+The -test.timeout flag sets a timeout for the test.  If the
 test runs for longer than that, it will panic, dumping a stack trace
 of all existing goroutines.
 

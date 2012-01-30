@@ -1,12 +1,16 @@
+// Copyright 2011 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package main
 
 import (
-	"http"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 )
@@ -32,7 +36,7 @@ func main() {
 		log.Fatal("no url supplied")
 	}
 	var r *http.Response
-	var err os.Error
+	var err error
 	if *post != "" {
 		b := strings.NewReader(*post)
 		r, err = http.Post(url, "application/x-www-form-urlencoded", b)

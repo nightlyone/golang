@@ -13,9 +13,9 @@
 // and figure out exactly what we want.
 
 #include "runtime.h"
-#include "defs.h"
-#include "os.h"
-#include "arch.h"
+#include "defs_GOOS_GOARCH.h"
+#include "os_GOOS.h"
+#include "arch_GOARCH.h"
 
 extern byte pclntab[], epclntab[], symtab[], esymtab[];
 
@@ -379,6 +379,15 @@ runtime·funcline(Func *f, uintptr targetpc)
 		pc += pcquant;
 	}
 	return line;
+}
+
+void
+runtime·funcline_go(Func *f, uintptr targetpc, String retfile, int32 retline)
+{
+	retfile = f->src;
+	retline = runtime·funcline(f, targetpc);
+	FLUSH(&retfile);
+	FLUSH(&retline);
 }
 
 static void

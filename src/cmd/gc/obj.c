@@ -23,7 +23,7 @@ dumpobj(void)
 		errorexit();
 	}
 
-	Bprint(bout, "go object %s %s %s\n", getgoos(), thestring, getgoversion());
+	Bprint(bout, "go object %s %s %s %s\n", getgoos(), thestring, getgoversion(), expstring());
 	Bprint(bout, "  exports automatically generated from\n");
 	Bprint(bout, "  %s in package \"%s\"\n", curio.infile, localpkg->name);
 	dumpexport();
@@ -52,7 +52,7 @@ dumpglobls(void)
 			continue;
 
 		if(n->type == T)
-			fatal("external %#N nil type\n", n);
+			fatal("external %N nil type\n", n);
 		if(n->class == PFUNC)
 			continue;
 		if(n->sym->pkg != localpkg)
@@ -267,6 +267,7 @@ stringsym(char *s, int len)
 	if(sym->flags & SymUniq)
 		return sym;
 	sym->flags |= SymUniq;
+	sym->def = newname(sym);
 
 	off = 0;
 	

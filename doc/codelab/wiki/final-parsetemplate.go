@@ -1,11 +1,14 @@
+// Copyright 2010 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package main
 
 import (
-	"http"
 	"io/ioutil"
-	"os"
+	"net/http"
 	"regexp"
-	"template"
+	"text/template"
 )
 
 type Page struct {
@@ -13,12 +16,12 @@ type Page struct {
 	Body  []byte
 }
 
-func (p *Page) save() os.Error {
+func (p *Page) save() error {
 	filename := p.Title + ".txt"
 	return ioutil.WriteFile(filename, p.Body, 0600)
 }
 
-func loadPage(title string) (*Page, os.Error) {
+func loadPage(title string) (*Page, error) {
 	filename := title + ".txt"
 	body, err := ioutil.ReadFile(filename)
 	if err != nil {
@@ -49,21 +52,21 @@ func saveHandler(w http.ResponseWriter, r *http.Request, title string) {
 	p := &Page{Title: title, Body: []byte(body)}
 	err := p.save()
 	if err != nil {
-		http.Error(w, err.String(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	http.Redirect(w, r, "/view/"+title, http.StatusFound)
 }
 
 func renderTemplate(w http.ResponseWriter, tmpl string, p *Page) {
-	t, err := template.ParseFile(tmpl+".html", nil)
+	t, err := template.ParseFiles(tmpl+".html", nil)
 	if err != nil {
-		http.Error(w, err.String(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	err = t.Execute(w, p)
 	if err != nil {
-		http.Error(w, err.String(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 

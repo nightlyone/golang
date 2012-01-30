@@ -18,20 +18,23 @@ type PositionTest struct {
 type positionFunc func(rb *reorderBuffer, s string) int
 
 func runPosTests(t *testing.T, name string, f Form, fn positionFunc, tests []PositionTest) {
-	rb := reorderBuffer{f: *formTable[f]}
+	rb := reorderBuffer{}
+	rb.init(f, nil)
 	for i, test := range tests {
 		rb.reset()
+		rb.src = inputString(test.input)
+		rb.nsrc = len(test.input)
 		pos := fn(&rb, test.input)
 		if pos != test.pos {
 			t.Errorf("%s:%d: position is %d; want %d", name, i, pos, test.pos)
 		}
-		runes := []int(test.buffer)
+		runes := []rune(test.buffer)
 		if rb.nrune != len(runes) {
 			t.Errorf("%s:%d: reorder buffer lenght is %d; want %d", name, i, rb.nrune, len(runes))
 			continue
 		}
 		for j, want := range runes {
-			found := int(rb.runeAt(j))
+			found := rune(rb.runeAt(j))
 			if found != want {
 				t.Errorf("%s:%d: rune at %d is %U; want %U", name, i, j, found, want)
 			}
@@ -60,7 +63,9 @@ var decomposeSegmentTests = []PositionTest{
 }
 
 func decomposeSegmentF(rb *reorderBuffer, s string) int {
-	return decomposeSegment(rb, []byte(s))
+	rb.src = inputString(s)
+	rb.nsrc = len(s)
+	return decomposeSegment(rb, 0)
 }
 
 func TestDecomposeSegment(t *testing.T) {
@@ -90,12 +95,17 @@ var firstBoundaryTests = []PositionTest{
 	{strings.Repeat("\u0300", maxCombiningChars+1), 60, ""},
 }
 
-func firstBoundary(rb *reorderBuffer, s string) int {
+func firstBoundaryF(rb *reorderBuffer, s string) int {
 	return rb.f.form.FirstBoundary([]byte(s))
 }
 
+func firstBoundaryStringF(rb *reorderBuffer, s string) int {
+	return rb.f.form.FirstBoundaryInString(s)
+}
+
 func TestFirstBoundary(t *testing.T) {
-	runPosTests(t, "TestFirstBoundary", NFC, firstBoundary, firstBoundaryTests)
+	runPosTests(t, "TestFirstBoundary", NFC, firstBoundaryF, firstBoundaryTests)
+	runPosTests(t, "TestFirstBoundaryInString", NFC, firstBoundaryStringF, firstBoundaryTests)
 }
 
 var decomposeToLastTests = []PositionTest{
@@ -243,7 +253,7 @@ var quickSpanNFDTests = []PositionTest{
 	{"\u0316\u0300cd", 6, ""},
 	{"\u043E\u0308b", 5, ""},
 	// incorrectly ordered combining characters
-	{"ab\u0300\u0316", 1, ""}, // TODO(mpvl): we could skip 'b' as well.
+	{"ab\u0300\u0316", 1, ""}, // TODO: we could skip 'b' as well.
 	{"ab\u0300\u0316cd", 1, ""},
 	// Hangul
 	{"같은", 0, ""},
@@ -275,11 +285,20 @@ func doQuickSpan(rb *reorderBuffer, s string) int {
 	return rb.f.form.QuickSpan([]byte(s))
 }
 
+func doQuickSpanString(rb *reorderBuffer, s string) int {
+	return rb.f.form.QuickSpanString(s)
+}
+
 func TestQuickSpan(t *testing.T) {
 	runPosTests(t, "TestQuickSpanNFD1", NFD, doQuickSpan, quickSpanTests)
 	runPosTests(t, "TestQuickSpanNFD2", NFD, doQuickSpan, quickSpanNFDTests)
 	runPosTests(t, "TestQuickSpanNFC1", NFC, doQuickSpan, quickSpanTests)
 	runPosTests(t, "TestQuickSpanNFC2", NFC, doQuickSpan, quickSpanNFCTests)
+
+	runPosTests(t, "TestQuickSpanStringNFD1", NFD, doQuickSpanString, quickSpanTests)
+	runPosTests(t, "TestQuickSpanStringNFD2", NFD, doQuickSpanString, quickSpanNFDTests)
+	runPosTests(t, "TestQuickSpanStringNFC1", NFC, doQuickSpanString, quickSpanTests)
+	runPosTests(t, "TestQuickSpanStringNFC2", NFC, doQuickSpanString, quickSpanNFCTests)
 }
 
 var isNormalTests = []PositionTest{
@@ -334,7 +353,7 @@ var isNormalNFCTests = []PositionTest{
 	{"같은", 1, ""},
 }
 
-func isNormal(rb *reorderBuffer, s string) int {
+func isNormalF(rb *reorderBuffer, s string) int {
 	if rb.f.form.IsNormal([]byte(s)) {
 		return 1
 	}
@@ -342,10 +361,10 @@ func isNormal(rb *reorderBuffer, s string) int {
 }
 
 func TestIsNormal(t *testing.T) {
-	runPosTests(t, "TestIsNormalNFD1", NFD, isNormal, isNormalTests)
-	runPosTests(t, "TestIsNormalNFD2", NFD, isNormal, isNormalNFDTests)
-	runPosTests(t, "TestIsNormalNFC1", NFC, isNormal, isNormalTests)
-	runPosTests(t, "TestIsNormalNFC2", NFC, isNormal, isNormalNFCTests)
+	runPosTests(t, "TestIsNormalNFD1", NFD, isNormalF, isNormalTests)
+	runPosTests(t, "TestIsNormalNFD2", NFD, isNormalF, isNormalNFDTests)
+	runPosTests(t, "TestIsNormalNFC1", NFC, isNormalF, isNormalTests)
+	runPosTests(t, "TestIsNormalNFC2", NFC, isNormalF, isNormalNFCTests)
 }
 
 type AppendTest struct {
@@ -366,8 +385,8 @@ func runAppendTests(t *testing.T, name string, f Form, fn appendFunc, tests []Ap
 		}
 		if outs != test.out {
 			// Find first rune that differs and show context.
-			ir := []int(outs)
-			ig := []int(test.out)
+			ir := []rune(outs)
+			ig := []rune(test.out)
 			for j := 0; j < len(ir) && j < len(ig); j++ {
 				if ir[j] == ig[j] {
 					continue
@@ -446,14 +465,34 @@ var appendTests = []AppendTest{
 	{"\u0300", "\xFC\x80\x80\x80\x80\x80\u0300", "\u0300\xFC\x80\x80\x80\x80\x80\u0300"},
 	{"\xF8\x80\x80\x80\x80\u0300", "\u0300", "\xF8\x80\x80\x80\x80\u0300\u0300"},
 	{"\xFC\x80\x80\x80\x80\x80\u0300", "\u0300", "\xFC\x80\x80\x80\x80\x80\u0300\u0300"},
+	{"\xF8\x80\x80\x80", "\x80\u0300\u0300", "\xF8\x80\x80\x80\x80\u0300\u0300"},
 }
 
 func appendF(f Form, out []byte, s string) []byte {
 	return f.Append(out, []byte(s)...)
 }
 
+func appendStringF(f Form, out []byte, s string) []byte {
+	return f.AppendString(out, s)
+}
+
+func bytesF(f Form, out []byte, s string) []byte {
+	buf := []byte{}
+	buf = append(buf, out...)
+	buf = append(buf, s...)
+	return f.Bytes(buf)
+}
+
+func stringF(f Form, out []byte, s string) []byte {
+	outs := string(out) + s
+	return []byte(f.String(outs))
+}
+
 func TestAppend(t *testing.T) {
 	runAppendTests(t, "TestAppend", NFKC, appendF, appendTests)
+	runAppendTests(t, "TestAppendString", NFKC, appendStringF, appendTests)
+	runAppendTests(t, "TestBytes", NFKC, bytesF, appendTests)
+	runAppendTests(t, "TestString", NFKC, stringF, appendTests)
 }
 
 func doFormBenchmark(b *testing.B, f Form, s string) {
@@ -485,19 +524,15 @@ func BenchmarkNormalizeAsciiNFKD(b *testing.B) {
 
 func doTextBenchmark(b *testing.B, s string) {
 	b.StopTimer()
-	in := make([]byte, len(s))
-	for i := range s {
-		in[i] = s[i]
-	}
-	// Using copy(in, s) makes many tests much slower!?
 	b.SetBytes(int64(len(s)) * 4)
-	var buf = make([]byte, 2*len(in))
+	in := []byte(s)
+	var buf = make([]byte, 0, 2*len(in))
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		buf = NFC.Append(buf[0:0], in...)
-		buf = NFD.Append(buf[0:0], in...)
-		buf = NFKC.Append(buf[0:0], in...)
-		buf = NFKD.Append(buf[0:0], in...)
+		NFC.Append(buf, in...)
+		NFD.Append(buf, in...)
+		NFKC.Append(buf, in...)
+		NFKD.Append(buf, in...)
 	}
 }
 

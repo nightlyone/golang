@@ -4,26 +4,20 @@
 
 package main
 
-import (
-	"fmt"
-	"os"
-	"go/ast"
-)
+import "go/ast"
 
-var _ fmt.Stringer
-var _ os.Error
+func init() {
+	register(urlFix)
+}
 
 var urlFix = fix{
 	"url",
+	"2011-08-17",
 	url,
 	`Move the URL pieces of package http into a new package, url.
 
 http://codereview.appspot.com/4893043
 `,
-}
-
-func init() {
-	register(urlFix)
 }
 
 var urlRenames = []struct{ in, out string }{
@@ -46,12 +40,7 @@ func url(f *ast.File) bool {
 	fixed := false
 
 	// Update URL code.
-	var skip interface{}
 	urlWalk := func(n interface{}) {
-		if n == skip {
-			skip = nil
-			return
-		}
 		// Is it an identifier?
 		if ident, ok := n.(*ast.Ident); ok && ident.Name == "url" {
 			ident.Name = "url_"
@@ -62,12 +51,6 @@ func url(f *ast.File) bool {
 			fixed = urlDoFields(fn.Params) || fixed
 			fixed = urlDoFields(fn.Results) || fixed
 		}
-		// U{url: ...} is likely a struct field.
-		if kv, ok := n.(*ast.KeyValueExpr); ok {
-			if ident, ok := kv.Key.(*ast.Ident); ok && ident.Name == "url" {
-				skip = ident
-			}
-		}
 	}
 
 	// Fix up URL code and add import, at most once.
@@ -75,8 +58,8 @@ func url(f *ast.File) bool {
 		if fixed {
 			return
 		}
-		walkBeforeAfter(f, urlWalk, nop)
 		addImport(f, "url")
+		walkBeforeAfter(f, urlWalk, nop)
 		fixed = true
 	}
 

@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 )
 
-func parseFile(fset *token.FileSet, filename string, mode uint) (*ast.File, os.Error) {
+func parseFile(fset *token.FileSet, filename string, mode parser.Mode) (*ast.File, error) {
 	src, err := ReadFile(fs, filename)
 	if err != nil {
 		return nil, err
@@ -25,7 +25,7 @@ func parseFile(fset *token.FileSet, filename string, mode uint) (*ast.File, os.E
 	return parser.ParseFile(fset, filename, src, mode)
 }
 
-func parseFiles(fset *token.FileSet, filenames []string) (pkgs map[string]*ast.Package, first os.Error) {
+func parseFiles(fset *token.FileSet, filenames []string) (pkgs map[string]*ast.Package, first error) {
 	pkgs = make(map[string]*ast.Package)
 	for _, filename := range filenames {
 		file, err := parseFile(fset, filename, parser.ParseComments)
@@ -48,7 +48,7 @@ func parseFiles(fset *token.FileSet, filenames []string) (pkgs map[string]*ast.P
 	return
 }
 
-func parseDir(fset *token.FileSet, path string, filter func(FileInfo) bool) (map[string]*ast.Package, os.Error) {
+func parseDir(fset *token.FileSet, path string, filter func(os.FileInfo) bool) (map[string]*ast.Package, error) {
 	list, err := fs.ReadDir(path)
 	if err != nil {
 		return nil, err
