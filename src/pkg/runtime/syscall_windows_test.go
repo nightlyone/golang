@@ -5,29 +5,40 @@
 package runtime_test
 
 import (
+	"runtime"
 	"syscall"
-	"unsafe"
 	"testing"
+	"unsafe"
 )
+
+type DLL struct {
+	*syscall.DLL
+	t *testing.T
+}
+
+func GetDLL(t *testing.T, name string) *DLL {
+	d, e := syscall.LoadDLL(name)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return &DLL{DLL: d, t: t}
+}
+
+func (d *DLL) Proc(name string) *syscall.Proc {
+	p, e := d.FindProc(name)
+	if e != nil {
+		d.t.Fatal(e)
+	}
+	return p
+}
 
 func TestStdCall(t *testing.T) {
 	type Rect struct {
 		left, top, right, bottom int32
 	}
-
-	h, e := syscall.LoadLibrary("user32.dll")
-	if e != 0 {
-		t.Fatal("LoadLibrary(USER32)")
-	}
-	p, e := syscall.GetProcAddress(h, "UnionRect")
-	if e != 0 {
-		t.Fatal("GetProcAddress(USER32.UnionRect)")
-	}
-
 	res := Rect{}
 	expected := Rect{1, 1, 40, 60}
-	a, _, _ := syscall.Syscall(uintptr(p),
-		3,
+	a, _, _ := GetDLL(t, "user32.dll").Proc("UnionRect").Call(
 		uintptr(unsafe.Pointer(&res)),
 		uintptr(unsafe.Pointer(&Rect{10, 1, 14, 60})),
 		uintptr(unsafe.Pointer(&Rect{1, 2, 40, 50})))
@@ -57,7 +68,7 @@ func Test64BitReturnStdCall(t *testing.T) {
 		VER_LESS          = 4
 		VER_LESS_EQUAL    = 5
 
-		ERROR_OLD_WIN_VERSION = 1150
+		ERROR_OLD_WIN_VERSION syscall.Errno = 1150
 	)
 
 	type OSVersionInfoEx struct {
@@ -74,24 +85,14 @@ func Test64BitReturnStdCall(t *testing.T) {
 		Reserve           byte
 	}
 
-	kernel32, e := syscall.LoadLibrary("kernel32.dll")
-	if e != 0 {
-		t.Fatalf("LoadLibrary(kernel32.dll) failed: %s", syscall.Errstr(e))
-	}
-	setMask, e := syscall.GetProcAddress(kernel32, "VerSetConditionMask")
-	if e != 0 {
-		t.Fatalf("GetProcAddress(kernel32.dll, VerSetConditionMask) failed: %s", syscall.Errstr(e))
-	}
-	verifyVersion, e := syscall.GetProcAddress(kernel32, "VerifyVersionInfoW")
-	if e != 0 {
-		t.Fatalf("GetProcAddress(kernel32.dll, VerifyVersionInfoW) failed: %s", syscall.Errstr(e))
-	}
+	d := GetDLL(t, "kernel32.dll")
 
 	var m1, m2 uintptr
-	m1, m2, _ = syscall.Syscall6(setMask, 4, m1, m2, VER_MAJORVERSION, VER_GREATER_EQUAL, 0, 0)
-	m1, m2, _ = syscall.Syscall6(setMask, 4, m1, m2, VER_MINORVERSION, VER_GREATER_EQUAL, 0, 0)
-	m1, m2, _ = syscall.Syscall6(setMask, 4, m1, m2, VER_SERVICEPACKMAJOR, VER_GREATER_EQUAL, 0, 0)
-	m1, m2, _ = syscall.Syscall6(setMask, 4, m1, m2, VER_SERVICEPACKMINOR, VER_GREATER_EQUAL, 0, 0)
+	VerSetConditionMask := d.Proc("VerSetConditionMask")
+	m1, m2, _ = VerSetConditionMask.Call(m1, m2, VER_MAJORVERSION, VER_GREATER_EQUAL)
+	m1, m2, _ = VerSetConditionMask.Call(m1, m2, VER_MINORVERSION, VER_GREATER_EQUAL)
+	m1, m2, _ = VerSetConditionMask.Call(m1, m2, VER_SERVICEPACKMAJOR, VER_GREATER_EQUAL)
+	m1, m2, _ = VerSetConditionMask.Call(m1, m2, VER_SERVICEPACKMINOR, VER_GREATER_EQUAL)
 
 	vi := OSVersionInfoEx{
 		MajorVersion:     5,
@@ -100,69 +101,141 @@ func Test64BitReturnStdCall(t *testing.T) {
 		ServicePackMinor: 0,
 	}
 	vi.OSVersionInfoSize = uint32(unsafe.Sizeof(vi))
-	r, _, e2 := syscall.Syscall6(verifyVersion,
-		4,
+	r, _, e2 := d.Proc("VerifyVersionInfoW").Call(
 		uintptr(unsafe.Pointer(&vi)),
 		VER_MAJORVERSION|VER_MINORVERSION|VER_SERVICEPACKMAJOR|VER_SERVICEPACKMINOR,
-		m1, m2, 0, 0)
+		m1, m2)
 	if r == 0 && e2 != ERROR_OLD_WIN_VERSION {
-		t.Errorf("VerifyVersionInfo failed: (%d) %s", e2, syscall.Errstr(int(e2)))
+		t.Errorf("VerifyVersionInfo failed: %s", e2)
 	}
 }
 
 func TestCDecl(t *testing.T) {
-	h, e := syscall.LoadLibrary("user32.dll")
-	if e != 0 {
-		t.Fatal("LoadLibrary(USER32)")
-	}
-	p, e := syscall.GetProcAddress(h, "wsprintfA")
-	if e != 0 {
-		t.Fatal("GetProcAddress(USER32.wsprintfA)")
-	}
-
 	var buf [50]byte
-	a, _, _ := syscall.Syscall6(uintptr(p),
-		5,
+	a, _, _ := GetDLL(t, "user32.dll").Proc("wsprintfA").Call(
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(unsafe.Pointer(syscall.StringBytePtr("%d %d %d"))),
-		1000, 2000, 3000, 0)
+		1000, 2000, 3000)
 	if string(buf[:a]) != "1000 2000 3000" {
 		t.Error("cdecl USER32.wsprintfA returns", a, "buf=", buf[:a])
 	}
 }
 
-func TestCallback(t *testing.T) {
-	h, e := syscall.LoadLibrary("user32.dll")
-	if e != 0 {
-		t.Fatal("LoadLibrary(USER32)")
-	}
-	pEnumWindows, e := syscall.GetProcAddress(h, "EnumWindows")
-	if e != 0 {
-		t.Fatal("GetProcAddress(USER32.EnumWindows)")
-	}
-	pIsWindow, e := syscall.GetProcAddress(h, "IsWindow")
-	if e != 0 {
-		t.Fatal("GetProcAddress(USER32.IsWindow)")
-	}
+func TestEnumWindows(t *testing.T) {
+	d := GetDLL(t, "user32.dll")
+	isWindows := d.Proc("IsWindow")
 	counter := 0
 	cb := syscall.NewCallback(func(hwnd syscall.Handle, lparam uintptr) uintptr {
 		if lparam != 888 {
 			t.Error("lparam was not passed to callback")
 		}
-		b, _, _ := syscall.Syscall(uintptr(pIsWindow), 1, uintptr(hwnd), 0, 0)
+		b, _, _ := isWindows.Call(uintptr(hwnd))
 		if b == 0 {
 			t.Error("USER32.IsWindow returns FALSE")
 		}
 		counter++
 		return 1 // continue enumeration
 	})
-	a, _, _ := syscall.Syscall(uintptr(pEnumWindows), 2, cb, 888, 0)
+	a, _, _ := d.Proc("EnumWindows").Call(cb, 888)
 	if a == 0 {
 		t.Error("USER32.EnumWindows returns FALSE")
 	}
 	if counter == 0 {
 		t.Error("Callback has been never called or your have no windows")
 	}
+}
+
+func callback(hwnd syscall.Handle, lparam uintptr) uintptr {
+	(*(*func())(unsafe.Pointer(&lparam)))()
+	return 0 // stop enumeration
+}
+
+// nestedCall calls into Windows, back into Go, and finally to f.
+func nestedCall(t *testing.T, f func()) {
+	c := syscall.NewCallback(callback)
+	d := GetDLL(t, "user32.dll")
+	defer d.Release()
+	d.Proc("EnumWindows").Call(c, uintptr(*(*unsafe.Pointer)(unsafe.Pointer(&f))))
+}
+
+func TestCallback(t *testing.T) {
+	var x = false
+	nestedCall(t, func() { x = true })
+	if !x {
+		t.Fatal("nestedCall did not call func")
+	}
+}
+
+func TestCallbackGC(t *testing.T) {
+	nestedCall(t, runtime.GC)
+}
+
+func TestCallbackPanic(t *testing.T) {
+	// Make sure panic during callback unwinds properly.
+	if runtime.LockedOSThread() {
+		t.Fatal("locked OS thread on entry to TestCallbackPanic")
+	}
+	defer func() {
+		s := recover()
+		if s == nil {
+			t.Fatal("did not panic")
+		}
+		if s.(string) != "callback panic" {
+			t.Fatal("wrong panic:", s)
+		}
+		if runtime.LockedOSThread() {
+			t.Fatal("locked OS thread on exit from TestCallbackPanic")
+		}
+	}()
+	nestedCall(t, func() { panic("callback panic") })
+	panic("nestedCall returned")
+}
+
+func TestCallbackPanicLoop(t *testing.T) {
+	// Make sure we don't blow out m->g0 stack.
+	for i := 0; i < 100000; i++ {
+		TestCallbackPanic(t)
+	}
+}
+
+func TestCallbackPanicLocked(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	if !runtime.LockedOSThread() {
+		t.Fatal("runtime.LockOSThread didn't")
+	}
+	defer func() {
+		s := recover()
+		if s == nil {
+			t.Fatal("did not panic")
+		}
+		if s.(string) != "callback panic" {
+			t.Fatal("wrong panic:", s)
+		}
+		if !runtime.LockedOSThread() {
+			t.Fatal("lost lock on OS thread after panic")
+		}
+	}()
+	nestedCall(t, func() { panic("callback panic") })
+	panic("nestedCall returned")
+}
+
+func TestBlockingCallback(t *testing.T) {
+	c := make(chan int)
+	go func() {
+		for i := 0; i < 10; i++ {
+			c <- <-c
+		}
+	}()
+	nestedCall(t, func() {
+		for i := 0; i < 10; i++ {
+			c <- i
+			if j := <-c; j != i {
+				t.Errorf("out of sync %d != %d", j, i)
+			}
+		}
+	})
 }
 
 func TestCallbackInAnotherThread(t *testing.T) {

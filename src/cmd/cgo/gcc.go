@@ -14,6 +14,7 @@ import (
 	"debug/macho"
 	"debug/pe"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -23,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 var debugDefine = flag.Bool("debug-define", false, "print relevant #defines")
@@ -58,6 +60,9 @@ func cname(s string) string {
 	if strings.HasPrefix(s, "enum_") {
 		return "enum " + s[len("enum_"):]
 	}
+	if strings.HasPrefix(s, "sizeof_") {
+		return "sizeof(" + cname(s[len("sizeof_"):]) + ")"
+	}
 	return s
 }
 
@@ -71,7 +76,7 @@ func (p *Package) ParseFlags(f *File, srcfile string) {
 NextLine:
 	for _, line := range linesIn {
 		l := strings.TrimSpace(line)
-		if len(l) < 5 || l[:4] != "#cgo" || !unicode.IsSpace(int(l[4])) {
+		if len(l) < 5 || l[:4] != "#cgo" || !unicode.IsSpace(rune(l[4])) {
 			linesOut = append(linesOut, line)
 			continue
 		}
@@ -147,10 +152,10 @@ func (p *Package) addToFlag(flag string, args []string) {
 
 // pkgConfig runs pkg-config and extracts --libs and --cflags information
 // for packages.
-func pkgConfig(packages []string) (cflags, ldflags []string, err os.Error) {
+func pkgConfig(packages []string) (cflags, ldflags []string, err error) {
 	for _, name := range packages {
 		if len(name) == 0 || name[0] == '-' {
-			return nil, nil, os.NewError(fmt.Sprintf("invalid name: %q", name))
+			return nil, nil, errors.New(fmt.Sprintf("invalid name: %q", name))
 		}
 	}
 
@@ -158,7 +163,7 @@ func pkgConfig(packages []string) (cflags, ldflags []string, err os.Error) {
 	stdout, stderr, ok := run(nil, args)
 	if !ok {
 		os.Stderr.Write(stderr)
-		return nil, nil, os.NewError("pkg-config failed")
+		return nil, nil, errors.New("pkg-config failed")
 	}
 	cflags, err = splitQuoted(string(stdout))
 	if err != nil {
@@ -169,7 +174,7 @@ func pkgConfig(packages []string) (cflags, ldflags []string, err os.Error) {
 	stdout, stderr, ok = run(nil, args)
 	if !ok {
 		os.Stderr.Write(stderr)
-		return nil, nil, os.NewError("pkg-config failed")
+		return nil, nil, errors.New("pkg-config failed")
 	}
 	ldflags, err = splitQuoted(string(stdout))
 	return
@@ -191,30 +196,30 @@ func pkgConfig(packages []string) (cflags, ldflags []string, err os.Error) {
 //
 //     []string{"a", "b:c d", "ef", `g"`}
 //
-func splitQuoted(s string) (r []string, err os.Error) {
+func splitQuoted(s string) (r []string, err error) {
 	var args []string
-	arg := make([]int, len(s))
+	arg := make([]rune, len(s))
 	escaped := false
 	quoted := false
-	quote := 0
+	quote := '\x00'
 	i := 0
-	for _, rune := range s {
+	for _, r := range s {
 		switch {
 		case escaped:
 			escaped = false
-		case rune == '\\':
+		case r == '\\':
 			escaped = true
 			continue
 		case quote != 0:
-			if rune == quote {
+			if r == quote {
 				quote = 0
 				continue
 			}
-		case rune == '"' || rune == '\'':
+		case r == '"' || r == '\'':
 			quoted = true
-			quote = rune
+			quote = r
 			continue
-		case unicode.IsSpace(rune):
+		case unicode.IsSpace(r):
 			if quoted || i > 0 {
 				quoted = false
 				args = append(args, string(arg[:i]))
@@ -222,21 +227,21 @@ func splitQuoted(s string) (r []string, err os.Error) {
 			}
 			continue
 		}
-		arg[i] = rune
+		arg[i] = r
 		i++
 	}
 	if quoted || i > 0 {
 		args = append(args, string(arg[:i]))
 	}
 	if quote != 0 {
-		err = os.NewError("unclosed quote")
+		err = errors.New("unclosed quote")
 	} else if escaped {
-		err = os.NewError("unfinished escaping")
+		err = errors.New("unfinished escaping")
 	}
 	return args, err
 }
 
-var safeBytes = []byte("+-.,/0123456789=ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz")
+var safeBytes = []byte(`+-.,/0123456789:=ABCDEFGHIJKLMNOPQRSTUVWXYZ\_abcdefghijklmnopqrstuvwxyz`)
 
 func safeName(s string) bool {
 	if s == "" {
@@ -339,14 +344,22 @@ func (p *Package) guessKinds(f *File) []*Name {
 			if _, err := strconv.Atoi(n.Define); err == nil {
 				ok = true
 			} else if n.Define[0] == '"' || n.Define[0] == '\'' {
-				_, err := parser.ParseExpr(fset, "", n.Define)
-				if err == nil {
+				if _, err := parser.ParseExpr(n.Define); err == nil {
 					ok = true
 				}
 			}
 			if ok {
 				n.Kind = "const"
-				n.Const = n.Define
+				// Turn decimal into hex, just for consistency
+				// with enum-derived constants.  Otherwise
+				// in the cgo -godefs output half the constants
+				// are in hex and half are in whatever the #define used.
+				i, err := strconv.ParseInt(n.Define, 0, 64)
+				if err == nil {
+					n.Const = fmt.Sprintf("%#x", i)
+				} else {
+					n.Const = n.Define
+				}
 				continue
 			}
 
@@ -420,7 +433,7 @@ func (p *Package) guessKinds(f *File) []*Name {
 		case strings.Contains(line, ": statement with no effect"):
 			what = "not-type" // const or func or var
 		case strings.Contains(line, "undeclared"):
-			error(token.NoPos, "%s", strings.TrimSpace(line[colon+1:]))
+			error_(token.NoPos, "%s", strings.TrimSpace(line[colon+1:]))
 		case strings.Contains(line, "is not an integer constant"):
 			isConst[i] = false
 			continue
@@ -439,6 +452,11 @@ func (p *Package) guessKinds(f *File) []*Name {
 	for i, b := range isConst {
 		if b {
 			names[i].Kind = "const"
+			if toSniff[i] != nil && names[i].Const == "" {
+				j := len(needType)
+				needType = needType[0 : j+1]
+				needType[j] = names[i]
+			}
 		}
 	}
 	for _, n := range toSniff {
@@ -448,7 +466,7 @@ func (p *Package) guessKinds(f *File) []*Name {
 		if n.Kind != "" {
 			continue
 		}
-		error(token.NoPos, "could not determine kind of name for C.%s", n.Go)
+		error_(token.NoPos, "could not determine kind of name for C.%s", n.Go)
 	}
 	if nerrors > 0 {
 		fatalf("unresolved names")
@@ -576,6 +594,9 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 	var conv typeConv
 	conv.Init(p.PtrSize)
 	for i, n := range names {
+		if types[i] == nil {
+			continue
+		}
 		f, fok := types[i].(*dwarf.FuncType)
 		if n.Kind != "type" && fok {
 			n.Kind = "func"
@@ -585,12 +606,12 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 			if enums[i] != 0 && n.Type.EnumValues != nil {
 				k := fmt.Sprintf("__cgo_enum__%d", i)
 				n.Kind = "const"
-				n.Const = strconv.Itoa64(n.Type.EnumValues[k])
+				n.Const = fmt.Sprintf("%#x", n.Type.EnumValues[k])
 				// Remove injected enum to ensure the value will deep-compare
 				// equally in future loads of the same constant.
-				n.Type.EnumValues[k] = 0, false
+				delete(n.Type.EnumValues, k)
 			} else if n.Kind == "const" && i < len(enumVal) {
-				n.Const = strconv.Itoa64(enumVal[i])
+				n.Const = fmt.Sprintf("%#x", enumVal[i])
 			}
 		}
 	}
@@ -599,7 +620,8 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 
 // rewriteRef rewrites all the C.xxx references in f.AST to refer to the
 // Go equivalents, now that we have figured out the meaning of all
-// the xxx.
+// the xxx.  In *godefs or *cdefs mode, rewriteRef replaces the names
+// with full definitions instead of mangled names.
 func (p *Package) rewriteRef(f *File) {
 	// Assign mangled names.
 	for _, n := range f.Name {
@@ -617,7 +639,7 @@ func (p *Package) rewriteRef(f *File) {
 	// functions are only used in calls.
 	for _, r := range f.Ref {
 		if r.Name.Kind == "const" && r.Name.Const == "" {
-			error(r.Pos(), "unable to find value of constant C.%s", r.Name.Go)
+			error_(r.Pos(), "unable to find value of constant C.%s", r.Name.Go)
 		}
 		var expr ast.Expr = ast.NewIdent(r.Name.Mangle) // default
 		switch r.Context {
@@ -628,12 +650,12 @@ func (p *Package) rewriteRef(f *File) {
 					expr = r.Name.Type.Go
 					break
 				}
-				error(r.Pos(), "call of non-function C.%s", r.Name.Go)
+				error_(r.Pos(), "call of non-function C.%s", r.Name.Go)
 				break
 			}
 			if r.Context == "call2" {
 				if r.Name.FuncType.Result == nil {
-					error(r.Pos(), "assignment count mismatch: 2 = 0")
+					error_(r.Pos(), "assignment count mismatch: 2 = 0")
 				}
 				// Invent new Name for the two-result function.
 				n := f.Name["2"+r.Name.Go]
@@ -650,7 +672,7 @@ func (p *Package) rewriteRef(f *File) {
 			}
 		case "expr":
 			if r.Name.Kind == "func" {
-				error(r.Pos(), "must call C.%s", r.Name.Go)
+				error_(r.Pos(), "must call C.%s", r.Name.Go)
 			}
 			if r.Name.Kind == "type" {
 				// Okay - might be new(T)
@@ -662,13 +684,28 @@ func (p *Package) rewriteRef(f *File) {
 
 		case "type":
 			if r.Name.Kind != "type" {
-				error(r.Pos(), "expression C.%s used as type", r.Name.Go)
+				error_(r.Pos(), "expression C.%s used as type", r.Name.Go)
+			} else if r.Name.Type == nil {
+				// Use of C.enum_x, C.struct_x or C.union_x without C definition.
+				// GCC won't raise an error when using pointers to such unknown types.
+				error_(r.Pos(), "type C.%s: undefined C type '%s'", r.Name.Go, r.Name.C)
 			} else {
 				expr = r.Name.Type.Go
 			}
 		default:
 			if r.Name.Kind == "func" {
-				error(r.Pos(), "must call C.%s", r.Name.Go)
+				error_(r.Pos(), "must call C.%s", r.Name.Go)
+			}
+		}
+		if *godefs || *cdefs {
+			// Substitute definition for mangled type name.
+			if id, ok := expr.(*ast.Ident); ok {
+				if t := typedef[id.Name]; t != nil {
+					expr = t
+				}
+				if id.Name == r.Name.Mangle && r.Name.Const != "" {
+					expr = ast.NewIdent(r.Name.Const)
+				}
 			}
 		}
 		*r.Expr = expr
@@ -696,7 +733,9 @@ func (p *Package) gccMachine() []string {
 	return nil
 }
 
-var gccTmp = objDir + "_cgo_.o"
+func gccTmp() string {
+	return *objDir + "_cgo_.o"
+}
 
 // gccCmd returns the gcc command line to use for compiling
 // the input.
@@ -705,7 +744,7 @@ func (p *Package) gccCmd() []string {
 		p.gccName(),
 		"-Wall",                             // many warnings
 		"-Werror",                           // warnings are errors
-		"-o" + gccTmp,                       // write object to tmp
+		"-o" + gccTmp(),                     // write object to tmp
 		"-gdwarf-2",                         // generate DWARF v2 debugging symbols
 		"-fno-eliminate-unused-debug-types", // gets rid of e.g. untyped enum otherwise
 		"-c",                                // do not link
@@ -722,10 +761,10 @@ func (p *Package) gccCmd() []string {
 func (p *Package) gccDebug(stdin []byte) (*dwarf.Data, binary.ByteOrder, []byte) {
 	runGcc(stdin, p.gccCmd())
 
-	if f, err := macho.Open(gccTmp); err == nil {
+	if f, err := macho.Open(gccTmp()); err == nil {
 		d, err := f.DWARF()
 		if err != nil {
-			fatalf("cannot load DWARF output from %s: %v", gccTmp, err)
+			fatalf("cannot load DWARF output from %s: %v", gccTmp(), err)
 		}
 		var data []byte
 		if f.Symtab != nil {
@@ -751,23 +790,23 @@ func (p *Package) gccDebug(stdin []byte) (*dwarf.Data, binary.ByteOrder, []byte)
 	// Can skip debug data block in ELF and PE for now.
 	// The DWARF information is complete.
 
-	if f, err := elf.Open(gccTmp); err == nil {
+	if f, err := elf.Open(gccTmp()); err == nil {
 		d, err := f.DWARF()
 		if err != nil {
-			fatalf("cannot load DWARF output from %s: %v", gccTmp, err)
+			fatalf("cannot load DWARF output from %s: %v", gccTmp(), err)
 		}
 		return d, f.ByteOrder, nil
 	}
 
-	if f, err := pe.Open(gccTmp); err == nil {
+	if f, err := pe.Open(gccTmp()); err == nil {
 		d, err := f.DWARF()
 		if err != nil {
-			fatalf("cannot load DWARF output from %s: %v", gccTmp, err)
+			fatalf("cannot load DWARF output from %s: %v", gccTmp(), err)
 		}
 		return d, binary.LittleEndian, nil
 	}
 
-	fatalf("cannot parse gcc output %s as ELF, Mach-O, PE object", gccTmp)
+	fatalf("cannot parse gcc output %s as ELF, Mach-O, PE object", gccTmp())
 	panic("not reached")
 }
 
@@ -848,6 +887,7 @@ type typeConv struct {
 
 var tagGen int
 var typedef = make(map[string]ast.Expr)
+var goIdent = make(map[string]*ast.Ident)
 
 func (c *typeConv) Init(ptrSize int64) {
 	c.ptrSize = ptrSize
@@ -1113,6 +1153,7 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 		}
 		name := c.Ident("_Ctype_" + dt.Kind + "_" + tag)
 		t.Go = name // publish before recursive calls
+		goIdent[name.Name] = name
 		switch dt.Kind {
 		case "union", "class":
 			typedef[name.Name] = c.Opaque(t.Size)
@@ -1147,13 +1188,17 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 			t.Align = c.ptrSize
 			break
 		}
-		name := c.Ident("_Ctypedef_" + dt.Name)
+		name := c.Ident("_Ctype_" + dt.Name)
+		goIdent[name.Name] = name
 		t.Go = name // publish before recursive call
 		sub := c.Type(dt.Type)
 		t.Size = sub.Size
 		t.Align = sub.Align
 		if _, ok := typedef[name.Name]; !ok {
 			typedef[name.Name] = sub.Go
+		}
+		if *godefs || *cdefs {
+			t.Go = sub.Go
 		}
 
 	case *dwarf.UcharType:
@@ -1198,7 +1243,9 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 			s = strings.Join(strings.Split(s, " "), "") // strip spaces
 			name := c.Ident("_Ctype_" + s)
 			typedef[name.Name] = t.Go
-			t.Go = name
+			if !*godefs && !*cdefs {
+				t.Go = name
+			}
 		}
 	}
 
@@ -1263,7 +1310,7 @@ func (c *typeConv) FuncType(dtype *dwarf.FuncType) *FuncType {
 	var gr []*ast.Field
 	if _, ok := dtype.ReturnType.(*dwarf.VoidType); !ok && dtype.ReturnType != nil {
 		r = c.Type(dtype.ReturnType)
-		gr = []*ast.Field{&ast.Field{Type: r.Go}}
+		gr = []*ast.Field{{Type: r.Go}}
 	}
 	return &FuncType{
 		Params: p,
@@ -1292,7 +1339,7 @@ func (c *typeConv) Opaque(n int64) ast.Expr {
 func (c *typeConv) intExpr(n int64) ast.Expr {
 	return &ast.BasicLit{
 		Kind:  token.INT,
-		Value: strconv.Itoa64(n),
+		Value: strconv.FormatInt(n, 10),
 	}
 }
 
@@ -1323,38 +1370,61 @@ func (c *typeConv) Struct(dt *dwarf.StructType) (expr *ast.StructType, csyntax s
 		ident[f.Name] = f.Name
 		used[f.Name] = true
 	}
-	for cid, goid := range ident {
-		if token.Lookup([]byte(goid)).IsKeyword() {
-			// Avoid keyword
-			goid = "_" + goid
 
-			// Also avoid existing fields
-			for _, exist := used[goid]; exist; _, exist = used[goid] {
+	if !*godefs && !*cdefs {
+		for cid, goid := range ident {
+			if token.Lookup(goid).IsKeyword() {
+				// Avoid keyword
 				goid = "_" + goid
-			}
 
-			used[goid] = true
-			ident[cid] = goid
+				// Also avoid existing fields
+				for _, exist := used[goid]; exist; _, exist = used[goid] {
+					goid = "_" + goid
+				}
+
+				used[goid] = true
+				ident[cid] = goid
+			}
 		}
 	}
 
+	anon := 0
 	for _, f := range dt.Field {
-		if f.BitSize > 0 && f.BitSize != f.ByteSize*8 {
-			continue
-		}
 		if f.ByteOffset > off {
 			fld = c.pad(fld, f.ByteOffset-off)
 			off = f.ByteOffset
 		}
 		t := c.Type(f.Type)
+		tgo := t.Go
+		size := t.Size
+
+		if f.BitSize > 0 {
+			if f.BitSize%8 != 0 {
+				continue
+			}
+			size = f.BitSize / 8
+			name := tgo.(*ast.Ident).String()
+			if strings.HasPrefix(name, "int") {
+				name = "int"
+			} else {
+				name = "uint"
+			}
+			tgo = ast.NewIdent(name + fmt.Sprint(f.BitSize))
+		}
+
 		n := len(fld)
 		fld = fld[0 : n+1]
-
-		fld[n] = &ast.Field{Names: []*ast.Ident{c.Ident(ident[f.Name])}, Type: t.Go}
-		off += t.Size
+		name := f.Name
+		if name == "" {
+			name = fmt.Sprintf("anon%d", anon)
+			anon++
+			ident[name] = name
+		}
+		fld[n] = &ast.Field{Names: []*ast.Ident{c.Ident(ident[name])}, Type: tgo}
+		off += size
 		buf.WriteString(t.C.String())
 		buf.WriteString(" ")
-		buf.WriteString(f.Name)
+		buf.WriteString(name)
 		buf.WriteString("; ")
 		if t.Align > align {
 			align = t.Align
@@ -1369,6 +1439,96 @@ func (c *typeConv) Struct(dt *dwarf.StructType) (expr *ast.StructType, csyntax s
 	}
 	buf.WriteString("}")
 	csyntax = buf.String()
+
+	if *godefs || *cdefs {
+		godefsFields(fld)
+	}
 	expr = &ast.StructType{Fields: &ast.FieldList{List: fld}}
 	return
+}
+
+func upper(s string) string {
+	if s == "" {
+		return ""
+	}
+	r, size := utf8.DecodeRuneInString(s)
+	if r == '_' {
+		return "X" + s
+	}
+	return string(unicode.ToUpper(r)) + s[size:]
+}
+
+// godefsFields rewrites field names for use in Go or C definitions.
+// It strips leading common prefixes (like tv_ in tv_sec, tv_usec)
+// converts names to upper case, and rewrites _ into Pad_godefs_n,
+// so that all fields are exported.
+func godefsFields(fld []*ast.Field) {
+	prefix := fieldPrefix(fld)
+	npad := 0
+	for _, f := range fld {
+		for _, n := range f.Names {
+			if strings.HasPrefix(n.Name, prefix) && n.Name != prefix {
+				n.Name = n.Name[len(prefix):]
+			}
+			if n.Name == "_" {
+				// Use exported name instead.
+				n.Name = "Pad_cgo_" + strconv.Itoa(npad)
+				npad++
+			}
+			if !*cdefs {
+				n.Name = upper(n.Name)
+			}
+		}
+		p := &f.Type
+		t := *p
+		if star, ok := t.(*ast.StarExpr); ok {
+			star = &ast.StarExpr{X: star.X}
+			*p = star
+			p = &star.X
+			t = *p
+		}
+		if id, ok := t.(*ast.Ident); ok {
+			if id.Name == "unsafe.Pointer" {
+				*p = ast.NewIdent("*byte")
+			}
+		}
+	}
+}
+
+// fieldPrefix returns the prefix that should be removed from all the
+// field names when generating the C or Go code.  For generated 
+// C, we leave the names as is (tv_sec, tv_usec), since that's what
+// people are used to seeing in C.  For generated Go code, such as
+// package syscall's data structures, we drop a common prefix
+// (so sec, usec, which will get turned into Sec, Usec for exporting).
+func fieldPrefix(fld []*ast.Field) string {
+	if *cdefs {
+		return ""
+	}
+	prefix := ""
+	for _, f := range fld {
+		for _, n := range f.Names {
+			// Ignore field names that don't have the prefix we're
+			// looking for.  It is common in C headers to have fields
+			// named, say, _pad in an otherwise prefixed header.
+			// If the struct has 3 fields tv_sec, tv_usec, _pad1, then we
+			// still want to remove the tv_ prefix.
+			// The check for "orig_" here handles orig_eax in the 
+			// x86 ptrace register sets, which otherwise have all fields
+			// with reg_ prefixes.
+			if strings.HasPrefix(n.Name, "orig_") || strings.HasPrefix(n.Name, "_") {
+				continue
+			}
+			i := strings.Index(n.Name, "_")
+			if i < 0 {
+				continue
+			}
+			if prefix == "" {
+				prefix = n.Name[:i+1]
+			} else if prefix != n.Name[:i+1] {
+				return ""
+			}
+		}
+	}
+	return prefix
 }

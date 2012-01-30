@@ -6,7 +6,6 @@ package main
 
 import (
 	"bufio"
-	"exec"
 	"fmt"
 	"go/ast"
 	"go/build"
@@ -14,12 +13,13 @@ import (
 	"go/token"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"runtime"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
-	"utf8"
+	"unicode/utf8"
 )
 
 // Environment for commands.
@@ -55,10 +55,10 @@ var (
 
 // elapsed returns the number of seconds since gotest started.
 func elapsed() float64 {
-	return float64(time.Nanoseconds()-start) / 1e9
+	return time.Now().Sub(start).Seconds()
 }
 
-var start = time.Nanoseconds()
+var start = time.Now()
 
 // File represents a file that contains tests.
 type File struct {
@@ -68,6 +68,12 @@ type File struct {
 	astFile    *ast.File
 	tests      []string // The names of the TestXXXs.
 	benchmarks []string // The names of the BenchmarkXXXs.
+	examples   []example
+}
+
+type example struct {
+	name   string // The name of the example function (ExampleXXX).
+	output string // The expected output (stdout/stderr) of the function.
 }
 
 func main() {
@@ -107,13 +113,6 @@ func Fatalf(s string, args ...interface{}) {
 	os.Exit(2)
 }
 
-// theChar is the map from architecture to object character.
-var theChar = map[string]string{
-	"arm":   "5",
-	"amd64": "6",
-	"386":   "8",
-}
-
 // addEnv adds a name=value pair to the environment passed to subcommands.
 // If the item is already in the environment, addEnv replaces the value.
 func addEnv(name, value string) {
@@ -131,14 +130,12 @@ func setEnvironment() {
 	// Basic environment.
 	GOROOT = runtime.GOROOT()
 	addEnv("GOROOT", GOROOT)
-	GOARCH = os.Getenv("GOARCH")
-	if GOARCH == "" {
-		GOARCH = runtime.GOARCH
-	}
+	GOARCH = build.DefaultContext.GOARCH
 	addEnv("GOARCH", GOARCH)
-	O = theChar[GOARCH]
-	if O == "" {
-		Fatalf("unknown architecture %s", GOARCH)
+	var err error
+	O, err = build.ArchChar(GOARCH)
+	if err != nil {
+		Fatalf("unknown architecture: %s", err)
 	}
 
 	// Commands and their flags.
@@ -146,8 +143,12 @@ func setEnvironment() {
 	if gc == "" {
 		gc = O + "g"
 	}
-	XGC = []string{gc, "-I", "_test", "-o", "_xtest_." + O}
-	GC = []string{gc, "-I", "_test", "_testmain.go"}
+	var gcflags []string
+	if gf := strings.TrimSpace(os.Getenv("GCFLAGS")); gf != "" {
+		gcflags = strings.Fields(gf)
+	}
+	XGC = append([]string{gc, "-I", "_test", "-o", "_xtest_." + O}, gcflags...)
+	GC = append(append([]string{gc, "-I", "_test"}, gcflags...), "_testmain.go")
 	gl := os.Getenv("GL")
 	if gl == "" {
 		gl = O + "l"
@@ -190,7 +191,7 @@ func parseFiles() {
 	fileSet := token.NewFileSet()
 	for _, f := range files {
 		// Report declaration errors so we can abort if the files are incorrect Go.
-		file, err := parser.ParseFile(fileSet, f.name, nil, parser.DeclarationErrors)
+		file, err := parser.ParseFile(fileSet, f.name, nil, parser.DeclarationErrors|parser.ParseComments)
 		if err != nil {
 			Fatalf("parse error: %s", err)
 		}
@@ -219,10 +220,20 @@ func getTestNames() {
 				f.tests = append(f.tests, name)
 			} else if isTest(name, "Benchmark") {
 				f.benchmarks = append(f.benchmarks, name)
+			} else if isTest(name, "Example") {
+				output := n.Doc.Text()
+				if output == "" {
+					// Don't run examples with no output.
+					continue
+				}
+				f.examples = append(f.examples, example{
+					name:   name,
+					output: output,
+				})
 			}
 			// TODO: worth checking the signature? Probably not.
 		}
-		if strings.HasSuffix(f.pkg, "_test") {
+		if isOutsideTest(f.pkg) {
 			outsideFileNames = append(outsideFileNames, f.name)
 		} else {
 			insideFileNames = append(insideFileNames, f.name)
@@ -272,10 +283,10 @@ func runTestWithArgs(binary string) {
 func doRun(argv []string, returnStdout bool) string {
 	if xFlag {
 		fmt.Printf("gotest %.2fs: %s\n", elapsed(), strings.Join(argv, " "))
-		t := -time.Nanoseconds()
+		start := time.Now()
 		defer func() {
-			t += time.Nanoseconds()
-			fmt.Printf(" [+%.2fs]\n", float64(t)/1e9)
+			t := time.Now().Sub(start)
+			fmt.Printf(" [+%.2fs]\n", t.Seconds())
 		}()
 	}
 	command := argv[0]
@@ -291,7 +302,7 @@ func doRun(argv []string, returnStdout bool) string {
 		command = "bash"
 		argv = []string{"bash", "-c", cmd}
 	}
-	var err os.Error
+	var err error
 	argv[0], err = exec.LookPath(argv[0])
 	if err != nil {
 		Fatalf("can't find %s: %s", command, err)
@@ -356,51 +367,62 @@ func writeTestmainGo() {
 	insideTests := false
 	for _, f := range files {
 		//println(f.name, f.pkg)
-		if len(f.tests) == 0 && len(f.benchmarks) == 0 {
+		if len(f.tests) == 0 && len(f.benchmarks) == 0 && len(f.examples) == 0 {
 			continue
 		}
-		if strings.HasSuffix(f.pkg, "_test") {
+		if isOutsideTest(f.pkg) {
 			outsideTests = true
 		} else {
 			insideTests = true
 		}
 	}
+	// Rename the imports for the system under test,
+	// in case the tested package has the same name
+	// as any of the other imports, variables or methods.
 	if insideTests {
 		switch importPath {
 		case "testing":
 		case "main":
 			// Import path main is reserved, so import with
 			// explicit reference to ./_test/main instead.
-			// Also, the file we are writing defines a function named main,
-			// so rename this import to __main__ to avoid name conflict.
-			fmt.Fprintf(b, "import __main__ %q\n", "./_test/main")
+			fmt.Fprintf(b, "import target %q\n", "./_test/main")
 		default:
-			fmt.Fprintf(b, "import %q\n", importPath)
+			fmt.Fprintf(b, "import target %q\n", importPath)
 		}
 	}
 	if outsideTests {
-		fmt.Fprintf(b, "import %q\n", "./_xtest_")
+		// It is possible to have both inside and outside tests
+		// at the same time, so a different import name is needed.
+		fmt.Fprintf(b, "import target_test %q\n", "./_xtest_")
 	}
 	fmt.Fprintf(b, "import %q\n", "testing")
-	fmt.Fprintf(b, "import __os__ %q\n", "os")         // rename in case tested package is called os
-	fmt.Fprintf(b, "import __regexp__ %q\n", "regexp") // rename in case tested package is called regexp
-	fmt.Fprintln(b)                                    // for gofmt
+	fmt.Fprintf(b, "import %q\n", "regexp")
+	fmt.Fprintln(b) // for gofmt
 
 	// Tests.
-	fmt.Fprintln(b, "var tests = []testing.InternalTest{")
+	fmt.Fprintf(b, "var tests = []testing.InternalTest{\n")
 	for _, f := range files {
 		for _, t := range f.tests {
-			fmt.Fprintf(b, "\t{\"%s.%s\", %s.%s},\n", f.pkg, t, notMain(f.pkg), t)
+			fmt.Fprintf(b, "\t{\"%s.%s\", %s.%s},\n", f.pkg, t, renamedPackage(f.pkg), t)
 		}
 	}
 	fmt.Fprintln(b, "}")
 	fmt.Fprintln(b)
 
 	// Benchmarks.
-	fmt.Fprintf(b, "var benchmarks = []testing.InternalBenchmark{")
+	fmt.Fprintf(b, "var benchmarks = []testing.InternalBenchmark{\n")
 	for _, f := range files {
 		for _, bm := range f.benchmarks {
-			fmt.Fprintf(b, "\t{\"%s.%s\", %s.%s},\n", f.pkg, bm, notMain(f.pkg), bm)
+			fmt.Fprintf(b, "\t{\"%s.%s\", %s.%s},\n", f.pkg, bm, renamedPackage(f.pkg), bm)
+		}
+	}
+	fmt.Fprintln(b, "}")
+
+	// Examples.
+	fmt.Fprintf(b, "var examples = []testing.InternalExample{")
+	for _, f := range files {
+		for _, eg := range f.examples {
+			fmt.Fprintf(b, "\t{%q, %s.%s, %q},\n", eg.name, renamedPackage(f.pkg), eg.name, eg.output)
 		}
 	}
 	fmt.Fprintln(b, "}")
@@ -409,23 +431,27 @@ func writeTestmainGo() {
 	fmt.Fprintln(b, testBody)
 }
 
-// notMain returns the package, renaming as appropriate if it's "main".
-func notMain(pkg string) string {
-	if pkg == "main" {
-		return "__main__"
+// renamedPackage returns the name under which the test package was imported.
+func renamedPackage(pkg string) string {
+	if isOutsideTest(pkg) {
+		return "target_test"
 	}
-	return pkg
+	return "target"
+}
+
+func isOutsideTest(pkg string) bool {
+	return strings.HasSuffix(pkg, "_test")
 }
 
 // testBody is just copied to the output. It's the code that runs the tests.
 var testBody = `
 var matchPat string
-var matchRe *__regexp__.Regexp
+var matchRe *regexp.Regexp
 
-func matchString(pat, str string) (result bool, err __os__.Error) {
+func matchString(pat, str string) (result bool, err error) {
 	if matchRe == nil || matchPat != pat {
 		matchPat = pat
-		matchRe, err = __regexp__.Compile(matchPat)
+		matchRe, err = regexp.Compile(matchPat)
 		if err != nil {
 			return
 		}
@@ -434,5 +460,5 @@ func matchString(pat, str string) (result bool, err __os__.Error) {
 }
 
 func main() {
-	testing.Main(matchString, tests, benchmarks)
+	testing.Main(matchString, tests, benchmarks, examples)
 }`

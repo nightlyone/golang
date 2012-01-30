@@ -4,10 +4,7 @@
 
 package norm
 
-import (
-	"io"
-	"os"
-)
+import "io"
 
 type normWriter struct {
 	rb  reorderBuffer
@@ -18,7 +15,7 @@ type normWriter struct {
 // Write implements the standard write interface.  If the last characters are
 // not at a normalization boundary, the bytes will be buffered for the next
 // write. The remaining bytes will be written on close.
-func (w *normWriter) Write(data []byte) (n int, err os.Error) {
+func (w *normWriter) Write(data []byte) (n int, err error) {
 	// Process data in pieces to keep w.buf size bounded.
 	const chunk = 4000
 
@@ -28,7 +25,9 @@ func (w *normWriter) Write(data []byte) (n int, err os.Error) {
 		if m > chunk {
 			m = chunk
 		}
-		w.buf = doAppend(&w.rb, w.buf, data[:m])
+		w.rb.src = inputBytes(data[:m])
+		w.rb.nsrc = m
+		w.buf = doAppend(&w.rb, w.buf, 0)
 		data = data[m:]
 		n += m
 
@@ -50,7 +49,7 @@ func (w *normWriter) Write(data []byte) (n int, err os.Error) {
 }
 
 // Close forces data that remains in the buffer to be written.
-func (w *normWriter) Close() os.Error {
+func (w *normWriter) Close() error {
 	if len(w.buf) > 0 {
 		_, err := w.w.Write(w.buf)
 		if err != nil {
@@ -65,7 +64,9 @@ func (w *normWriter) Close() os.Error {
 // an internal buffer to maintain state across Write calls.
 // Calling its Close method writes any buffered data to w.
 func (f Form) Writer(w io.Writer) io.WriteCloser {
-	return &normWriter{rb: reorderBuffer{f: *formTable[f]}, w: w}
+	wr := &normWriter{rb: reorderBuffer{}, w: w}
+	wr.rb.init(f, nil)
+	return wr
 }
 
 type normReader struct {
@@ -75,11 +76,11 @@ type normReader struct {
 	outbuf       []byte
 	bufStart     int
 	lastBoundary int
-	err          os.Error
+	err          error
 }
 
 // Read implements the standard read interface.
-func (r *normReader) Read(p []byte) (int, os.Error) {
+func (r *normReader) Read(p []byte) (int, error) {
 	for {
 		if r.lastBoundary-r.bufStart > 0 {
 			n := copy(p, r.outbuf[r.bufStart:r.lastBoundary])
@@ -97,11 +98,12 @@ func (r *normReader) Read(p []byte) (int, os.Error) {
 		r.bufStart = 0
 
 		n, err := r.r.Read(r.inbuf)
-		r.err = err // save error for when done with buffer
+		r.rb.src = inputBytes(r.inbuf[0:n])
+		r.rb.nsrc, r.err = n, err
 		if n > 0 {
-			r.outbuf = doAppend(&r.rb, r.outbuf, r.inbuf[0:n])
+			r.outbuf = doAppend(&r.rb, r.outbuf, 0)
 		}
-		if err == os.EOF {
+		if err == io.EOF {
 			r.lastBoundary = len(r.outbuf)
 		} else {
 			r.lastBoundary = lastBoundary(&r.rb.f, r.outbuf)
@@ -117,5 +119,8 @@ func (r *normReader) Read(p []byte) (int, os.Error) {
 // by reading data from r and returning f(data).
 func (f Form) Reader(r io.Reader) io.Reader {
 	const chunk = 4000
-	return &normReader{rb: reorderBuffer{f: *formTable[f]}, r: r, inbuf: make([]byte, chunk)}
+	buf := make([]byte, chunk)
+	rr := &normReader{rb: reorderBuffer{}, r: r, inbuf: buf}
+	rr.rb.init(f, buf)
+	return rr
 }

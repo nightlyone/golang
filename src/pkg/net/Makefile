@@ -9,6 +9,7 @@ GOFILES=\
 	dial.go\
 	dnsclient.go\
 	dnsmsg.go\
+	doc.go\
 	hosts.go\
 	interface.go\
 	ip.go\
@@ -20,34 +21,6 @@ GOFILES=\
 	tcpsock.go\
 	udpsock.go\
 	unixsock.go\
-
-GOFILES_freebsd=\
-	dnsclient_unix.go\
-	dnsconfig.go\
-	fd.go\
-	fd_$(GOOS).go\
-	file.go\
-	interface_bsd.go\
-	interface_freebsd.go\
-	iprawsock_posix.go\
-	ipsock_posix.go\
-	lookup_unix.go\
-	newpollserver.go\
-	port.go\
-	sendfile_stub.go\
-	sock.go\
-	sock_bsd.go\
-	tcpsock_posix.go\
-	udpsock_posix.go\
-	unixsock_posix.go\
-
-ifeq ($(CGO_ENABLED),1)
-CGOFILES_freebsd=\
-	cgo_bsd.go\
-	cgo_unix.go
-else
-GOFILES_freebsd+=cgo_stub.go
-endif
 
 GOFILES_darwin=\
 	dnsclient_unix.go\
@@ -65,6 +38,11 @@ GOFILES_darwin=\
 	sendfile_stub.go\
 	sock.go\
 	sock_bsd.go\
+	sockopt.go\
+	sockopt_bsd.go\
+	sockoptip.go\
+	sockoptip_bsd.go\
+	sockoptip_darwin.go\
 	tcpsock_posix.go\
 	udpsock_posix.go\
 	unixsock_posix.go\
@@ -75,6 +53,39 @@ CGOFILES_darwin=\
 	cgo_unix.go
 else
 GOFILES_darwin+=cgo_stub.go
+endif
+
+GOFILES_freebsd=\
+	dnsclient_unix.go\
+	dnsconfig.go\
+	fd.go\
+	fd_$(GOOS).go\
+	file.go\
+	interface_bsd.go\
+	interface_freebsd.go\
+	iprawsock_posix.go\
+	ipsock_posix.go\
+	lookup_unix.go\
+	newpollserver.go\
+	port.go\
+	sendfile_stub.go\
+	sock.go\
+	sock_bsd.go\
+	sockopt.go\
+	sockopt_bsd.go\
+	sockoptip.go\
+	sockoptip_bsd.go\
+	sockoptip_freebsd.go\
+	tcpsock_posix.go\
+	udpsock_posix.go\
+	unixsock_posix.go\
+
+ifeq ($(CGO_ENABLED),1)
+CGOFILES_freebsd=\
+	cgo_bsd.go\
+	cgo_unix.go
+else
+GOFILES_freebsd+=cgo_stub.go
 endif
 
 GOFILES_linux=\
@@ -92,6 +103,10 @@ GOFILES_linux=\
 	sendfile_linux.go\
 	sock.go\
 	sock_linux.go\
+	sockopt.go\
+	sockopt_linux.go\
+	sockoptip.go\
+	sockoptip_linux.go\
 	tcpsock_posix.go\
 	udpsock_posix.go\
 	unixsock_posix.go\
@@ -103,6 +118,32 @@ CGOFILES_linux=\
 else
 GOFILES_linux+=cgo_stub.go
 endif
+
+GOFILES_netbsd=\
+	dnsclient_unix.go\
+	dnsconfig.go\
+	fd.go\
+	fd_$(GOOS).go\
+	file.go\
+	interface_bsd.go\
+	interface_netbsd.go\
+	iprawsock_posix.go\
+	ipsock_posix.go\
+	lookup_unix.go\
+	newpollserver.go\
+	port.go\
+	sendfile_stub.go\
+	sock.go\
+	sock_bsd.go\
+	sockopt.go\
+	sockopt_bsd.go\
+	sockoptip.go\
+	sockoptip_bsd.go\
+	sockoptip_netbsd.go\
+	tcpsock_posix.go\
+	udpsock_posix.go\
+	unixsock_posix.go\
+	cgo_stub.go\
 
 GOFILES_openbsd=\
 	dnsclient_unix.go\
@@ -120,6 +161,11 @@ GOFILES_openbsd=\
 	sendfile_stub.go\
 	sock.go\
 	sock_bsd.go\
+	sockopt.go\
+	sockopt_bsd.go\
+	sockoptip.go\
+	sockoptip_bsd.go\
+	sockoptip_openbsd.go\
 	tcpsock_posix.go\
 	udpsock_posix.go\
 	unixsock_posix.go\
@@ -145,6 +191,10 @@ GOFILES_windows=\
 	sendfile_windows.go\
 	sock.go\
 	sock_windows.go\
+	sockopt.go\
+	sockopt_windows.go\
+	sockoptip.go\
+	sockoptip_windows.go\
 	tcpsock_posix.go\
 	udpsock_posix.go\
 	unixsock_posix.go\

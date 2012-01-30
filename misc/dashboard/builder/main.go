@@ -5,38 +5,39 @@
 package main
 
 import (
+	"encoding/xml"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
-	"xml"
 )
 
 const (
 	codeProject      = "go"
 	codePyScript     = "misc/dashboard/googlecode_upload.py"
 	hgUrl            = "https://go.googlecode.com/hg/"
-	waitInterval     = 30e9 // time to wait before checking for new revs
 	mkdirPerm        = 0750
-	pkgBuildInterval = 1e9 * 60 * 60 * 24 // rebuild packages every 24 hours
+	waitInterval     = 30 * time.Second // time to wait before checking for new revs
+	pkgBuildInterval = 24 * time.Hour   // rebuild packages every 24 hours
 )
 
 // These variables are copied from the gobuilder's environment
 // to the envv of its subprocesses.
 var extraEnv = []string{
-	"GOHOSTOS",
-	"GOHOSTARCH",
-	"PATH",
-	"DISABLE_NET_TESTS",
-	"MAKEFLAGS",
 	"GOARM",
+	"GOHOSTARCH",
+	"GOHOSTOS",
+	"PATH",
+	"TMPDIR",
 }
 
 type Builder struct {
@@ -50,7 +51,7 @@ type Builder struct {
 var (
 	buildroot     = flag.String("buildroot", path.Join(os.TempDir(), "gobuilder"), "Directory under which to build")
 	commitFlag    = flag.Bool("commit", false, "upload information about new commits")
-	dashboard     = flag.String("dashboard", "godashboard.appspot.com", "Go Dashboard Host")
+	dashboard     = flag.String("dashboard", "build.golang.org", "Go Dashboard Host")
 	buildRelease  = flag.Bool("release", false, "Build and upload binary release archives")
 	buildRevision = flag.String("rev", "", "Build specified revision and exit")
 	buildCmd      = flag.String("cmd", "./all.bash", "Build command (specify absolute or relative to go/src/)")
@@ -92,7 +93,7 @@ func main() {
 	if err := os.Mkdir(*buildroot, mkdirPerm); err != nil {
 		log.Fatalf("Error making build root (%s): %s", *buildroot, err)
 	}
-	if err := run(nil, *buildroot, "hg", "clone", hgUrl, goroot); err != nil {
+	if err := hgClone(hgUrl, goroot); err != nil {
 		log.Fatal("Error cloning repository:", err)
 	}
 
@@ -106,7 +107,7 @@ func main() {
 
 	// if specified, build revision and return
 	if *buildRevision != "" {
-		hash, err := fullHash(*buildRevision)
+		hash, err := fullHash(goroot, *buildRevision)
 		if err != nil {
 			log.Fatal("Error finding revision: ", err)
 		}
@@ -130,7 +131,7 @@ func main() {
 	// check for new commits and build them
 	for {
 		built := false
-		t := time.Nanoseconds()
+		t := time.Now()
 		if *parallel {
 			done := make(chan bool)
 			for _, b := range builders {
@@ -151,14 +152,14 @@ func main() {
 			time.Sleep(waitInterval)
 		}
 		// sleep if we're looping too fast.
-		t1 := time.Nanoseconds() - t
-		if t1 < waitInterval {
-			time.Sleep(waitInterval - t1)
+		dt := time.Now().Sub(t)
+		if dt < waitInterval {
+			time.Sleep(waitInterval - dt)
 		}
 	}
 }
 
-func NewBuilder(builder string) (*Builder, os.Error) {
+func NewBuilder(builder string) (*Builder, error) {
 	b := &Builder{name: builder}
 
 	// get goos/goarch from builder string
@@ -193,7 +194,7 @@ func NewBuilder(builder string) (*Builder, os.Error) {
 // a new release tag is found.
 func (b *Builder) buildExternal() {
 	var prevTag string
-	var nextBuild int64
+	var nextBuild time.Time
 	for {
 		time.Sleep(waitInterval)
 		err := run(nil, goroot, "hg", "pull", "-u")
@@ -212,7 +213,7 @@ func (b *Builder) buildExternal() {
 		// don't rebuild if there's no new release
 		// and it's been less than pkgBuildInterval
 		// nanoseconds since the last build.
-		if tag == prevTag && time.Nanoseconds() < nextBuild {
+		if tag == prevTag && time.Now().Before(nextBuild) {
 			continue
 		}
 		// build will also build the packages
@@ -221,7 +222,7 @@ func (b *Builder) buildExternal() {
 			continue
 		}
 		prevTag = tag
-		nextBuild = time.Nanoseconds() + pkgBuildInterval
+		nextBuild = time.Now().Add(pkgBuildInterval)
 	}
 }
 
@@ -235,7 +236,7 @@ func (b *Builder) build() bool {
 			log.Println(b.name, "build:", err)
 		}
 	}()
-	hash, err := b.todo()
+	hash, err := b.todo("build-go-commit", "", "")
 	if err != nil {
 		log.Println(err)
 		return false
@@ -245,7 +246,7 @@ func (b *Builder) build() bool {
 	}
 	// Look for hash locally before running hg pull.
 
-	if _, err := fullHash(hash[:12]); err != nil {
+	if _, err := fullHash(goroot, hash[:12]); err != nil {
 		// Don't have hash, so run hg pull.
 		if err := run(nil, goroot, "hg", "pull"); err != nil {
 			log.Println("hg pull failed:", err)
@@ -259,7 +260,7 @@ func (b *Builder) build() bool {
 	return true
 }
 
-func (b *Builder) buildHash(hash string) (err os.Error) {
+func (b *Builder) buildHash(hash string) (err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("%s build: %s: %s", b.name, hash, err)
@@ -283,8 +284,7 @@ func (b *Builder) buildHash(hash string) (err os.Error) {
 	}
 
 	// update to specified revision
-	err = run(nil, path.Join(workpath, "go"),
-		"hg", "update", hash)
+	err = run(nil, path.Join(workpath, "go"), "hg", "update", hash)
 	if err != nil {
 		return
 	}
@@ -293,7 +293,9 @@ func (b *Builder) buildHash(hash string) (err os.Error) {
 
 	// build
 	logfile := path.Join(workpath, "build.log")
+	startTime := time.Now()
 	buildLog, status, err := runLog(b.envv(), logfile, srcDir, *buildCmd)
+	runTime := time.Now().Sub(startTime)
 	if err != nil {
 		return fmt.Errorf("%s: %s", *buildCmd, err)
 	}
@@ -301,20 +303,23 @@ func (b *Builder) buildHash(hash string) (err os.Error) {
 	// if we're in external mode, build all packages and return
 	if *external {
 		if status != 0 {
-			return os.NewError("go build failed")
+			return errors.New("go build failed")
 		}
-		return b.buildPackages(workpath, hash)
+		return b.buildExternalPackages(workpath, hash)
 	}
 
 	if status != 0 {
 		// record failure
-		return b.recordResult(buildLog, hash)
+		return b.recordResult(false, "", hash, "", buildLog, runTime)
 	}
 
 	// record success
-	if err = b.recordResult("", hash); err != nil {
+	if err = b.recordResult(true, "", hash, "", "", runTime); err != nil {
 		return fmt.Errorf("recordResult: %s", err)
 	}
+
+	// build goinstallable packages
+	b.buildPackages(filepath.Join(workpath, "go"), hash)
 
 	// finish here if codeUsername and codePassword aren't set
 	if b.codeUsername == "" || b.codePassword == "" || !*buildRelease {
@@ -342,9 +347,65 @@ func (b *Builder) buildHash(hash string) (err os.Error) {
 			"-w", b.codePassword,
 			"-l", fmt.Sprintf("%s,%s", b.goos, b.goarch),
 			fn)
+		if err != nil {
+			return fmt.Errorf("%s: %s", codePyScript, err)
+		}
 	}
 
 	return
+}
+
+func (b *Builder) buildPackages(goRoot, goHash string) {
+	for _, pkg := range dashboardPackages() {
+		// get the latest todo for this package
+		hash, err := b.todo("build-package", pkg, goHash)
+		if err != nil {
+			log.Printf("buildPackages %s: %v", pkg, err)
+			continue
+		}
+		if hash == "" {
+			continue
+		}
+
+		// goinstall the package
+		if *verbose {
+			log.Printf("buildPackages %s: installing %q", pkg, hash)
+		}
+		buildLog, err := b.goinstall(goRoot, pkg, hash)
+		ok := buildLog == ""
+		if err != nil {
+			ok = false
+			log.Printf("buildPackages %s: %v", pkg, err)
+		}
+
+		// record the result
+		err = b.recordResult(ok, pkg, hash, goHash, buildLog, 0)
+		if err != nil {
+			log.Printf("buildPackages %s: %v", pkg, err)
+		}
+	}
+}
+
+func (b *Builder) goinstall(goRoot, pkg, hash string) (string, error) {
+	bin := filepath.Join(goRoot, "bin/goinstall")
+	env := append(b.envv(), "GOROOT="+goRoot)
+
+	// fetch package and dependencies
+	log, status, err := runLog(env, "", goRoot, bin,
+		"-dashboard=false", "-install=false", pkg)
+	if err != nil || status != 0 {
+		return log, err
+	}
+
+	// hg update to the specified hash
+	pkgPath := filepath.Join(goRoot, "src/pkg", pkg)
+	if err := run(nil, pkgPath, "hg", "update", hash); err != nil {
+		return "", err
+	}
+
+	// build the package
+	log, _, err = runLog(env, "", goRoot, bin, "-dashboard=false", pkg)
+	return log, err
 }
 
 // envv returns an environment for build/bench execution
@@ -409,12 +470,12 @@ func (b *Builder) envvWindows() []string {
 
 func isDirectory(name string) bool {
 	s, err := os.Stat(name)
-	return err == nil && s.IsDirectory()
+	return err == nil && s.IsDir()
 }
 
 func isFile(name string) bool {
 	s, err := os.Stat(name)
-	return err == nil && (s.IsRegular() || s.IsSymlink())
+	return err == nil && !s.IsDir()
 }
 
 // commitWatcher polls hg for new commits and tells the dashboard about them.
@@ -424,16 +485,33 @@ func commitWatcher() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	key := b.key
+
 	for {
 		if *verbose {
 			log.Printf("poll...")
 		}
-		commitPoll(b.key)
+		commitPoll(key, "")
+		for _, pkg := range dashboardPackages() {
+			commitPoll(key, pkg)
+		}
 		if *verbose {
 			log.Printf("sleep...")
 		}
 		time.Sleep(60e9)
 	}
+}
+
+func hgClone(url, path string) error {
+	return run(nil, *buildroot, "hg", "clone", url, path)
+}
+
+func hgRepoExists(path string) bool {
+	fi, err := os.Stat(filepath.Join(path, ".hg"))
+	if err != nil {
+		return false
+	}
+	return fi.IsDir()
 }
 
 // HgLog represents a single Mercurial revision.
@@ -455,18 +533,18 @@ var logByHash = map[string]*HgLog{}
 // xmlLogTemplate is a template to pass to Mercurial to make
 // hg log print the log in valid XML for parsing with xml.Unmarshal.
 const xmlLogTemplate = `
-	<log>
-	<hash>{node|escape}</hash>
-	<parent>{parent|escape}</parent>
-	<author>{author|escape}</author>
-	<date>{date}</date>
-	<desc>{desc|escape}</desc>
-	</log>
+	<Log>
+	<Hash>{node|escape}</Hash>
+	<Parent>{parent|escape}</Parent>
+	<Author>{author|escape}</Author>
+	<Date>{date|rfc3339date}</Date>
+	<Desc>{desc|escape}</Desc>
+	</Log>
 `
 
 // commitPoll pulls any new revisions from the hg server
 // and tells the server about them.
-func commitPoll(key string) {
+func commitPoll(key, pkg string) {
 	// Catch unexpected panics.
 	defer func() {
 		if err := recover(); err != nil {
@@ -474,14 +552,29 @@ func commitPoll(key string) {
 		}
 	}()
 
-	if err := run(nil, goroot, "hg", "pull"); err != nil {
+	pkgRoot := goroot
+
+	if pkg != "" {
+		pkgRoot = path.Join(*buildroot, pkg)
+		if !hgRepoExists(pkgRoot) {
+			if err := hgClone(repoURL(pkg), pkgRoot); err != nil {
+				log.Printf("%s: hg clone failed: %v", pkg, err)
+				if err := os.RemoveAll(pkgRoot); err != nil {
+					log.Printf("%s: %v", pkg, err)
+				}
+				return
+			}
+		}
+	}
+
+	if err := run(nil, pkgRoot, "hg", "pull"); err != nil {
 		log.Printf("hg pull: %v", err)
 		return
 	}
 
 	const N = 50 // how many revisions to grab
 
-	data, _, err := runLog(nil, "", goroot, "hg", "log",
+	data, _, err := runLog(nil, "", pkgRoot, "hg", "log",
 		"--encoding=utf-8",
 		"--limit="+strconv.Itoa(N),
 		"--template="+xmlLogTemplate,
@@ -494,7 +587,7 @@ func commitPoll(key string) {
 	var logStruct struct {
 		Log []HgLog
 	}
-	err = xml.Unmarshal(strings.NewReader("<top>"+data+"</top>"), &logStruct)
+	err = xml.Unmarshal([]byte("<Top>"+data+"</Top>"), &logStruct)
 	if err != nil {
 		log.Printf("unmarshal hg log: %v", err)
 		return
@@ -510,14 +603,11 @@ func commitPoll(key string) {
 		if l.Parent == "" && i+1 < len(logs) {
 			l.Parent = logs[i+1].Hash
 		} else if l.Parent != "" {
-			l.Parent, _ = fullHash(l.Parent)
+			l.Parent, _ = fullHash(pkgRoot, l.Parent)
 		}
-		log.Printf("hg log: %s < %s\n", l.Hash, l.Parent)
-		if l.Parent == "" {
-			// Can't create node without parent.
-			continue
+		if *verbose {
+			log.Printf("hg log %s: %s < %s\n", pkg, l.Hash, l.Parent)
 		}
-
 		if logByHash[l.Hash] == nil {
 			// Make copy to avoid pinning entire slice when only one entry is new.
 			t := *l
@@ -527,17 +617,14 @@ func commitPoll(key string) {
 
 	for i := range logs {
 		l := &logs[i]
-		if l.Parent == "" {
-			continue
-		}
-		addCommit(l.Hash, key)
+		addCommit(pkg, l.Hash, key)
 	}
 }
 
 // addCommit adds the commit with the named hash to the dashboard.
 // key is the secret key for authentication to the dashboard.
 // It avoids duplicate effort.
-func addCommit(hash, key string) bool {
+func addCommit(pkg, hash, key string) bool {
 	l := logByHash[hash]
 	if l == nil {
 		return false
@@ -547,7 +634,7 @@ func addCommit(hash, key string) bool {
 	}
 
 	// Check for already added, perhaps in an earlier run.
-	if dashboardCommit(hash) {
+	if dashboardCommit(pkg, hash) {
 		log.Printf("%s already on dashboard\n", hash)
 		// Record that this hash is on the dashboard,
 		// as must be all its parents.
@@ -559,12 +646,14 @@ func addCommit(hash, key string) bool {
 	}
 
 	// Create parent first, to maintain some semblance of order.
-	if !addCommit(l.Parent, key) {
-		return false
+	if l.Parent != "" {
+		if !addCommit(pkg, l.Parent, key) {
+			return false
+		}
 	}
 
 	// Create commit.
-	if err := postCommit(key, l); err != nil {
+	if err := postCommit(key, pkg, l); err != nil {
 		log.Printf("failed to add %s to dashboard: %v", key, err)
 		return false
 	}
@@ -572,13 +661,13 @@ func addCommit(hash, key string) bool {
 }
 
 // fullHash returns the full hash for the given Mercurial revision.
-func fullHash(rev string) (hash string, err os.Error) {
+func fullHash(root, rev string) (hash string, err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("fullHash: %s: %s", rev, err)
 		}
 	}()
-	s, _, err := runLog(nil, "", goroot,
+	s, _, err := runLog(nil, "", root,
 		"hg", "log",
 		"--encoding=utf-8",
 		"--rev="+rev,
@@ -601,7 +690,7 @@ func fullHash(rev string) (hash string, err os.Error) {
 var revisionRe = regexp.MustCompile(`^([^ ]+) +[0-9]+:([0-9a-f]+)$`)
 
 // firstTag returns the hash and tag of the most recent tag matching re.
-func firstTag(re *regexp.Regexp) (hash string, tag string, err os.Error) {
+func firstTag(re *regexp.Regexp) (hash string, tag string, err error) {
 	o, _, err := runLog(nil, "", goroot, "hg", "tags")
 	for _, l := range strings.Split(o, "\n") {
 		if l == "" {
@@ -609,16 +698,28 @@ func firstTag(re *regexp.Regexp) (hash string, tag string, err os.Error) {
 		}
 		s := revisionRe.FindStringSubmatch(l)
 		if s == nil {
-			err = os.NewError("couldn't find revision number")
+			err = errors.New("couldn't find revision number")
 			return
 		}
 		if !re.MatchString(s[1]) {
 			continue
 		}
 		tag = s[1]
-		hash, err = fullHash(s[2])
+		hash, err = fullHash(goroot, s[2])
 		return
 	}
-	err = os.NewError("no matching tag found")
+	err = errors.New("no matching tag found")
 	return
+}
+
+var repoRe = regexp.MustCompile(`^code\.google\.com/p/([a-z0-9\-]+(\.[a-z0-9\-]+)?)(/[a-z0-9A-Z_.\-/]+)?$`)
+
+// repoURL returns the repository URL for the supplied import path.
+func repoURL(importPath string) string {
+	m := repoRe.FindStringSubmatch(importPath)
+	if len(m) < 2 {
+		log.Printf("repoURL: couldn't decipher %q", importPath)
+		return ""
+	}
+	return "https://code.google.com/p/" + m[1]
 }

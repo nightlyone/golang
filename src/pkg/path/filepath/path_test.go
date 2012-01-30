@@ -260,19 +260,19 @@ type Node struct {
 var tree = &Node{
 	"testdata",
 	[]*Node{
-		&Node{"a", nil, 0},
-		&Node{"b", []*Node{}, 0},
-		&Node{"c", nil, 0},
-		&Node{
+		{"a", nil, 0},
+		{"b", []*Node{}, 0},
+		{"c", nil, 0},
+		{
 			"d",
 			[]*Node{
-				&Node{"x", nil, 0},
-				&Node{"y", []*Node{}, 0},
-				&Node{
+				{"x", nil, 0},
+				{"y", []*Node{}, 0},
+				{
 					"z",
 					[]*Node{
-						&Node{"u", nil, 0},
-						&Node{"v", nil, 0},
+						{"u", nil, 0},
+						{"v", nil, 0},
 					},
 					0,
 				},
@@ -296,6 +296,7 @@ func makeTree(t *testing.T) {
 			fd, err := os.Create(path)
 			if err != nil {
 				t.Errorf("makeTree: %v", err)
+				return
 			}
 			fd.Close()
 		} else {
@@ -318,7 +319,7 @@ func checkMarks(t *testing.T, report bool) {
 // Assumes that each node name is unique. Good enough for a test.
 // If clear is true, any incoming error is cleared before return. The errors
 // are always accumulated, though.
-func mark(path string, info *os.FileInfo, err os.Error, errors *[]os.Error, clear bool) os.Error {
+func mark(path string, info os.FileInfo, err error, errors *[]error, clear bool) error {
 	if err != nil {
 		*errors = append(*errors, err)
 		if clear {
@@ -326,8 +327,9 @@ func mark(path string, info *os.FileInfo, err os.Error, errors *[]os.Error, clea
 		}
 		return err
 	}
+	name := info.Name()
 	walkTree(tree, tree.name, func(path string, n *Node) {
-		if n.name == info.Name {
+		if n.name == name {
 			n.mark++
 		}
 	})
@@ -336,18 +338,18 @@ func mark(path string, info *os.FileInfo, err os.Error, errors *[]os.Error, clea
 
 func TestWalk(t *testing.T) {
 	makeTree(t)
-	errors := make([]os.Error, 0, 10)
+	errors := make([]error, 0, 10)
 	clear := true
-	markFn := func(path string, info *os.FileInfo, err os.Error) os.Error {
+	markFn := func(path string, info os.FileInfo, err error) error {
 		return mark(path, info, err, &errors, clear)
 	}
 	// Expect no errors.
 	err := filepath.Walk(tree.name, markFn)
 	if err != nil {
-		t.Errorf("no error expected, found: %s", err)
+		t.Fatalf("no error expected, found: %s", err)
 	}
 	if len(errors) != 0 {
-		t.Errorf("unexpected errors: %s", errors)
+		t.Fatalf("unexpected errors: %s", errors)
 	}
 	checkMarks(t, true)
 	errors = errors[0:0]
@@ -369,7 +371,7 @@ func TestWalk(t *testing.T) {
 		tree.entries[3].mark--
 		err := filepath.Walk(tree.name, markFn)
 		if err != nil {
-			t.Errorf("expected no error return from Walk, %s", err)
+			t.Fatalf("expected no error return from Walk, got %s", err)
 		}
 		if len(errors) != 2 {
 			t.Errorf("expected 2 errors, got %d: %s", len(errors), errors)
@@ -388,7 +390,7 @@ func TestWalk(t *testing.T) {
 		clear = false // error will stop processing
 		err = filepath.Walk(tree.name, markFn)
 		if err == nil {
-			t.Errorf("expected error return from Walk")
+			t.Fatalf("expected error return from Walk")
 		}
 		if len(errors) != 1 {
 			t.Errorf("expected 1 error, got %d: %s", len(errors), errors)
@@ -422,10 +424,73 @@ var basetests = []PathTest{
 	{"a/b/c.x", "c.x"},
 }
 
+var winbasetests = []PathTest{
+	{`c:\`, `\`},
+	{`c:.`, `.`},
+	{`c:\a\b`, `b`},
+	{`c:a\b`, `b`},
+	{`c:a\b\c`, `c`},
+	{`\\host\share\`, `\`},
+	{`\\host\share\a`, `a`},
+	{`\\host\share\a\b`, `b`},
+}
+
 func TestBase(t *testing.T) {
-	for _, test := range basetests {
-		if s := filepath.ToSlash(filepath.Base(test.path)); s != test.result {
+	tests := basetests
+	if runtime.GOOS == "windows" {
+		// make unix tests work on windows
+		for i, _ := range tests {
+			tests[i].result = filepath.Clean(tests[i].result)
+		}
+		// add windows specific tests
+		tests = append(tests, winbasetests...)
+	}
+	for _, test := range tests {
+		if s := filepath.Base(test.path); s != test.result {
 			t.Errorf("Base(%q) = %q, want %q", test.path, s, test.result)
+		}
+	}
+}
+
+var dirtests = []PathTest{
+	{"", "."},
+	{".", "."},
+	{"/.", "/"},
+	{"/", "/"},
+	{"////", "/"},
+	{"/foo", "/"},
+	{"x/", "x"},
+	{"abc", "."},
+	{"abc/def", "abc"},
+	{"a/b/.x", "a/b"},
+	{"a/b/c.", "a/b"},
+	{"a/b/c.x", "a/b"},
+}
+
+var windirtests = []PathTest{
+	{`c:\`, `c:\`},
+	{`c:.`, `c:.`},
+	{`c:\a\b`, `c:\a`},
+	{`c:a\b`, `c:a`},
+	{`c:a\b\c`, `c:a\b`},
+	{`\\host\share\`, `\\host\share\`},
+	{`\\host\share\a`, `\\host\share\`},
+	{`\\host\share\a\b`, `\\host\share\a`},
+}
+
+func TestDir(t *testing.T) {
+	tests := dirtests
+	if runtime.GOOS == "windows" {
+		// make unix tests work on windows
+		for i, _ := range tests {
+			tests[i].result = filepath.Clean(tests[i].result)
+		}
+		// add windows specific tests
+		tests = append(tests, windirtests...)
+	}
+	for _, test := range tests {
+		if s := filepath.Dir(test.path); s != test.result {
+			t.Errorf("Dir(%q) = %q, want %q", test.path, s, test.result)
 		}
 	}
 }
@@ -523,7 +588,7 @@ func testEvalSymlinks(t *testing.T, tests []EvalSymlinksTest) {
 func TestEvalSymlinks(t *testing.T) {
 	defer os.RemoveAll("test")
 	for _, d := range EvalSymlinksTestDirs {
-		var err os.Error
+		var err error
 		if d.dest == "" {
 			err = os.Mkdir(d.path, 0755)
 		} else {
@@ -572,16 +637,17 @@ var abstests = []string{
 	"pkg/../../AUTHORS",
 	"Make.pkg",
 	"pkg/Makefile",
-
-	// Already absolute
+	".",
 	"$GOROOT/src/Make.pkg",
 	"$GOROOT/src/../src/Make.pkg",
+	"$GOROOT/misc/cgo",
+	"$GOROOT",
 }
 
 func TestAbs(t *testing.T) {
 	oldwd, err := os.Getwd()
 	if err != nil {
-		t.Fatal("Getwd failed: " + err.String())
+		t.Fatal("Getwd failed: " + err.Error())
 	}
 	defer os.Chdir(oldwd)
 	goroot := os.Getenv("GOROOT")
@@ -589,16 +655,19 @@ func TestAbs(t *testing.T) {
 	os.Chdir(cwd)
 	for _, path := range abstests {
 		path = strings.Replace(path, "$GOROOT", goroot, -1)
-		abspath, err := filepath.Abs(path)
-		if err != nil {
-			t.Errorf("Abs(%q) error: %v", path, err)
-		}
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Errorf("%s: %s", path, err)
+			continue
+		}
+
+		abspath, err := filepath.Abs(path)
+		if err != nil {
+			t.Errorf("Abs(%q) error: %v", path, err)
+			continue
 		}
 		absinfo, err := os.Stat(abspath)
-		if err != nil || absinfo.Ino != info.Ino {
+		if err != nil || !absinfo.(*os.FileStat).SameFile(info.(*os.FileStat)) {
 			t.Errorf("Abs(%q)=%q, not the same file", path, abspath)
 		}
 		if !filepath.IsAbs(abspath) {
@@ -606,6 +675,85 @@ func TestAbs(t *testing.T) {
 		}
 		if filepath.IsAbs(path) && abspath != filepath.Clean(path) {
 			t.Errorf("Abs(%q)=%q, isn't clean", path, abspath)
+		}
+	}
+}
+
+type RelTests struct {
+	root, path, want string
+}
+
+var reltests = []RelTests{
+	{"a/b", "a/b", "."},
+	{"a/b/.", "a/b", "."},
+	{"a/b", "a/b/.", "."},
+	{"./a/b", "a/b", "."},
+	{"a/b", "./a/b", "."},
+	{"ab/cd", "ab/cde", "../cde"},
+	{"ab/cd", "ab/c", "../c"},
+	{"a/b", "a/b/c/d", "c/d"},
+	{"a/b", "a/b/../c", "../c"},
+	{"a/b/../c", "a/b", "../b"},
+	{"a/b/c", "a/c/d", "../../c/d"},
+	{"a/b", "c/d", "../../c/d"},
+	{"a/b/c/d", "a/b", "../.."},
+	{"a/b/c/d", "a/b/", "../.."},
+	{"a/b/c/d/", "a/b", "../.."},
+	{"a/b/c/d/", "a/b/", "../.."},
+	{"../../a/b", "../../a/b/c/d", "c/d"},
+	{"/a/b", "/a/b", "."},
+	{"/a/b/.", "/a/b", "."},
+	{"/a/b", "/a/b/.", "."},
+	{"/ab/cd", "/ab/cde", "../cde"},
+	{"/ab/cd", "/ab/c", "../c"},
+	{"/a/b", "/a/b/c/d", "c/d"},
+	{"/a/b", "/a/b/../c", "../c"},
+	{"/a/b/../c", "/a/b", "../b"},
+	{"/a/b/c", "/a/c/d", "../../c/d"},
+	{"/a/b", "/c/d", "../../c/d"},
+	{"/a/b/c/d", "/a/b", "../.."},
+	{"/a/b/c/d", "/a/b/", "../.."},
+	{"/a/b/c/d/", "/a/b", "../.."},
+	{"/a/b/c/d/", "/a/b/", "../.."},
+	{"/../../a/b", "/../../a/b/c/d", "c/d"},
+	{".", "a/b", "a/b"},
+	{".", "..", ".."},
+
+	// can't do purely lexically
+	{"..", ".", "err"},
+	{"..", "a", "err"},
+	{"../..", "..", "err"},
+	{"a", "/a", "err"},
+	{"/a", "a", "err"},
+}
+
+var winreltests = []RelTests{
+	{`C:a\b\c`, `C:a/b/d`, `..\d`},
+	{`C:\`, `D:\`, `err`},
+	{`C:`, `D:`, `err`},
+}
+
+func TestRel(t *testing.T) {
+	tests := append([]RelTests{}, reltests...)
+	if runtime.GOOS == "windows" {
+		for i := range tests {
+			tests[i].want = filepath.FromSlash(tests[i].want)
+		}
+		tests = append(tests, winreltests...)
+	}
+	for _, test := range tests {
+		got, err := filepath.Rel(test.root, test.path)
+		if test.want == "err" {
+			if err == nil {
+				t.Errorf("Rel(%q, %q)=%q, want error", test.root, test.path, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("Rel(%q, %q): want %q, got error: %s", test.root, test.path, test.want, err)
+		}
+		if got != test.want {
+			t.Errorf("Rel(%q, %q)=%q, want %q", test.root, test.path, got, test.want)
 		}
 	}
 }

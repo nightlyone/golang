@@ -32,7 +32,7 @@ typecheckrange(Node *n)
 
 	switch(t->etype) {
 	default:
-		yyerror("cannot range over %+N", n->right);
+		yyerror("cannot range over %lN", n->right);
 		goto out;
 
 	case TARRAY:
@@ -46,6 +46,10 @@ typecheckrange(Node *n)
 		break;
 
 	case TCHAN:
+		if(!(t->chan & Crecv)) {
+			yyerror("invalid operation: range %N (receive from send-only type %T)", n->right, n->right->type);
+			goto out;
+		}
 		t1 = t->type;
 		t2 = nil;
 		if(count(n->list) == 2)
@@ -54,7 +58,7 @@ typecheckrange(Node *n)
 
 	case TSTRING:
 		t1 = types[TINT];
-		t2 = types[TINT];
+		t2 = runetype;
 		break;
 	}
 
@@ -71,12 +75,12 @@ typecheckrange(Node *n)
 	if(v1->defn == n)
 		v1->type = t1;
 	else if(v1->type != T && assignop(t1, v1->type, &why) == 0)
-		yyerror("cannot assign type %T to %+N in range%s", t1, v1, why);
+		yyerror("cannot assign type %T to %lN in range%s", t1, v1, why);
 	if(v2) {
 		if(v2->defn == n)
 			v2->type = t2;
 		else if(v2->type != T && assignop(t2, v2->type, &why) == 0)
-			yyerror("cannot assign type %T to %+N in range%s", t2, v2, why);
+			yyerror("cannot assign type %T to %lN in range%s", t2, v2, why);
 	}
 
 out:
@@ -163,7 +167,9 @@ walkrange(Node *n)
 	case TMAP:
 		th = typ(TARRAY);
 		th->type = ptrto(types[TUINT8]);
-		th->bound = (sizeof(struct Hiter) + widthptr - 1) / widthptr;
+		// see ../../pkg/runtime/hashmap.h:/hash_iter
+		// Size in words.
+		th->bound = 5 + 4*3 + 4*4/widthptr;
 		hit = temp(th);
 
 		fn = syslook("mapiterinit", 1);
@@ -216,7 +222,7 @@ walkrange(Node *n)
 		if(v2 == N)
 			a = nod(OAS, hv1, mkcall("stringiter", types[TINT], nil, ha, hv1));
 		else {
-			hv2 = temp(types[TINT]);
+			hv2 = temp(runetype);
 			a = nod(OAS2, N, N);
 			a->list = list(list1(hv1), hv2);
 			fn = syslook("stringiter2", 0);

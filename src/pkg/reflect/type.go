@@ -69,7 +69,7 @@ type Type interface {
 
 	// PkgPath returns the type's package path.
 	// The package path is a full package import path like "encoding/base64".
-	// PkgPath returns an empty string for unnamed types.
+	// PkgPath returns an empty string for unnamed or predeclared types.
 	PkgPath() string
 
 	// Size returns the number of bytes needed to store
@@ -188,7 +188,7 @@ type Type interface {
 
 // A Kind represents the specific kind of type that a Type represents.
 // The zero Kind is not a valid kind.
-type Kind uint8
+type Kind uint
 
 const (
 	Invalid Kind = iota
@@ -241,10 +241,11 @@ const (
 type commonType struct {
 	size       uintptr
 	hash       uint32
-	alg        uint8
+	_          uint8
 	align      uint8
 	fieldAlign uint8
 	kind       uint8
+	alg        *uintptr
 	string     *string
 	*uncommonType
 	ptrToThis *runtime.Type
@@ -455,14 +456,15 @@ func (t *uncommonType) Method(i int) (m Method) {
 	if p.name != nil {
 		m.Name = *p.name
 	}
-	flag := uint32(0)
+	fl := flag(Func) << flagKindShift
 	if p.pkgPath != nil {
 		m.PkgPath = *p.pkgPath
-		flag |= flagRO
+		fl |= flagRO
 	}
-	m.Type = toType(p.typ)
+	mt := toCommonType(p.typ)
+	m.Type = mt
 	fn := p.tfn
-	m.Func = valueFromIword(flag, m.Type, iword(fn))
+	m.Func = Value{mt, fn, fl}
 	m.Index = i
 	return
 }
@@ -768,7 +770,7 @@ func (t *structType) Field(i int) (f StructField) {
 	if i < 0 || i >= len(t.fields) {
 		return
 	}
-	p := t.fields[i]
+	p := &t.fields[i]
 	f.Type = toType(p.typ)
 	if p.name != nil {
 		f.Name = *p.name
@@ -867,16 +869,18 @@ L:
 
 	if n == 1 {
 		// Found matching field.
-		if len(ff.Index) <= depth {
+		if depth >= len(ff.Index) {
 			ff.Index = make([]int, depth+1)
 		}
-		ff.Index[depth] = fi
+		if len(ff.Index) > 1 {
+			ff.Index[depth] = fi
+		}
 	} else {
 		// None or more than one matching field found.
 		fd = inf
 	}
 
-	mark[t] = false, false
+	delete(mark, t)
 	return
 }
 
@@ -906,9 +910,6 @@ func toCommonType(p *runtime.Type) *commonType {
 		t commonType
 	}
 	x := unsafe.Pointer(p)
-	if uintptr(x)&reflectFlags != 0 {
-		panic("reflect: invalid interface value")
-	}
 	return &(*hdr)(x).t
 }
 
@@ -944,10 +945,12 @@ func (t *commonType) runtimeType() *runtime.Type {
 // PtrTo returns the pointer type with element t.
 // For example, if t represents type Foo, PtrTo(t) represents *Foo.
 func PtrTo(t Type) Type {
-	// If t records its pointer-to type, use it.
-	ct := t.(*commonType)
+	return t.(*commonType).ptrTo()
+}
+
+func (ct *commonType) ptrTo() *commonType {
 	if p := ct.ptrToThis; p != nil {
-		return toType(p)
+		return toCommonType(p)
 	}
 
 	// Otherwise, synthesize one.
@@ -959,7 +962,7 @@ func PtrTo(t Type) Type {
 	if m := ptrMap.m; m != nil {
 		if p := m[ct]; p != nil {
 			ptrMap.RUnlock()
-			return p.commonType.toType()
+			return &p.commonType
 		}
 	}
 	ptrMap.RUnlock()
@@ -971,7 +974,7 @@ func PtrTo(t Type) Type {
 	if p != nil {
 		// some other goroutine won the race and created it
 		ptrMap.Unlock()
-		return p
+		return &p.commonType
 	}
 
 	var rt struct {
@@ -1003,7 +1006,7 @@ func PtrTo(t Type) Type {
 
 	ptrMap.m[ct] = p
 	ptrMap.Unlock()
-	return p.commonType.toType()
+	return &p.commonType
 }
 
 func (t *commonType) Implements(u Type) bool {

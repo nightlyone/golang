@@ -8,28 +8,28 @@ TARG=time
 GOFILES=\
 	format.go\
 	sleep.go\
-	sys.go\
 	tick.go\
 	time.go\
+	zoneinfo.go\
 
 GOFILES_freebsd=\
 	sys_unix.go\
-	zoneinfo_posix.go\
 	zoneinfo_unix.go\
 
 GOFILES_darwin=\
 	sys_unix.go\
-	zoneinfo_posix.go\
 	zoneinfo_unix.go\
 
 GOFILES_linux=\
 	sys_unix.go\
-	zoneinfo_posix.go\
+	zoneinfo_unix.go\
+
+GOFILES_netbsd=\
+	sys_unix.go\
 	zoneinfo_unix.go\
 
 GOFILES_openbsd=\
 	sys_unix.go\
-	zoneinfo_posix.go\
 	zoneinfo_unix.go\
 
 GOFILES_windows=\
@@ -38,7 +38,6 @@ GOFILES_windows=\
 
 GOFILES_plan9=\
 	sys_plan9.go\
-	zoneinfo_posix.go\
 	zoneinfo_plan9.go\
 
 GOFILES+=$(GOFILES_$(GOOS))

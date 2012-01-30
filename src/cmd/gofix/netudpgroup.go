@@ -8,17 +8,18 @@ import (
 	"go/ast"
 )
 
+func init() {
+	register(netudpgroupFix)
+}
+
 var netudpgroupFix = fix{
 	"netudpgroup",
+	"2011-08-18",
 	netudpgroup,
 	`Adapt 1-argument calls of net.(*UDPConn).JoinGroup, LeaveGroup to use 2-argument form.
 
 http://codereview.appspot.com/4815074
 `,
-}
-
-func init() {
-	register(netudpgroupFix)
 }
 
 func netudpgroup(f *ast.File) bool {
@@ -29,7 +30,7 @@ func netudpgroup(f *ast.File) bool {
 	fixed := false
 	for _, d := range f.Decls {
 		fd, ok := d.(*ast.FuncDecl)
-		if !ok {
+		if !ok || fd.Body == nil {
 			continue
 		}
 		walk(fd.Body, func(n interface{}) {

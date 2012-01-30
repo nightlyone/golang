@@ -26,6 +26,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 )
 
 // zipFI is the zip-file based implementation of FileInfo
@@ -45,19 +46,23 @@ func (fi zipFI) Size() int64 {
 	return 0 // directory
 }
 
-func (fi zipFI) Mtime_ns() int64 {
+func (fi zipFI) ModTime() time.Time {
 	if f := fi.file; f != nil {
-		return f.Mtime_ns()
+		return f.ModTime()
 	}
-	return 0 // directory has no modified time entry
+	return time.Time{} // directory has no modified time entry
 }
 
-func (fi zipFI) IsDirectory() bool {
+func (fi zipFI) Mode() os.FileMode {
+	if fi.file == nil {
+		// Unix directories typically are executable, hence 555.
+		return os.ModeDir | 0555
+	}
+	return 0444
+}
+
+func (fi zipFI) IsDir() bool {
 	return fi.file == nil
-}
-
-func (fi zipFI) IsRegular() bool {
-	return fi.file != nil
 }
 
 // zipFS is the zip-file based implementation of FileSystem
@@ -66,7 +71,7 @@ type zipFS struct {
 	list zipList
 }
 
-func (fs *zipFS) Close() os.Error {
+func (fs *zipFS) Close() error {
 	fs.list = nil
 	return fs.ReadCloser.Close()
 }
@@ -79,7 +84,7 @@ func zipPath(name string) string {
 	return name[1:] // strip leading '/'
 }
 
-func (fs *zipFS) stat(abspath string) (int, zipFI, os.Error) {
+func (fs *zipFS) stat(abspath string) (int, zipFI, error) {
 	i, exact := fs.list.lookup(abspath)
 	if i < 0 {
 		// abspath has leading '/' stripped - print it explicitly
@@ -93,38 +98,38 @@ func (fs *zipFS) stat(abspath string) (int, zipFI, os.Error) {
 	return i, zipFI{name, file}, nil
 }
 
-func (fs *zipFS) Open(abspath string) (io.ReadCloser, os.Error) {
+func (fs *zipFS) Open(abspath string) (io.ReadCloser, error) {
 	_, fi, err := fs.stat(zipPath(abspath))
 	if err != nil {
 		return nil, err
 	}
-	if fi.IsDirectory() {
+	if fi.IsDir() {
 		return nil, fmt.Errorf("Open: %s is a directory", abspath)
 	}
 	return fi.file.Open()
 }
 
-func (fs *zipFS) Lstat(abspath string) (FileInfo, os.Error) {
+func (fs *zipFS) Lstat(abspath string) (os.FileInfo, error) {
 	_, fi, err := fs.stat(zipPath(abspath))
 	return fi, err
 }
 
-func (fs *zipFS) Stat(abspath string) (FileInfo, os.Error) {
+func (fs *zipFS) Stat(abspath string) (os.FileInfo, error) {
 	_, fi, err := fs.stat(zipPath(abspath))
 	return fi, err
 }
 
-func (fs *zipFS) ReadDir(abspath string) ([]FileInfo, os.Error) {
+func (fs *zipFS) ReadDir(abspath string) ([]os.FileInfo, error) {
 	path := zipPath(abspath)
 	i, fi, err := fs.stat(path)
 	if err != nil {
 		return nil, err
 	}
-	if !fi.IsDirectory() {
+	if !fi.IsDir() {
 		return nil, fmt.Errorf("ReadDir: %s is not a directory", abspath)
 	}
 
-	var list []FileInfo
+	var list []os.FileInfo
 	dirname := path + "/"
 	prevname := ""
 	for _, e := range fs.list[i:] {

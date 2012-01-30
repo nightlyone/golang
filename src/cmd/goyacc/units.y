@@ -14,7 +14,7 @@
 // units.y
 // example of a goyacc program
 // usage is
-//	goyacc units.y (produces y.go)
+//	goyacc -p "units_" units.y (produces y.go)
 //	6g y.go
 //	6l y.6
 //	./6.out $GOROOT/src/cmd/goyacc/units
@@ -33,7 +33,7 @@ import (
 	"os"
 	"math"
 	"strconv"
-	"utf8"
+	"unicode/utf8"
 )
 
 const (
@@ -58,21 +58,19 @@ var lineno int       // current input line number
 var linep int        // index to next rune in unput
 var nerrors int      // error count
 var one Node         // constant one
-var peekrune int     // backup runt from input
+var peekrune rune    // backup runt from input
 var retnode1 Node
 var retnode2 Node
 var retnode Node
 var sym string
 var vflag bool
-
 %}
 
-%union
-{
-	node	Node
-	vvar	*Var
-	numb	int
-	vval	float64
+%union {
+	node Node
+	vvar *Var
+	numb int
+	vval float64
 }
 
 %type	<node>	prog expr expr0 expr1 expr2 expr3 expr4
@@ -85,7 +83,6 @@ prog:
 	':' VAR expr
 	{
 		var f int
-
 		f = int($2.node.dim[0])
 		$2.node = $3
 		$2.node.dim[0] = 1
@@ -98,26 +95,23 @@ prog:
 |	':' VAR '#'
 	{
 		var f, i int
-
-		for i=1; i<Ndim; i++ {
+		for i = 1; i < Ndim; i++ {
 			if fund[i] == nil {
 				break
 			}
 		}
 		if i >= Ndim {
 			Error("too many dimensions")
-			i = Ndim-1
+			i = Ndim - 1
 		}
 		fund[i] = $2
-
 		f = int($2.node.dim[0])
 		$2.node = one
 		$2.node.dim[0] = 1
 		$2.node.dim[i] = 1
 		if f != 0 {
 			Errorf("redefinition of %v", $2.name)
-		} else
-		if vflag {
+		} else if vflag {
 			fmt.Printf("%v\t#\n", $2.name)
 		}
 	}
@@ -171,8 +165,7 @@ expr2:
 |	expr2 '^' expr1
 	{
 		var i int
-
-		for i=1; i<Ndim; i++ {
+		for i = 1; i < Ndim; i++ {
 			if $3.dim[i] != 0 {
 				Error("exponent has units")
 				$$ = $1
@@ -219,7 +212,8 @@ expr0:
 type UnitsLex int
 
 func (UnitsLex) Lex(yylval *units_SymType) int {
-	var c, i int
+	var c rune
+	var i int
 
 	c = peekrune
 	peekrune = ' '
@@ -249,7 +243,7 @@ loop:
 		yylval.numb = 3
 		return SUP
 	}
-	return c
+	return int(c)
 
 alpha:
 	sym = ""
@@ -274,7 +268,7 @@ numb:
 		}
 	}
 	peekrune = c
-	f, err := strconv.Atof64(sym)
+	f, err := strconv.ParseFloat(sym, 64)
 	if err != nil {
 		fmt.Printf("error converting %v\n", sym)
 		f = 0
@@ -369,7 +363,7 @@ func main() {
  * all characters that have some
  * meaning. rest are usable as names
  */
-func ralpha(c int) bool {
+func ralpha(c rune) bool {
 	switch c {
 	case 0, '+', '-', '*', '/', '[', ']', '(', ')',
 		'^', ':', '?', ' ', '\t', '.', '|', '#',
@@ -382,7 +376,7 @@ func ralpha(c int) bool {
 /*
  * number forming character
  */
-func rdigit(c int) bool {
+func rdigit(c rune) bool {
 	switch c {
 	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
 		'.', 'e', '+', '-':
@@ -584,8 +578,9 @@ func readline() bool {
 	return false
 }
 
-func getrune() int {
-	var c, n int
+func getrune() rune {
+	var c rune
+	var n int
 
 	if linep >= len(line) {
 		return 0
@@ -689,7 +684,6 @@ func pname() float64 {
 
 	return 0
 }
-
 
 // careful multiplication
 // exponents (log) are checked before multiply

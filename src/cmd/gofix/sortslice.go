@@ -9,15 +9,18 @@ import (
 )
 
 func init() {
-	register(fix{
-		"sortslice",
-		sortslice,
-		`Adapt code from sort.[Float64|Int|String]Array to  sort.[Float64|Int|String]Slice.
+	register(sortsliceFix)
+}
+
+var sortsliceFix = fix{
+	"sortslice",
+	"2011-06-26",
+	sortslice,
+	`Adapt code from sort.[Float64|Int|String]Array to  sort.[Float64|Int|String]Slice.
 		
 http://codereview.appspot.com/4602054
 http://codereview.appspot.com/4639041
 `,
-	})
 }
 
 func sortslice(f *ast.File) (fixed bool) {

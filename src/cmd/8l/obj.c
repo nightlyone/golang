@@ -47,18 +47,19 @@ char	*noname		= "<none>";
 char	*thestring 	= "386";
 
 Header headers[] = {
-   "garbunix", Hgarbunix,
-   "unixcoff", Hunixcoff,
-   "plan9", Hplan9x32,
-   "msdoscom", Hmsdoscom,
-   "msdosexe", Hmsdosexe,
-   "darwin", Hdarwin,
-   "linux", Hlinux,
-   "freebsd", Hfreebsd,
-   "openbsd", Hopenbsd,
-   "windows", Hwindows,
-   "windowsgui", Hwindows,
-   0, 0
+	"garbunix", Hgarbunix,
+	"unixcoff", Hunixcoff,
+	"plan9", Hplan9x32,
+	"msdoscom", Hmsdoscom,
+	"msdosexe", Hmsdosexe,
+	"darwin", Hdarwin,
+	"linux", Hlinux,
+	"freebsd", Hfreebsd,
+	"netbsd", Hnetbsd,
+	"openbsd", Hopenbsd,
+	"windows", Hwindows,
+	"windowsgui", Hwindows,
+	0, 0
 };
 
 /*
@@ -70,6 +71,7 @@ Header headers[] = {
  *	-Hdarwin -Tx -Rx			is Apple Mach-O
  *	-Hlinux -Tx -Rx				is Linux ELF32
  *	-Hfreebsd -Tx -Rx			is FreeBSD ELF32
+ *	-Hnetbsd -Tx -Rx			is NetBSD ELF32
  *	-Hopenbsd -Tx -Rx			is OpenBSD ELF32
  *	-Hwindows -Tx -Rx			is MS Windows PE32
  */
@@ -135,6 +137,11 @@ main(int argc, char *argv[])
 	case 'V':
 		print("%cl version %s\n", thechar, getgoversion());
 		errorexit();
+	case 'X':
+		// TODO: golang.org/issue/2676
+		EARGF(usage());
+		EARGF(usage());
+		break;
 	} ARGEND
 
 	if(argc != 1)
@@ -211,7 +218,7 @@ main(int argc, char *argv[])
 	case Hdarwin:	/* apple MACH */
 		/*
 		 * OS X system constant - offset from %gs to our TLS.
-		 * Explained in ../../libcgo/darwin_386.c.
+		 * Explained in ../../pkg/runtime/cgo/gcc_darwin_386.c.
 		 */
 		tlsoffset = 0x468;
 		machoinit();
@@ -225,12 +232,13 @@ main(int argc, char *argv[])
 		break;
 	case Hlinux:	/* elf32 executable */
 	case Hfreebsd:
+	case Hnetbsd:
 	case Hopenbsd:
 		/*
 		 * ELF uses TLS offsets negative from %gs.
 		 * Translate 0(GS) and 4(GS) into -8(GS) and -4(GS).
-		 * Also known to ../../pkg/runtime/linux/386/sys.s
-		 * and ../../libcgo/linux_386.c.
+		 * Also known to ../../pkg/runtime/sys_linux_386.s
+		 * and ../../pkg/runtime/cgo/gcc_linux_386.c.
 		 */
 		tlsoffset = -8;
 		elfinit();
@@ -480,7 +488,7 @@ loop:
 			sig = 1729;
 		if(sig != 0){
 			if(s->sig != 0 && s->sig != sig)
-				diag("incompatible type signatures"
+				diag("incompatible type signatures "
 					"%ux(%s) and %ux(%s) for %s",
 					s->sig, s->file, sig, pn, s->name);
 			s->sig = sig;
@@ -597,6 +605,10 @@ loop:
 	case ATEXT:
 		s = p->from.sym;
 		if(s->text != nil) {
+			if(p->from.scale & DUPOK) {
+				skip = 1;
+				goto casdef;
+			}
 			diag("%s: %s: redefinition", pn, s->name);
 			return;
 		}

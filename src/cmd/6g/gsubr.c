@@ -481,12 +481,20 @@ nodarg(Type *t, int fp)
 	n = nod(ONAME, N, N);
 	n->type = t->type;
 	n->sym = t->sym;
+	
 	if(t->width == BADWIDTH)
 		fatal("nodarg: offset not computed for %T", t);
 	n->xoffset = t->width;
 	n->addable = 1;
+	n->orig = t->nname;
 
 fp:
+	// Rewrite argument named _ to __,
+	// or else the assignment to _ will be
+	// discarded during code generation.
+	if(isblank(n))
+		n->sym = lookup("__");
+
 	switch(fp) {
 	case 0:		// output arg
 		n->op = OINDREG;
@@ -1119,6 +1127,7 @@ naddr(Node *n, Addr *a, int canemitcode)
 		a->offset = n->xoffset;
 		a->sym = n->left->sym;
 		a->type = D_PARAM;
+		a->node = n->left->orig;
 		break;
 
 	case ONAME:
@@ -1131,6 +1140,9 @@ naddr(Node *n, Addr *a, int canemitcode)
 		}
 		a->offset = n->xoffset;
 		a->sym = n->sym;
+		a->node = n->orig;
+		//if(a->node >= (Node*)&n)
+		//	fatal("stack node");
 		if(a->sym == S)
 			a->sym = lookup(".noname");
 		if(n->method) {
@@ -1148,8 +1160,6 @@ naddr(Node *n, Addr *a, int canemitcode)
 			break;
 		case PAUTO:
 			a->type = D_AUTO;
-			if (n->sym)
-				a->node = n->orig;
 			break;
 		case PPARAM:
 		case PPARAMOUT:
@@ -1172,6 +1182,7 @@ naddr(Node *n, Addr *a, int canemitcode)
 			a->dval = mpgetflt(n->val.u.fval);
 			break;
 		case CTINT:
+		case CTRUNE:
 			a->sym = S;
 			a->type = D_CONST;
 			a->offset = mpgetfix(n->val.u.xval);
@@ -1875,7 +1886,7 @@ sudoaddable(int as, Node *n, Addr *a)
 
 	switch(n->op) {
 	case OLITERAL:
-		if(n->val.ctype != CTINT)
+		if(!isconst(n, CTINT))
 			break;
 		v = mpgetfix(n->val.u.xval);
 		if(v >= 32000 || v <= -32000)

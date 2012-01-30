@@ -8,17 +8,18 @@ import (
 	"go/ast"
 )
 
+func init() {
+	register(imagenewFix)
+}
+
 var imagenewFix = fix{
 	"imagenew",
+	"2011-09-14",
 	imagenew,
 	`Adapt image.NewXxx calls to pass an image.Rectangle instead of (w, h int).
 
 http://codereview.appspot.com/4964073
 `,
-}
-
-func init() {
-	register(imagenewFix)
 }
 
 var imagenewFuncs = map[string]bool{

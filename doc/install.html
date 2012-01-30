@@ -1,4 +1,6 @@
-<!-- Getting Started -->
+<!--{
+	"Title": "Getting Started"
+}-->
 
 <h2 id="introduction">Introduction</h2>
 
@@ -61,7 +63,7 @@ support for segmented stacks, and a strong goroutine implementation.
 </p>
 
 <p>
-The compilers can target the FreeBSD, Linux,
+The compilers can target the FreeBSD, Linux, OpenBSD
 and OS X (a.k.a. Darwin) operating systems.
 (A port to Microsoft Windows is in progress but incomplete.  See the 
 <a href="http://code.google.com/p/go/wiki/WindowsPort">Windows Port</a>
@@ -88,7 +90,7 @@ and
 
 <p>On OS X, they can be
 installed as part of
-<a href="http://developer.apple.com/TOOLS/Xcode/">Xcode</a>. 
+<a href="http://developer.apple.com/Xcode/">Xcode</a>. 
 </p>
 
 <p>On Ubuntu/Debian, use <code>sudo apt-get install bison gawk gcc libc6-dev
@@ -102,7 +104,7 @@ also need the <code>libc6-dev-i386</code> package.
 To perform the next step you must have Mercurial installed. (Check that you  have an <code>hg</code> command.) This suffices to install Mercurial on most systems:
 </p>
 <pre>
-sudo easy_install mercurial
+sudo easy_install mercurial==2.0
 </pre>
 (On Ubuntu/Debian, you might try <code>apt-get install python-setuptools
 python-dev build-essential</code> first. The Mercurial in your distribution's
@@ -118,7 +120,7 @@ Mercurial versions 1.7.x and up require the configuration of
 (CAs). Error messages of the form:
 </p>
 <pre>
-warning: go.googlecode.com certificate with fingerprint b1:af: ... bc not verified (check hostfingerprints or web.cacerts config setting)
+warning: code.google.com certificate with fingerprint b1:af: ... bc not verified (check hostfingerprints or web.cacerts config setting)
 </pre>
 <p>
 when using Mercurial indicate that the CAs are missing.
@@ -136,7 +138,7 @@ and make sure the <code>go</code> directory does not exist.
 Then check out the repository:</p>
 
 <pre>
-$ hg clone -u release https://go.googlecode.com/hg/ go
+$ hg clone -u release https://code.google.com/p/go
 </pre>
 
 <h2 id="install">Install Go</h2>
@@ -257,7 +259,8 @@ the process of building and testing Go programs.
 <h2 id="next">What's next</h2>
 
 <p>
-Start by reading the <a href="go_tutorial.html">Go Tutorial</a>.
+Start by taking <a href="http://code.google.com/p/go-tour/">A Tour of Go</a>
+or reading the <a href="go_tutorial.html">Go Tutorial</a>.
 </p>
 
 <p>
@@ -372,9 +375,9 @@ to override the defaults.
 	<code>$GOHOSTARCH</code> respectively (described below).
 
 	<p>
-	Choices for <code>$GOOS</code> are <code>linux</code>,
-	<code>freebsd</code>,
+	Choices for <code>$GOOS</code> are
 	<code>darwin</code> (Mac OS X 10.5 or 10.6),
+	<code>freebsd</code>, <code>linux</code>, <code>openbsd</code>,
 	and <code>windows</code> (Windows, an incomplete port).
 	Choices for <code>$GOARCH</code> are <code>amd64</code> (64-bit x86, the most mature port),
 	<code>386</code> (32-bit x86), and
@@ -404,6 +407,12 @@ to override the defaults.
 	</tr>
 	<tr>
 	<td></td><td><code>linux</code></td> <td><code>arm</code></td> <td><i>incomplete</i></td>
+	</tr>
+	<tr>
+	<td></td><td><code>openbsd</code></td> <td><code>386</code></td>
+	</tr>
+	<tr>
+	<td></td><td><code>openbsd</code></td> <td><code>amd64</code></td>
 	</tr>
 	<tr>
 	<td></td><td><code>windows</code></td> <td><code>386</code></td> <td><i>incomplete</i></td>

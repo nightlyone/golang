@@ -1,9 +1,12 @@
+// Copyright 2010 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package main
 
 import (
 	"fmt"
 	"io/ioutil"
-	"os"
 )
 
 type Page struct {
@@ -11,7 +14,7 @@ type Page struct {
 	Body  []byte
 }
 
-func (p *Page) save() os.Error {
+func (p *Page) save() error {
 	filename := p.Title + ".txt"
 	return ioutil.WriteFile(filename, p.Body, 0600)
 }

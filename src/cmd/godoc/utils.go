@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"utf8"
+	"unicode/utf8"
 )
 
 // An RWValue wraps a value and permits mutually exclusive
@@ -24,17 +24,17 @@ import (
 type RWValue struct {
 	mutex     sync.RWMutex
 	value     interface{}
-	timestamp int64 // time of last set(), in seconds since epoch
+	timestamp time.Time // time of last set()
 }
 
 func (v *RWValue) set(value interface{}) {
 	v.mutex.Lock()
 	v.value = value
-	v.timestamp = time.Seconds()
+	v.timestamp = time.Now()
 	v.mutex.Unlock()
 }
 
-func (v *RWValue) get() (interface{}, int64) {
+func (v *RWValue) get() (interface{}, time.Time) {
 	v.mutex.RLock()
 	defer v.mutex.RUnlock()
 	return v.value, v.timestamp
@@ -93,7 +93,7 @@ func canonicalizePaths(list []string, filter func(path string) bool) []string {
 // writeFileAtomically writes data to a temporary file and then
 // atomically renames that file to the file named by filename.
 //
-func writeFileAtomically(filename string, data []byte) os.Error {
+func writeFileAtomically(filename string, data []byte) error {
 	// TODO(gri) this won't work on appengine
 	f, err := ioutil.TempFile(filepath.Split(filename))
 	if err != nil {

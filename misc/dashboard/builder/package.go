@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"go/doc"
 	"go/parser"
@@ -17,7 +18,7 @@ import (
 
 const MaxCommentLength = 500 // App Engine won't store more in a StringProperty.
 
-func (b *Builder) buildPackages(workpath string, hash string) os.Error {
+func (b *Builder) buildExternalPackages(workpath string, hash string) error {
 	logdir := filepath.Join(*buildroot, "log")
 	if err := os.Mkdir(logdir, 0755); err != nil {
 		return err
@@ -80,14 +81,14 @@ func (b *Builder) buildPackages(workpath string, hash string) os.Error {
 	return nil
 }
 
-func isGoFile(fi *os.FileInfo) bool {
-	return fi.IsRegular() && // exclude directories
-		!strings.HasPrefix(fi.Name, ".") && // ignore .files
-		!strings.HasSuffix(fi.Name, "_test.go") && // ignore tests
-		filepath.Ext(fi.Name) == ".go"
+func isGoFile(fi os.FileInfo) bool {
+	return !fi.IsDir() && // exclude directories
+		!strings.HasPrefix(fi.Name(), ".") && // ignore .files
+		!strings.HasSuffix(fi.Name(), "_test.go") && // ignore tests
+		filepath.Ext(fi.Name()) == ".go"
 }
 
-func packageComment(pkg, pkgpath string) (info string, err os.Error) {
+func packageComment(pkg, pkgpath string) (info string, err error) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, pkgpath, isGoFile, parser.PackageClauseOnly|parser.ParseComments)
 	if err != nil {
@@ -97,12 +98,12 @@ func packageComment(pkg, pkgpath string) (info string, err os.Error) {
 		if name == "main" {
 			continue
 		}
-		pdoc := doc.NewPackageDoc(pkgs[name], pkg)
+		pdoc := doc.New(pkgs[name], pkg, doc.AllDecls)
 		if pdoc.Doc == "" {
 			continue
 		}
 		if info != "" {
-			return "", os.NewError("multiple packages with docs")
+			return "", errors.New("multiple packages with docs")
 		}
 		info = pdoc.Doc
 	}

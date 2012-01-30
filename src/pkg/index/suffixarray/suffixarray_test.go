@@ -6,8 +6,8 @@ package suffixarray
 
 import (
 	"bytes"
-	"exp/regexp"
-	"rand"
+	"math/rand"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -230,11 +230,13 @@ func equal(x, y *Index) bool {
 	return true
 }
 
-func testSaveRestore(t *testing.T, tc *testCase, x *Index) {
+// returns the serialized index size
+func testSaveRestore(t *testing.T, tc *testCase, x *Index) int {
 	var buf bytes.Buffer
 	if err := x.Write(&buf); err != nil {
 		t.Errorf("failed writing index %s (%s)", tc.name, err)
 	}
+	size := buf.Len()
 	var y Index
 	if err := y.Read(&buf); err != nil {
 		t.Errorf("failed reading index %s (%s)", tc.name, err)
@@ -242,6 +244,7 @@ func testSaveRestore(t *testing.T, tc *testCase, x *Index) {
 	if !equal(x, &y) {
 		t.Errorf("restored index doesn't match saved index %s", tc.name)
 	}
+	return size
 }
 
 func TestIndex(t *testing.T) {
@@ -257,16 +260,41 @@ func TestIndex(t *testing.T) {
 	}
 }
 
+// Of all possible inputs, the random bytes have the least amount of substring
+// repetition, and the repeated bytes have the most. For most algorithms,
+// the running time of every input will be between these two.
+func benchmarkNew(b *testing.B, random bool) {
+	b.StopTimer()
+	data := make([]byte, 1e6)
+	if random {
+		for i := range data {
+			data[i] = byte(rand.Intn(256))
+		}
+	}
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		New(data)
+	}
+}
+
+func BenchmarkNewIndexRandom(b *testing.B) {
+	benchmarkNew(b, true)
+}
+func BenchmarkNewIndexRepeat(b *testing.B) {
+	benchmarkNew(b, false)
+}
+
 func BenchmarkSaveRestore(b *testing.B) {
 	b.StopTimer()
 	r := rand.New(rand.NewSource(0x5a77a1)) // guarantee always same sequence
-	data := make([]byte, 10<<20)            // 10MB index data
+	data := make([]byte, 10<<20)            // 10MB of data to index
 	for i := range data {
 		data[i] = byte(r.Intn(256))
 	}
 	x := New(data)
-	testSaveRestore(nil, nil, x)                    // verify correctness
-	buf := bytes.NewBuffer(make([]byte, len(data))) // avoid frequent growing
+	size := testSaveRestore(nil, nil, x)       // verify correctness
+	buf := bytes.NewBuffer(make([]byte, size)) // avoid growing
+	b.SetBytes(int64(size))
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		x.Write(buf)

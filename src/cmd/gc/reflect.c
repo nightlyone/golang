@@ -13,6 +13,7 @@
 static	NodeList*	signatlist;
 static	Sym*	dtypesym(Type*);
 static	Sym*	weaktypesym(Type*);
+static	Sym*	dalgsym(Type*);
 
 static int
 sigcmp(Sig *a, Sig *b)
@@ -158,10 +159,13 @@ methods(Type *t)
 	// generating code if necessary.
 	a = nil;
 	for(f=mt->xmethod; f; f=f->down) {
-		if(f->type->etype != TFUNC)
-			continue;
 		if(f->etype != TFIELD)
-			fatal("methods: not field");
+			fatal("methods: not field %T", f);
+		if (f->type->etype != TFUNC || f->type->thistuple == 0)
+			fatal("non-method on %T method %S %T\n", mt, f->sym, f);
+		if (!getthisx(f->type)->type)
+			fatal("receiver with no type on %T method %S %T\n", mt, f->sym, f);
+
 		method = f->sym;
 		if(method == nil)
 			continue;
@@ -353,7 +357,7 @@ dextratype(Sym *sym, int off, Type *t, int ptroff)
 	s = sym;
 	if(t->sym) {
 		ot = dgostringptr(s, ot, t->sym->name);
-		if(t != types[t->etype])
+		if(t != types[t->etype] && t != errortype)
 			ot = dgopkgpath(s, ot, t->sym->pkg);
 		else
 			ot = dgostringptr(s, ot, nil);
@@ -550,12 +554,20 @@ haspointers(Type *t)
 static int
 dcommontype(Sym *s, int ot, Type *t)
 {
-	int i;
-	Sym *sptr;
+	int i, alg, sizeofAlg;
+	Sym *sptr, *algsym;
+	static Sym *algarray;
 	char *p;
 
+	sizeofAlg = 4*widthptr;
+	if(algarray == nil)
+		algarray = pkglookup("algarray", runtimepkg);
+	alg = algtype(t);
+	algsym = S;
+	if(alg < 0)
+		algsym = dalgsym(t);
+
 	dowidth(t);
-	
 	if(t->sym != nil && !isptr[t->etype])
 		sptr = dtypesym(ptrto(t));
 	else
@@ -583,7 +595,7 @@ dcommontype(Sym *s, int ot, Type *t)
 	//	}
 	ot = duintptr(s, ot, t->width);
 	ot = duint32(s, ot, typehash(t));
-	ot = duint8(s, ot, algtype(t));
+	ot = duint8(s, ot, 0);	// unused
 	ot = duint8(s, ot, t->align);	// align
 	ot = duint8(s, ot, t->align);	// fieldAlign
 	i = kinds[t->etype];
@@ -592,9 +604,12 @@ dcommontype(Sym *s, int ot, Type *t)
 	if(!haspointers(t))
 		i |= KindNoPointers;
 	ot = duint8(s, ot, i);  // kind
-	longsymnames = 1;
-	p = smprint("%-T", t);
-	longsymnames = 0;
+	if(alg >= 0)
+		ot = dsymptr(s, ot, algarray, alg*sizeofAlg);
+	else
+		ot = dsymptr(s, ot, algsym, 0);
+	p = smprint("%-uT", t);
+	//print("dcommontype: %s\n", p);
 	ot = dgostringptr(s, ot, p);	// string
 	free(p);
 	
@@ -614,8 +629,22 @@ typesym(Type *t)
 	char *p;
 	Sym *s;
 
-	p = smprint("%#-T", t);
+	p = smprint("%-T", t);
 	s = pkglookup(p, typepkg);
+	//print("typesym: %s -> %+S\n", p, s);
+	free(p);
+	return s;
+}
+
+Sym*
+typesymprefix(char *prefix, Type *t)
+{
+	char *p;
+	Sym *s;
+
+	p = smprint("%s.%-T", prefix, t);
+	s = pkglookup(p, typepkg);
+	//print("algsym: %s -> %+S\n", p, s);
 	free(p);
 	return s;
 }
@@ -662,8 +691,9 @@ weaktypesym(Type *t)
 		weak->prefix = "weak.type";  // not weak%2etype
 	}
 	
-	p = smprint("%#-T", t);
+	p = smprint("%-T", t);
 	s = pkglookup(p, weak);
+	//print("weaktypesym: %s -> %+S\n", p, s);
 	free(p);
 	return s;
 }
@@ -692,8 +722,13 @@ dtypesym(Type *t)
 		tbase = t->type;
 	dupok = tbase->sym == S;
 
-	if(compiling_runtime && tbase == types[tbase->etype])	// int, float, etc
+	if(compiling_runtime && 
+			(tbase == types[tbase->etype] ||
+			tbase == bytetype ||
+			tbase == runetype ||
+			tbase == errortype)) { // int, float, etc
 		goto ok;
+	}
 
 	// named types from other files are defined only by those files
 	if(tbase->sym && !tbase->local)
@@ -902,9 +937,56 @@ dumptypestructs(void)
 			dtypesym(ptrto(types[i]));
 		dtypesym(ptrto(types[TSTRING]));
 		dtypesym(ptrto(types[TUNSAFEPTR]));
+
+		// emit type structs for error and func(error) string.
+		// The latter is the type of an auto-generated wrapper.
+		dtypesym(ptrto(errortype));
+		dtypesym(functype(nil, 
+			list1(nod(ODCLFIELD, N, typenod(errortype))),
+			list1(nod(ODCLFIELD, N, typenod(types[TSTRING])))));
 		
 		// add paths for runtime and main, which 6l imports implicitly.
 		dimportpath(runtimepkg);
 		dimportpath(mkpkg(strlit("main")));
 	}
 }
+
+Sym*
+dalgsym(Type *t)
+{
+	int ot;
+	Sym *s, *hash, *eq;
+	char buf[100];
+
+	// dalgsym is only called for a type that needs an algorithm table,
+	// which implies that the type is comparable (or else it would use ANOEQ).
+
+	s = typesymprefix(".alg", t);
+	hash = typesymprefix(".hash", t);
+	genhash(hash, t);
+	eq = typesymprefix(".eq", t);
+	geneq(eq, t);
+
+	// ../../pkg/runtime/runtime.h:/Alg
+	ot = 0;
+	ot = dsymptr(s, ot, hash, 0);
+	ot = dsymptr(s, ot, eq, 0);
+	ot = dsymptr(s, ot, pkglookup("memprint", runtimepkg), 0);
+	switch(t->width) {
+	default:
+		ot = dsymptr(s, ot, pkglookup("memcopy", runtimepkg), 0);
+		break;
+	case 1:
+	case 2:
+	case 4:
+	case 8:
+	case 16:
+		snprint(buf, sizeof buf, "memcopy%d", (int)t->width*8);
+		ot = dsymptr(s, ot, pkglookup(buf, runtimepkg), 0);
+		break;
+	}
+
+	ggloblsym(s, ot, 1);
+	return s;
+}
+

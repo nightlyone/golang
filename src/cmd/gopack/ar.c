@@ -37,7 +37,6 @@
 #define rcmd your_rcmd
 
 #include <u.h>
-#include <time.h>
 #include <libc.h>
 #include <bio.h>
 #include <mach.h>
@@ -612,12 +611,49 @@ qcmd(char *arname, int count, char **files)
 }
 
 /*
+ *	does the object header line p match the last one we saw?
+ *	update *lastp if it gets more specific.
+ */
+int
+matchhdr(char *p, char **lastp)
+{
+	int n;
+	char *last;
+	
+	// no information?
+	last = *lastp;
+	if(last == nil) {
+		*lastp = strdup(p);
+		return 1;
+	}
+
+	// identical match?
+	if(strcmp(last, p) == 0)
+		return 1;
+
+	// last has extra fields
+	n = strlen(p);
+	if(n < strlen(last) && last[n] == ' ')
+		return 1;
+
+	// p has extra fields - save in last
+	n = strlen(last);
+	if(n < strlen(p) && p[n] == ' ') {
+		free(last);
+		*lastp = strdup(p);
+		return 1;
+	}
+	
+	return 0;
+}	
+
+/*
  *	extract the symbol references from an object file
  */
 void
 scanobj(Biobuf *b, Arfile *ap, long size)
 {
-	int obj;
+	int obj, goobject;
 	vlong offset, offset1;
 	Dir *d;
 	static int lastobj = -1;
@@ -658,9 +694,19 @@ scanobj(Biobuf *b, Arfile *ap, long size)
 		return;
 	}
 
+	goobject = 1;
 	offset1 = Boffset(b);
 	Bseek(b, offset, 0);
 	p = Brdstr(b, '\n', 1);
+	
+	// After the go object header comes the Go metadata,
+	// followed by ! on a line by itself.  If this is not a Go object,
+	// the ! comes immediately.  Catch that so we can avoid
+	// the call to scanpkg below, since scanpkg assumes that the
+	// Go metadata is present.
+	if(Bgetc(b) == '!')
+		goobject = 0;
+
 	Bseek(b, offset1, 0);
 	if(p == nil || strncmp(p, "go object ", 10) != 0) {
 		fprint(2, "gopack: malformed object file %s\n", file);
@@ -670,18 +716,23 @@ scanobj(Biobuf *b, Arfile *ap, long size)
 		return;
 	}
 	
-	if ((lastobj >= 0 && obj != lastobj) || (objhdr != nil && strcmp(p, objhdr) != 0)) {
-		fprint(2, "gopack: inconsistent object file %s\n", file);
+	if (!matchhdr(p, &objhdr)) {
+		fprint(2, "gopack: inconsistent object file %s: [%s] vs [%s]\n", file, p, objhdr);
 		errors++;
 		allobj = 0;
 		free(p);
 		return;
 	}
+	free(p);
+
+	// Old check.  Should be impossible since objhdrs match, but keep the check anyway.
+	if (lastobj >= 0 && obj != lastobj) {
+		fprint(2, "gopack: inconsistent object file %s\n", file);
+		errors++;
+		allobj = 0;
+		return;
+	}
 	lastobj = obj;
-	if(objhdr == nil)
-		objhdr = p;
-	else
-		free(p);
 		
 	if (!readar(b, obj, offset+size, 0)) {
 		fprint(2, "gopack: invalid symbol reference in file %s\n", file);
@@ -692,7 +743,7 @@ scanobj(Biobuf *b, Arfile *ap, long size)
 	}
 	Bseek(b, offset, 0);
 	objtraverse(objsym, ap);
-	if (gflag) {
+	if (gflag && goobject) {
 		scanpkg(b, size);
 		Bseek(b, offset, 0);
 	}
@@ -786,7 +837,6 @@ foundstart:
 			goto bad;
 
 	/* how big is it? */
-	pkg = nil;
 	first = 1;
 	start = end = 0;
 	for (n=0; n<size; n+=Blinelen(b)) {
@@ -1050,7 +1100,7 @@ armove(Biobuf *b, Arfile *ap, Armember *bp)
 	for (cp = strchr(bp->hdr.name, 0);		/* blank pad on right */
 		cp < bp->hdr.name+sizeof(bp->hdr.name); cp++)
 			*cp = ' ';
-	sprint(bp->hdr.date, "%-12ld", 0);  // was d->mtime but removed for idempotent builds
+	sprint(bp->hdr.date, "%-12ld", 0L);  // was d->mtime but removed for idempotent builds
 	sprint(bp->hdr.uid, "%-6d", 0);
 	sprint(bp->hdr.gid, "%-6d", 0);
 	sprint(bp->hdr.mode, "%-8lo", d->mode);
@@ -1184,7 +1234,7 @@ rl(int fd)
 	len = symdefsize;
 	if(len&01)
 		len++;
-	sprint(a.date, "%-12ld", 0);  // time(0)
+	sprint(a.date, "%-12ld", 0L);  // time(0)
 	sprint(a.uid, "%-6d", 0);
 	sprint(a.gid, "%-6d", 0);
 	sprint(a.mode, "%-8lo", 0644L);
@@ -1221,7 +1271,7 @@ rl(int fd)
 
 	if (gflag) {
 		len = pkgdefsize;
-		sprint(a.date, "%-12ld", 0);  // time(0)
+		sprint(a.date, "%-12ld", 0L);  // time(0)
 		sprint(a.uid, "%-6d", 0);
 		sprint(a.gid, "%-6d", 0);
 		sprint(a.mode, "%-8lo", 0644L);
@@ -1368,15 +1418,12 @@ void
 longt(Armember *bp)
 {
 	char *cp;
-	time_t date;
 
 	pmode(strtoul(bp->hdr.mode, 0, 8));
 	Bprint(&bout, "%3ld/%1ld", strtol(bp->hdr.uid, 0, 0), strtol(bp->hdr.gid, 0, 0));
 	Bprint(&bout, "%7ld", bp->size);
-	date = bp->date;
-	cp = ctime(&date);
-	/* using unix ctime, not plan 9 time, so cp+20 for year, not cp+24 */
-	Bprint(&bout, " %-12.12s %-4.4s ", cp+4, cp+20);
+	cp = ctime(bp->date);
+	Bprint(&bout, " %-12.12s %-4.4s ", cp+4, cp+24);
 }
 
 int	m1[] = { 1, ROWN, 'r', '-' };

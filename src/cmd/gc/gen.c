@@ -54,7 +54,7 @@ addrescapes(Node *n)
 		if(n->class == PAUTO && n->esc == EscNever)
 			break;
 
-		if(debug['s'] && n->esc != EscUnknown)
+		if(debug['N'] && n->esc != EscUnknown)
 			fatal("without escape analysis, only PAUTO's should have esc: %N", n);
 
 		switch(n->class) {
@@ -91,10 +91,10 @@ addrescapes(Node *n)
 			snprint(buf, sizeof buf, "&%S", n->sym);
 			n->heapaddr->sym = lookup(buf);
 			n->heapaddr->orig->sym = n->heapaddr->sym;
-			if(!debug['s'])
+			if(!debug['N'])
 				n->esc = EscHeap;
 			if(debug['m'])
-				print("%L: moved to heap: %hN\n", n->lineno, n);
+				print("%L: moved to heap: %N\n", n->lineno, n);
 			curfn = oldfn;
 			break;
 		}
@@ -805,6 +805,7 @@ tempname(Node *nn, Type *t)
 	s = lookup(namebuf);
 	n = nod(ONAME, N, N);
 	n->sym = s;
+	s->def = n;
 	n->type = t;
 	n->class = PAUTO;
 	n->addable = 1;
@@ -825,5 +826,6 @@ temp(Type *t)
 	
 	n = nod(OXXX, N, N);
 	tempname(n, t);
+	n->sym->def->used = 1;
 	return n;
 }

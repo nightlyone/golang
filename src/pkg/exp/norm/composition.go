@@ -4,7 +4,7 @@
 
 package norm
 
-import "utf8"
+import "unicode/utf8"
 
 const (
 	maxCombiningChars = 30
@@ -27,6 +27,26 @@ type reorderBuffer struct {
 	nrune int                     // Number of runeInfos.
 	nbyte uint8                   // Number or bytes.
 	f     formInfo
+
+	src       input
+	nsrc      int
+	srcBytes  inputBytes
+	srcString inputString
+	tmpBytes  inputBytes
+}
+
+func (rb *reorderBuffer) init(f Form, src []byte) {
+	rb.f = *formTable[f]
+	rb.srcBytes = inputBytes(src)
+	rb.src = &rb.srcBytes
+	rb.nsrc = len(src)
+}
+
+func (rb *reorderBuffer) initString(f Form, src string) {
+	rb.f = *formTable[f]
+	rb.srcString = inputString(src)
+	rb.src = &rb.srcString
+	rb.nsrc = len(src)
 }
 
 // reset discards all characters from the buffer.
@@ -75,15 +95,17 @@ func (rb *reorderBuffer) insertOrdered(info runeInfo) bool {
 
 // insert inserts the given rune in the buffer ordered by CCC.
 // It returns true if the buffer was large enough to hold the decomposed rune.
-func (rb *reorderBuffer) insert(src []byte, info runeInfo) bool {
-	if info.size == 3 && isHangul(src) {
-		rune, _ := utf8.DecodeRune(src)
-		return rb.decomposeHangul(uint32(rune))
+func (rb *reorderBuffer) insert(src input, i int, info runeInfo) bool {
+	if info.size == 3 {
+		if rune := src.hangul(i); rune != 0 {
+			return rb.decomposeHangul(uint32(rune))
+		}
 	}
 	if info.flags.hasDecomposition() {
-		dcomp := rb.f.decompose(src)
+		dcomp := rb.f.decompose(src, i)
+		rb.tmpBytes = inputBytes(dcomp)
 		for i := 0; i < len(dcomp); {
-			info = rb.f.info(dcomp[i:])
+			info = rb.f.info(&rb.tmpBytes, i)
 			pos := rb.nbyte
 			if !rb.insertOrdered(info) {
 				return false
@@ -98,62 +120,32 @@ func (rb *reorderBuffer) insert(src []byte, info runeInfo) bool {
 		if !rb.insertOrdered(info) {
 			return false
 		}
-		copy(rb.byte[pos:], src[:info.size])
-	}
-	return true
-}
-
-// insertString inserts the given rune in the buffer ordered by CCC.
-// It returns true if the buffer was large enough to hold the decomposed rune.
-func (rb *reorderBuffer) insertString(src string, info runeInfo) bool {
-	if info.size == 3 && isHangulString(src) {
-		rune, _ := utf8.DecodeRuneInString(src)
-		return rb.decomposeHangul(uint32(rune))
-	}
-	if info.flags.hasDecomposition() {
-		dcomp := rb.f.decomposeString(src)
-		for i := 0; i < len(dcomp); {
-			info = rb.f.info(dcomp[i:])
-			pos := rb.nbyte
-			if !rb.insertOrdered(info) {
-				return false
-			}
-			end := i + int(info.size)
-			copy(rb.byte[pos:], dcomp[i:end])
-			i = end
-		}
-	} else {
-		// insertOrder changes nbyte
-		pos := rb.nbyte
-		if !rb.insertOrdered(info) {
-			return false
-		}
-		copy(rb.byte[pos:], src[:info.size])
+		src.copySlice(rb.byte[pos:], i, i+int(info.size))
 	}
 	return true
 }
 
 // appendRune inserts a rune at the end of the buffer. It is used for Hangul.
-func (rb *reorderBuffer) appendRune(rune uint32) {
+func (rb *reorderBuffer) appendRune(r uint32) {
 	bn := rb.nbyte
-	sz := utf8.EncodeRune(rb.byte[bn:], int(rune))
+	sz := utf8.EncodeRune(rb.byte[bn:], rune(r))
 	rb.nbyte += utf8.UTFMax
 	rb.rune[rb.nrune] = runeInfo{bn, uint8(sz), 0, 0}
 	rb.nrune++
 }
 
 // assignRune sets a rune at position pos. It is used for Hangul and recomposition.
-func (rb *reorderBuffer) assignRune(pos int, rune uint32) {
+func (rb *reorderBuffer) assignRune(pos int, r uint32) {
 	bn := rb.rune[pos].pos
-	sz := utf8.EncodeRune(rb.byte[bn:], int(rune))
+	sz := utf8.EncodeRune(rb.byte[bn:], rune(r))
 	rb.rune[pos] = runeInfo{bn, uint8(sz), 0, 0}
 }
 
 // runeAt returns the rune at position n. It is used for Hangul and recomposition.
 func (rb *reorderBuffer) runeAt(n int) uint32 {
 	inf := rb.rune[n]
-	rune, _ := utf8.DecodeRune(rb.byte[inf.pos : inf.pos+inf.size])
-	return uint32(rune)
+	r, _ := utf8.DecodeRune(rb.byte[inf.pos : inf.pos+inf.size])
+	return uint32(r)
 }
 
 // bytesAt returns the UTF-8 encoding of the rune at position n.
@@ -245,17 +237,17 @@ func isHangulWithoutJamoT(b []byte) bool {
 // decomposeHangul algorithmically decomposes a Hangul rune into
 // its Jamo components.
 // See http://unicode.org/reports/tr15/#Hangul for details on decomposing Hangul.
-func (rb *reorderBuffer) decomposeHangul(rune uint32) bool {
+func (rb *reorderBuffer) decomposeHangul(r uint32) bool {
 	b := rb.rune[:]
 	n := rb.nrune
 	if n+3 > len(b) {
 		return false
 	}
-	rune -= hangulBase
-	x := rune % jamoTCount
-	rune /= jamoTCount
-	rb.appendRune(jamoLBase + rune/jamoVCount)
-	rb.appendRune(jamoVBase + rune%jamoVCount)
+	r -= hangulBase
+	x := r % jamoTCount
+	r /= jamoTCount
+	rb.appendRune(jamoLBase + r/jamoVCount)
+	rb.appendRune(jamoVBase + r%jamoVCount)
 	if x != 0 {
 		rb.appendRune(jamoTBase + x)
 	}

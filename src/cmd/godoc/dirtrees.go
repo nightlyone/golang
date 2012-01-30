@@ -8,10 +8,10 @@ package main
 
 import (
 	"bytes"
-	"go/doc"
 	"go/parser"
 	"go/token"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -25,21 +25,21 @@ type Directory struct {
 	Dirs  []*Directory // subdirectories
 }
 
-func isGoFile(fi FileInfo) bool {
+func isGoFile(fi os.FileInfo) bool {
 	name := fi.Name()
-	return fi.IsRegular() &&
+	return !fi.IsDir() &&
 		len(name) > 0 && name[0] != '.' && // ignore .files
 		filepath.Ext(name) == ".go"
 }
 
-func isPkgFile(fi FileInfo) bool {
+func isPkgFile(fi os.FileInfo) bool {
 	return isGoFile(fi) &&
 		!strings.HasSuffix(fi.Name(), "_test.go") // ignore test files
 }
 
-func isPkgDir(fi FileInfo) bool {
+func isPkgDir(fi os.FileInfo) bool {
 	name := fi.Name()
-	return fi.IsDirectory() && len(name) > 0 &&
+	return fi.IsDir() && len(name) > 0 &&
 		name[0] != '_' && name[0] != '.' // ignore _files and .files
 }
 
@@ -135,7 +135,7 @@ func (b *treeBuilder) newDirTree(fset *token.FileSet, path, name string, depth i
 							i = 3 // none of the above
 						}
 						if 0 <= i && i < len(synopses) && synopses[i] == "" {
-							synopses[i] = firstSentence(doc.CommentText(file.Doc))
+							synopses[i] = firstSentence(file.Doc.Text())
 						}
 					}
 				}

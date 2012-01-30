@@ -43,21 +43,19 @@ typedef int32		intptr;
  */
 typedef	uint8			bool;
 typedef	uint8			byte;
-typedef	struct	Alg		Alg;
 typedef	struct	Func		Func;
 typedef	struct	G		G;
 typedef	struct	Gobuf		Gobuf;
-typedef	struct	Lock		Lock;
+typedef	union	Lock		Lock;
 typedef	struct	M		M;
 typedef	struct	Mem		Mem;
 typedef	union	Note		Note;
 typedef	struct	Slice		Slice;
 typedef	struct	Stktop		Stktop;
 typedef	struct	String		String;
-typedef	struct	Usema		Usema;
 typedef	struct	SigTab		SigTab;
 typedef	struct	MCache		MCache;
-typedef struct	FixAlloc	FixAlloc;
+typedef	struct	FixAlloc	FixAlloc;
 typedef	struct	Iface		Iface;
 typedef	struct	Itab		Itab;
 typedef	struct	Eface		Eface;
@@ -71,6 +69,8 @@ typedef	struct	Hchan		Hchan;
 typedef	struct	Complex64	Complex64;
 typedef	struct	Complex128	Complex128;
 typedef	struct	WinCall		WinCall;
+typedef	struct	Timers		Timers;
+typedef	struct	Timer		Timer;
 
 /*
  * per-cpu declaration.
@@ -117,32 +117,15 @@ enum
 /*
  * structures
  */
-struct	Lock
+union	Lock
 {
-#ifdef __WINDOWS__
-	M*	waitm;	// linked list of waiting M's
-#else
-	uint32	key;
-	uint32	sema;	// for OS X
-#endif
-};
-struct	Usema
-{
-	uint32	u;
-	uint32	k;
+	uint32	key;	// futex-based impl
+	M*	waitm;	// linked list of waiting M's (sema-based impl)
 };
 union	Note
 {
-	struct {	// Linux
-		uint32	state;
-	};
-	struct {	// Windows
-		Lock lock;
-	};
-	struct {	// OS X
-		int32	wakeup;
-		Usema	sema;
-	};
+	uint32	key;	// futex-based impl
+	M*	waitm;	// waiting M (sema-based impl)
 };
 struct String
 {
@@ -185,8 +168,8 @@ struct	Gobuf
 };
 struct	G
 {
-	byte*	stackguard;	// cannot move - also known to linker, libmach, libcgo
-	byte*	stackbase;	// cannot move - also known to libmach, libcgo
+	byte*	stackguard;	// cannot move - also known to linker, libmach, runtime/cgo
+	byte*	stackbase;	// cannot move - also known to libmach, runtime/cgo
 	Defer*	defer;
 	Panic*	panic;
 	Gobuf	sched;
@@ -238,6 +221,7 @@ struct	M
 	int32	waitnextg;
 	int32	dying;
 	int32	profilehz;
+	int32	helpgc;
 	uint32	fastrand;
 	uint64	ncgocall;
 	Note	havenextg;
@@ -252,11 +236,13 @@ struct	M
 	uint32	freglo[16];	// D[i] lsb and F[i]
 	uint32	freghi[16];	// D[i] msb and F[i+16]
 	uint32	fflag;		// floating point compare flags
-
-#ifdef __WINDOWS__
-	void*	thread;		// thread handle
-	void*	event;		// event for signalling
 	M*	nextwaitm;	// next M waiting for lock
+	uintptr	waitsema;	// semaphore for parking on locks
+	uint32	waitsemacount;
+	uint32	waitsemalock;
+
+#ifdef GOOS_windows
+	void*	thread;		// thread handle
 #endif
 	uintptr	end[];
 };
@@ -272,13 +258,6 @@ struct	Stktop
 	uint8*	argp;	// pointer to arguments in old frame
 	uintptr	free;	// if free>0, call stackfree using free as size
 	bool	panic;	// is this frame the top of a panic?
-};
-struct	Alg
-{
-	uintptr	(*hash)(uint32, void*);
-	uint32	(*equal)(uint32, void*, void*);
-	void	(*print)(uint32, void*);
-	void	(*copy)(uint32, void*, void*);
 };
 struct	SigTab
 {
@@ -320,7 +299,7 @@ struct	WinCall
 	uintptr	err;	// error number
 };
 
-#ifdef __WINDOWS__
+#ifdef GOOS_windows
 enum {
    Windows = 1
 };
@@ -329,6 +308,33 @@ enum {
    Windows = 0
 };
 #endif
+
+struct	Timers
+{
+	Lock;
+	G	*timerproc;
+	bool		sleeping;
+	bool		rescheduling;
+	Note	waitnote;
+	Timer	**t;
+	int32	len;
+	int32	cap;
+};
+
+// Package time knows the layout of this structure.
+// If this struct changes, adjust ../time/sleep.go:/runtimeTimer.
+struct	Timer
+{
+	int32	i;		// heap index
+
+	// Timer wakes up at when, and then at when+period, ... (period > 0 only)
+	// each time calling f(now, arg) in the timer goroutine, so f must be
+	// a well-behaved function and not block.
+	int64	when;
+	int64	period;
+	void	(*f)(int64, Eface);
+	Eface	arg;
+};
 
 /*
  * defined macros
@@ -342,31 +348,78 @@ enum {
 /*
  * known to compiler
  */
+enum {
+	Structrnd = sizeof(uintptr)
+};
+
+/*
+ * type algorithms - known to compiler
+ */
 enum
 {
 	AMEM,
-	ANOEQ,
-	ASTRING,
-	AINTER,
-	ANILINTER,
-	ASLICE,
+	AMEM0,
 	AMEM8,
 	AMEM16,
 	AMEM32,
 	AMEM64,
 	AMEM128,
+	ANOEQ,
+	ANOEQ0,
 	ANOEQ8,
 	ANOEQ16,
 	ANOEQ32,
 	ANOEQ64,
 	ANOEQ128,
+	ASTRING,
+	AINTER,
+	ANILINTER,
+	ASLICE,
+	AFLOAT32,
+	AFLOAT64,
+	ACPLX64,
+	ACPLX128,
 	Amax
 };
-
-
-enum {
-	Structrnd = sizeof(uintptr)
+typedef	struct	Alg		Alg;
+struct	Alg
+{
+	void	(*hash)(uintptr*, uintptr, void*);
+	void	(*equal)(bool*, uintptr, void*, void*);
+	void	(*print)(uintptr, void*);
+	void	(*copy)(uintptr, void*, void*);
 };
+
+extern	Alg	runtime·algarray[Amax];
+
+void	runtime·memhash(uintptr*, uintptr, void*);
+void	runtime·nohash(uintptr*, uintptr, void*);
+void	runtime·strhash(uintptr*, uintptr, void*);
+void	runtime·interhash(uintptr*, uintptr, void*);
+void	runtime·nilinterhash(uintptr*, uintptr, void*);
+
+void	runtime·memequal(bool*, uintptr, void*, void*);
+void	runtime·noequal(bool*, uintptr, void*, void*);
+void	runtime·strequal(bool*, uintptr, void*, void*);
+void	runtime·interequal(bool*, uintptr, void*, void*);
+void	runtime·nilinterequal(bool*, uintptr, void*, void*);
+
+void	runtime·memprint(uintptr, void*);
+void	runtime·strprint(uintptr, void*);
+void	runtime·interprint(uintptr, void*);
+void	runtime·nilinterprint(uintptr, void*);
+
+void	runtime·memcopy(uintptr, void*, void*);
+void	runtime·memcopy8(uintptr, void*, void*);
+void	runtime·memcopy16(uintptr, void*, void*);
+void	runtime·memcopy32(uintptr, void*, void*);
+void	runtime·memcopy64(uintptr, void*, void*);
+void	runtime·memcopy128(uintptr, void*, void*);
+void	runtime·memcopy(uintptr, void*, void*);
+void	runtime·strcopy(uintptr, void*, void*);
+void	runtime·algslicecopy(uintptr, void*, void*);
+void	runtime·intercopy(uintptr, void*, void*);
+void	runtime·nilintercopy(uintptr, void*, void*);
 
 /*
  * deferred subroutine calls
@@ -396,7 +449,6 @@ struct Panic
 /*
  * external data
  */
-extern	Alg	runtime·algarray[Amax];
 extern	String	runtime·emptystring;
 G*	runtime·allg;
 G*	runtime·lastg;
@@ -406,8 +458,8 @@ extern	bool	runtime·singleproc;
 extern	uint32	runtime·panicking;
 extern	int32	runtime·gcwaiting;		// gc is waiting to run
 int8*	runtime·goos;
+int32	runtime·ncpu;
 extern	bool	runtime·iscgo;
-extern	void	(*runtime·destroylock)(Lock*);
 
 /*
  * common functions and data
@@ -484,12 +536,9 @@ bool	runtime·ifaceeq_c(Iface, Iface);
 bool	runtime·efaceeq_c(Eface, Eface);
 uintptr	runtime·ifacehash(Iface);
 uintptr	runtime·efacehash(Eface);
-uintptr	runtime·nohash(uint32, void*);
-uint32	runtime·noequal(uint32, void*, void*);
 void*	runtime·malloc(uintptr size);
 void	runtime·free(void *v);
-void	runtime·addfinalizer(void*, void(*fn)(void*), int32);
-void	runtime·walkfintab(void (*fn)(void*));
+bool	runtime·addfinalizer(void*, void(*fn)(void*), int32);
 void	runtime·runpanic(Panic*);
 void*	runtime·getcallersp(void*);
 int32	runtime·mcount(void);
@@ -499,6 +548,8 @@ uint32	runtime·fastrand1(void);
 void	runtime·exit(int32);
 void	runtime·breakpoint(void);
 void	runtime·gosched(void);
+void	runtime·tsleep(int64);
+M*	runtime·newm(void);
 void	runtime·goexit(void);
 void	runtime·asmcgocall(void (*fn)(void*), void*);
 void	runtime·entersyscall(void);
@@ -506,7 +557,6 @@ void	runtime·exitsyscall(void);
 G*	runtime·newproc1(byte*, byte*, int32, int32, void*);
 void	runtime·siginit(void);
 bool	runtime·sigsend(int32 sig);
-void	runtime·gettime(int64*, int32*);
 int32	runtime·callers(int32, uintptr*, int32);
 int32	runtime·gentraceback(byte*, byte*, byte*, G*, int32, uintptr*, int32);
 int64	runtime·nanotime(void);
@@ -515,6 +565,7 @@ void	runtime·startpanic(void);
 void	runtime·sigprof(uint8 *pc, uint8 *sp, uint8 *lr, G *gp);
 void	runtime·resetcpuprofiler(int32);
 void	runtime·setcpuprofilerate(void(*)(uintptr*, int32), int32);
+void	runtime·usleep(uint32);
 
 #pragma	varargck	argpos	runtime·printf	1
 #pragma	varargck	type	"d"	int32
@@ -534,7 +585,7 @@ void	runtime·setcpuprofilerate(void(*)(uintptr*, int32), int32);
 // TODO(rsc): Remove. These are only temporary,
 // for the mark and sweep collector.
 void	runtime·stoptheworld(void);
-void	runtime·starttheworld(void);
+void	runtime·starttheworld(bool);
 
 /*
  * mutual exclusion locks.  in the uncontended case,
@@ -556,10 +607,28 @@ void	runtime·unlock(Lock*);
  * subsequent noteclear must be called only after
  * previous notesleep has returned, e.g. it's disallowed
  * to call noteclear straight after notewakeup.
+ *
+ * notetsleep is like notesleep but wakes up after
+ * a given number of nanoseconds even if the event
+ * has not yet happened.  if a goroutine uses notetsleep to
+ * wake up early, it must wait to call noteclear until it
+ * can be sure that no other goroutine is calling
+ * notewakeup.
  */
 void	runtime·noteclear(Note*);
 void	runtime·notesleep(Note*);
 void	runtime·notewakeup(Note*);
+void	runtime·notetsleep(Note*, int64);
+
+/*
+ * low-level synchronization for implementing the above
+ */
+uintptr	runtime·semacreate(void);
+int32	runtime·semasleep(int64);
+void	runtime·semawakeup(M*);
+// or
+void	runtime·futexsleep(uint32*, uint32, int64);
+void	runtime·futexwakeup(uint32*, uint32);
 
 /*
  * This is consistent across Linux and BSD.
@@ -572,7 +641,8 @@ void	runtime·notewakeup(Note*);
  * low level C-called
  */
 uint8*	runtime·mmap(byte*, uintptr, int32, int32, int32, uint32);
-void	runtime·munmap(uint8*, uintptr);
+void	runtime·munmap(byte*, uintptr);
+void	runtime·madvise(byte*, uintptr, int32);
 void	runtime·memclr(byte*, uintptr);
 void	runtime·setcallerpc(void*, void*);
 void*	runtime·getcallerpc(void*);
@@ -635,6 +705,8 @@ String	runtime·signame(int32 sig);
 int32	runtime·gomaxprocsfunc(int32 n);
 void	runtime·procyield(uint32);
 void	runtime·osyield(void);
+void	runtime·LockOSThread(void);
+void	runtime·UnlockOSThread(void);
 
 void	runtime·mapassign(MapType*, Hmap*, byte*, byte*);
 void	runtime·mapaccess(MapType*, Hmap*, byte*, byte*, bool*);

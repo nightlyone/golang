@@ -213,11 +213,11 @@ cgen(Node *n, Node *res)
 		goto ret;
 
 	case OMINUS:
+		regalloc(&n1, nl->type, N);
+		cgen(nl, &n1);
 		nodconst(&n3, nl->type, 0);
 		regalloc(&n2, nl->type, res);
-		regalloc(&n1, nl->type, N);
 		gmove(&n3, &n2);
-		cgen(nl, &n1);
 		gins(optoas(OSUB, nl->type), &n1, &n2);
 		gmove(&n2, res);
 		regfree(&n1);
@@ -850,6 +850,7 @@ bgen(Node *n, int true, Prog *to)
 	int et, a;
 	Node *nl, *nr, *r;
 	Node n1, n2, n3, n4, tmp;
+	NodeList *ll;
 	Prog *p1, *p2;
 
 	USED(n4);			// in unreachable code below
@@ -950,7 +951,10 @@ bgen(Node *n, int true, Prog *to)
 				p1 = gbranch(AB, T);
 				p2 = gbranch(AB, T);
 				patch(p1, pc);
+				ll = n->ninit;
+				n->ninit = nil;
 				bgen(n, 1, p2);
+				n->ninit = ll;
 				patch(gbranch(AB, T), to);
 				patch(p2, pc);
 				goto ret;
@@ -1062,7 +1066,7 @@ bgen(Node *n, int true, Prog *to)
 		}
 
 		if(nr->op == OLITERAL) {
-			if(nr->val.ctype == CTINT &&  mpgetfix(nr->val.u.xval) == 0) {
+			if(isconst(nr, CTINT) &&  mpgetfix(nr->val.u.xval) == 0) {
 				gencmp0(nl, nl->type, a, to);
 				break;
 			}
@@ -1189,7 +1193,7 @@ stkof(Node *n)
  * NB: character copy assumed little endian architecture
  */
 void
-sgen(Node *n, Node *res, int32 w)
+sgen(Node *n, Node *res, int64 w)
 {
 	Node dst, src, tmp, nend;
 	int32 c, odst, osrc;
@@ -1197,14 +1201,17 @@ sgen(Node *n, Node *res, int32 w)
 	Prog *p, *ploop;
 
 	if(debug['g']) {
-		print("\nsgen w=%d\n", w);
+		print("\nsgen w=%lld\n", w);
 		dump("r", n);
 		dump("res", res);
 	}
-	if(w < 0)
-		fatal("sgen copy %d", w);
+
 	if(n->ullman >= UINF && res->ullman >= UINF)
 		fatal("sgen UINF");
+
+	if(w < 0 || (int32)w != w)
+		fatal("sgen copy %lld", w);
+
 	if(n->type == T)
 		fatal("sgen: missing type");
 
@@ -1236,7 +1243,7 @@ sgen(Node *n, Node *res, int32 w)
 		break;
 	}
 	if(w%align)
-		fatal("sgen: unaligned size %d (align=%d) for %T", w, align, n->type);
+		fatal("sgen: unaligned size %lld (align=%d) for %T", w, align, n->type);
 	c = w / align;
 
 	// offset on the stack

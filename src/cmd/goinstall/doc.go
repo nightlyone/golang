@@ -58,7 +58,7 @@ download the code if necessary.
 
 Goinstall recognizes packages from a few common code hosting sites:
 
-	BitBucket (Mercurial)
+	BitBucket (Git, Mercurial)
 
 		import "bitbucket.org/user/project"
 		import "bitbucket.org/user/project/sub/directory"
@@ -78,6 +78,10 @@ Goinstall recognizes packages from a few common code hosting sites:
 
 		import "project.googlecode.com/svn/trunk"
 		import "project.googlecode.com/svn/trunk/sub/directory"
+
+	Google Code Project Hosting sub-repositories:
+
+		import "code.google.com/p/project.subrepo/sub/directory
 
 	Launchpad (Bazaar)
 

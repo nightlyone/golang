@@ -24,6 +24,7 @@ function godocs_onload() {
   godocs_bindSearchEvents();
   godocs_generateTOC();
   godocs_addTopLinks();
+  godocs_bindExampleToggles();
 }
 
 function godocs_bindSearchEvents() {
@@ -56,6 +57,7 @@ function godocs_bindSearchEvents() {
  * links.  "Decorates" the element with id=="nav" with this table of contents.
  */
 function godocs_generateTOC() {
+  if (document.getElementById('manual-nav')) { return; }
   var navbar = document.getElementById('nav');
   if (!navbar) { return; }
 
@@ -64,44 +66,32 @@ function godocs_generateTOC() {
   var i;
   for (i = 0; i < navbar.parentNode.childNodes.length; i++) {
     var node = navbar.parentNode.childNodes[i];
+    if ((node.tagName != 'h2') && (node.tagName != 'H2') &&
+        (node.tagName != 'h3') && (node.tagName != 'H3')) {
+      continue;
+    }
+    if (!node.id) {
+      node.id = 'tmp_' + i;
+    }
+    var text = godocs_nodeToText(node);
+    if (!text) { continue; }
+
+    var textNode = document.createTextNode(text);
+
+    var link = document.createElement('a');
+    link.href = '#' + node.id;
+    link.appendChild(textNode);
+
+    // Then create the item itself
+    var item;
     if ((node.tagName == 'h2') || (node.tagName == 'H2')) {
-      if (!node.id) {
-        node.id = 'tmp_' + i;
-      }
-      var text = godocs_nodeToText(node);
-      if (!text) { continue; }
-
-      var textNode = document.createTextNode(text);
-
-      var link = document.createElement('a');
-      link.href = '#' + node.id;
-      link.appendChild(textNode);
-
-      // Then create the item itself
-      var item = document.createElement('dt');
-
-      item.appendChild(link);
-      toc_items.push(item);
+      item = document.createElement('dt');
+    } else { // h3
+      item = document.createElement('dd');
     }
-    if ((node.tagName == 'h3') || (node.tagName == 'H3')) {
-      if (!node.id) {
-        node.id = 'tmp_' + i;
-      }
-      var text = godocs_nodeToText(node);
-      if (!text) { continue; }
 
-      var textNode = document.createTextNode(text);
-
-      var link = document.createElement('a');
-      link.href = '#' + node.id;
-      link.appendChild(textNode);
-
-      // Then create the item itself
-      var item = document.createElement('dd');
-
-      item.appendChild(link);
-      toc_items.push(item);
-    }
+    item.appendChild(link);
+    toc_items.push(item);
   }
 
   if (toc_items.length <= 1) { return; }
@@ -186,5 +176,25 @@ function godocs_addTopLinks() {
     var textNode = document.createTextNode('[Top]');
     link.appendChild(textNode);
     headers[i].appendChild(span);
+  }
+}
+
+function godocs_bindExampleToggles() {
+  var examples = document.getElementsByClassName("example");
+  for (var i = 0; i < examples.length; i++) {
+    var eg = examples[i];
+    godocs_bindExampleToggle(eg);
+  }
+}
+function godocs_bindExampleToggle(eg) {
+  var heading = eg.getElementsByClassName("exampleHeading");
+  for (var i = 0; i < heading.length; i++) {
+    bindEvent(heading[i], "click", function() {
+      if (eg.className == "example") {
+        eg.className = "exampleVisible";
+      } else {
+        eg.className = "example";
+      }
+    });
   }
 }

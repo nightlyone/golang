@@ -1,18 +1,23 @@
+// Copyright 2011 The Go Authors.  All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package syscall
 
 const (
 	// Windows errors.
-	ERROR_FILE_NOT_FOUND      = 2
-	ERROR_PATH_NOT_FOUND      = 3
-	ERROR_NO_MORE_FILES       = 18
-	ERROR_BROKEN_PIPE         = 109
-	ERROR_BUFFER_OVERFLOW     = 111
-	ERROR_INSUFFICIENT_BUFFER = 122
-	ERROR_MOD_NOT_FOUND       = 126
-	ERROR_PROC_NOT_FOUND      = 127
-	ERROR_ENVVAR_NOT_FOUND    = 203
-	ERROR_OPERATION_ABORTED   = 995
-	ERROR_IO_PENDING          = 997
+	ERROR_FILE_NOT_FOUND      Errno = 2
+	ERROR_PATH_NOT_FOUND      Errno = 3
+	ERROR_ACCESS_DENIED       Errno = 5
+	ERROR_NO_MORE_FILES       Errno = 18
+	ERROR_BROKEN_PIPE         Errno = 109
+	ERROR_BUFFER_OVERFLOW     Errno = 111
+	ERROR_INSUFFICIENT_BUFFER Errno = 122
+	ERROR_MOD_NOT_FOUND       Errno = 126
+	ERROR_PROC_NOT_FOUND      Errno = 127
+	ERROR_ENVVAR_NOT_FOUND    Errno = 203
+	ERROR_OPERATION_ABORTED   Errno = 995
+	ERROR_IO_PENDING          Errno = 997
 )
 
 const (
@@ -54,6 +59,7 @@ const (
 	GENERIC_EXECUTE = 0x20000000
 	GENERIC_ALL     = 0x10000000
 
+	FILE_LIST_DIRECTORY   = 0x00000001
 	FILE_APPEND_DATA      = 0x00000004
 	FILE_WRITE_ATTRIBUTES = 0x00000100
 
@@ -74,6 +80,9 @@ const (
 	OPEN_EXISTING     = 3
 	OPEN_ALWAYS       = 4
 	TRUNCATE_EXISTING = 5
+
+	FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+	FILE_FLAG_OVERLAPPED       = 0x40000000
 
 	HANDLE_FLAG_INHERIT    = 0x00000001
 	STARTF_USESTDHANDLES   = 0x00000100
@@ -134,6 +143,24 @@ const (
 )
 
 const (
+	FILE_NOTIFY_CHANGE_FILE_NAME = 1 << iota
+	FILE_NOTIFY_CHANGE_DIR_NAME
+	FILE_NOTIFY_CHANGE_ATTRIBUTES
+	FILE_NOTIFY_CHANGE_SIZE
+	FILE_NOTIFY_CHANGE_LAST_WRITE
+	FILE_NOTIFY_CHANGE_LAST_ACCESS
+	FILE_NOTIFY_CHANGE_CREATION
+)
+
+const (
+	FILE_ACTION_ADDED = iota + 1
+	FILE_ACTION_REMOVED
+	FILE_ACTION_MODIFIED
+	FILE_ACTION_RENAMED_OLD_NAME
+	FILE_ACTION_RENAMED_NEW_NAME
+)
+
+const (
 	// wincrypt.h
 	PROV_RSA_FULL                    = 1
 	PROV_RSA_SIG                     = 2
@@ -189,6 +216,13 @@ type Overlapped struct {
 	Offset       uint32
 	OffsetHigh   uint32
 	HEvent       Handle
+}
+
+type FileNotifyInformation struct {
+	NextEntryOffset uint32
+	Action          uint32
+	FileNameLength  uint32
+	FileName        uint16
 }
 
 type Filetime struct {
@@ -339,9 +373,10 @@ const (
 	SOCK_RAW       = 3
 	SOCK_SEQPACKET = 5
 
-	IPPROTO_IP  = 0
-	IPPROTO_TCP = 6
-	IPPROTO_UDP = 17
+	IPPROTO_IP   = 0
+	IPPROTO_IPV6 = 0x29
+	IPPROTO_TCP  = 6
+	IPPROTO_UDP  = 17
 
 	SOL_SOCKET               = 0xffff
 	SO_REUSEADDR             = 4
@@ -353,8 +388,18 @@ const (
 	SO_SNDBUF                = 0x1001
 	SO_UPDATE_ACCEPT_CONTEXT = 0x700b
 
-	IPPROTO_IPV6 = 0x29
-	IPV6_V6ONLY  = 0x1b
+	IP_TOS             = 0x3
+	IP_TTL             = 0x4
+	IP_ADD_MEMBERSHIP  = 0xc
+	IP_DROP_MEMBERSHIP = 0xd
+
+	IPV6_V6ONLY         = 0x1b
+	IPV6_UNICAST_HOPS   = 0x4
+	IPV6_MULTICAST_IF   = 0x9
+	IPV6_MULTICAST_HOPS = 0xa
+	IPV6_MULTICAST_LOOP = 0xb
+	IPV6_JOIN_GROUP     = 0xc
+	IPV6_LEAVE_GROUP    = 0xd
 
 	SOMAXCONN = 0x7fffffff
 
@@ -366,9 +411,6 @@ const (
 
 	WSADESCRIPTION_LEN = 256
 	WSASYS_STATUS_LEN  = 128
-
-	IPV6_JOIN_GROUP  = 12
-	IPV6_LEAVE_GROUP = 13
 )
 
 type WSABuf struct {
@@ -409,6 +451,12 @@ type Hostent struct {
 	AddrType uint16
 	Length   uint16
 	AddrList **byte
+}
+
+type Protoent struct {
+	Name    *byte
+	Aliases **byte
+	Proto   uint16
 }
 
 const (
@@ -492,6 +540,11 @@ type DNSMXData struct {
 	NameExchange *uint16
 	Preference   uint16
 	Pad          uint16
+}
+
+type DNSTXTData struct {
+	StringCount uint16
+	StringArray [1]*uint16
 }
 
 type DNSRecord struct {
@@ -611,3 +664,51 @@ type MibIfRow struct {
 	DescrLen        uint32
 	Descr           [MAXLEN_IFDESCR]byte
 }
+
+type CertContext struct {
+	EncodingType uint32
+	EncodedCert  *byte
+	Length       uint32
+	CertInfo     uintptr
+	Store        Handle
+}
+
+const (
+	HKEY_CLASSES_ROOT = 0x80000000 + iota
+	HKEY_CURRENT_USER
+	HKEY_LOCAL_MACHINE
+	HKEY_USERS
+	HKEY_PERFORMANCE_DATA
+	HKEY_CURRENT_CONFIG
+	HKEY_DYN_DATA
+
+	KEY_QUERY_VALUE        = 1
+	KEY_SET_VALUE          = 2
+	KEY_CREATE_SUB_KEY     = 4
+	KEY_ENUMERATE_SUB_KEYS = 8
+	KEY_NOTIFY             = 16
+	KEY_CREATE_LINK        = 32
+	KEY_WRITE              = 0x20006
+	KEY_EXECUTE            = 0x20019
+	KEY_READ               = 0x20019
+	KEY_WOW64_64KEY        = 0x0100
+	KEY_WOW64_32KEY        = 0x0200
+	KEY_ALL_ACCESS         = 0xf003f
+)
+
+const (
+	REG_NONE = iota
+	REG_SZ
+	REG_EXPAND_SZ
+	REG_BINARY
+	REG_DWORD_LITTLE_ENDIAN
+	REG_DWORD_BIG_ENDIAN
+	REG_LINK
+	REG_MULTI_SZ
+	REG_RESOURCE_LIST
+	REG_FULL_RESOURCE_DESCRIPTOR
+	REG_RESOURCE_REQUIREMENTS_LIST
+	REG_QWORD_LITTLE_ENDIAN
+	REG_DWORD = REG_DWORD_LITTLE_ENDIAN
+	REG_QWORD = REG_QWORD_LITTLE_ENDIAN
+)

@@ -9,17 +9,18 @@ import (
 	"go/token"
 )
 
+func init() {
+	register(stringssplitFix)
+}
+
 var stringssplitFix = fix{
 	"stringssplit",
+	"2011-06-28",
 	stringssplit,
 	`Restore strings.Split to its original meaning and add strings.SplitN. Bytes too.
 
 http://codereview.appspot.com/4661051
 `,
-}
-
-func init() {
-	register(stringssplitFix)
 }
 
 func stringssplit(f *ast.File) bool {

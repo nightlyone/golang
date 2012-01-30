@@ -8,17 +8,18 @@ import (
 	"go/ast"
 )
 
+func init() {
+	register(httpHeadersFix)
+}
+
 var httpHeadersFix = fix{
 	"httpheaders",
+	"2011-06-16",
 	httpheaders,
 	`Rename http Referer, UserAgent, Cookie, SetCookie, which are now methods.
 
 http://codereview.appspot.com/4620049/
 `,
-}
-
-func init() {
-	register(httpHeadersFix)
 }
 
 func httpheaders(f *ast.File) bool {
@@ -35,7 +36,7 @@ func httpheaders(f *ast.File) bool {
 	})
 
 	fixed := false
-	typeof := typecheck(headerTypeConfig, f)
+	typeof, _ := typecheck(headerTypeConfig, f)
 	walk(f, func(ni interface{}) {
 		switch n := ni.(type) {
 		case *ast.SelectorExpr:
@@ -60,7 +61,7 @@ func httpheaders(f *ast.File) bool {
 
 var headerTypeConfig = &TypeConfig{
 	Type: map[string]*Type{
-		"*http.Request":  &Type{},
-		"*http.Response": &Type{},
+		"*http.Request":  {},
+		"*http.Response": {},
 	},
 }

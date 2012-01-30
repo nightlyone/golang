@@ -9,14 +9,17 @@ import (
 )
 
 func init() {
-	register(fix{
-		"filepath",
-		filepathFunc,
-		`Adapt code from filepath.[List]SeparatorString to string(filepath.[List]Separator).
+	register(filepathFix)
+}
+
+var filepathFix = fix{
+	"filepath",
+	"2011-06-26",
+	filepathFunc,
+	`Adapt code from filepath.[List]SeparatorString to string(filepath.[List]Separator).
 
 http://codereview.appspot.com/4527090
 `,
-	})
 }
 
 func filepathFunc(f *ast.File) (fixed bool) {

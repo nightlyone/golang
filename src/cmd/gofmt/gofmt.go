@@ -6,7 +6,6 @@ package main
 
 import (
 	"bytes"
-	"exec"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -17,6 +16,7 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/pprof"
 	"strings"
@@ -34,8 +34,7 @@ var (
 	// layout control
 	comments  = flag.Bool("comments", true, "print comments")
 	tabWidth  = flag.Int("tabwidth", 8, "tab width")
-	tabIndent = flag.Bool("tabindent", true, "indent with tabs independent of -spaces")
-	useSpaces = flag.Bool("spaces", true, "align with spaces instead of tabs")
+	tabIndent = flag.Bool("tabs", true, "indent with tabs")
 
 	// debugging
 	cpuprofile = flag.String("cpuprofile", "", "write cpu profile to this file")
@@ -45,11 +44,11 @@ var (
 	fset        = token.NewFileSet()
 	exitCode    = 0
 	rewrite     func(*ast.File) *ast.File
-	parserMode  uint
+	parserMode  parser.Mode
 	printerMode uint
 )
 
-func report(err os.Error) {
+func report(err error) {
 	scanner.PrintError(os.Stderr, err)
 	exitCode = 2
 }
@@ -61,7 +60,7 @@ func usage() {
 }
 
 func initParserMode() {
-	parserMode = uint(0)
+	parserMode = parser.Mode(0)
 	if *comments {
 		parserMode |= parser.ParseComments
 	}
@@ -71,22 +70,20 @@ func initParserMode() {
 }
 
 func initPrinterMode() {
-	printerMode = uint(0)
+	printerMode = printer.UseSpaces
 	if *tabIndent {
 		printerMode |= printer.TabIndent
 	}
-	if *useSpaces {
-		printerMode |= printer.UseSpaces
-	}
 }
 
-func isGoFile(f *os.FileInfo) bool {
+func isGoFile(f os.FileInfo) bool {
 	// ignore non-Go files
-	return f.IsRegular() && !strings.HasPrefix(f.Name, ".") && strings.HasSuffix(f.Name, ".go")
+	name := f.Name()
+	return !f.IsDir() && !strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".go")
 }
 
 // If in == nil, the source is the contents of the file with the given filename.
-func processFile(filename string, in io.Reader, out io.Writer, stdin bool) os.Error {
+func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error {
 	if in == nil {
 		f, err := os.Open(filename)
 		if err != nil {
@@ -107,19 +104,28 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) os.Er
 	}
 
 	if rewrite != nil {
-		file = rewrite(file)
+		if adjust == nil {
+			file = rewrite(file)
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: rewrite ignored for incomplete programs\n")
+		}
 	}
+
+	ast.SortImports(fset, file)
 
 	if *simplifyAST {
 		simplify(file)
 	}
 
 	var buf bytes.Buffer
-	_, err = (&printer.Config{printerMode, *tabWidth}).Fprint(&buf, fset, file)
+	err = (&printer.Config{printerMode, *tabWidth}).Fprint(&buf, fset, file)
 	if err != nil {
 		return err
 	}
-	res := adjust(src, buf.Bytes())
+	res := buf.Bytes()
+	if adjust != nil {
+		res = adjust(src, res)
+	}
 
 	if !bytes.Equal(src, res) {
 		// formatting has changed
@@ -149,7 +155,7 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) os.Er
 	return err
 }
 
-func visitFile(path string, f *os.FileInfo, err os.Error) os.Error {
+func visitFile(path string, f os.FileInfo, err error) error {
 	if err == nil && isGoFile(f) {
 		err = processFile(path, nil, os.Stdout, false)
 	}
@@ -208,17 +214,17 @@ func gofmtMain() {
 		switch dir, err := os.Stat(path); {
 		case err != nil:
 			report(err)
-		case dir.IsRegular():
+		case dir.IsDir():
+			walkDir(path)
+		default:
 			if err := processFile(path, nil, os.Stdout, false); err != nil {
 				report(err)
 			}
-		case dir.IsDirectory():
-			walkDir(path)
 		}
 	}
 }
 
-func diff(b1, b2 []byte) (data []byte, err os.Error) {
+func diff(b1, b2 []byte) (data []byte, err error) {
 	f1, err := ioutil.TempFile("", "gofmt")
 	if err != nil {
 		return
@@ -248,17 +254,16 @@ func diff(b1, b2 []byte) (data []byte, err os.Error) {
 
 // parse parses src, which was read from filename,
 // as a Go source file or statement list.
-func parse(filename string, src []byte, stdin bool) (*ast.File, func(orig, src []byte) []byte, os.Error) {
+func parse(filename string, src []byte, stdin bool) (*ast.File, func(orig, src []byte) []byte, error) {
 	// Try as whole source file.
 	file, err := parser.ParseFile(fset, filename, src, parserMode)
 	if err == nil {
-		adjust := func(orig, src []byte) []byte { return src }
-		return file, adjust, nil
+		return file, nil, nil
 	}
 	// If the error is that the source file didn't begin with a
 	// package line and this is standard input, fall through to
 	// try as a source fragment.  Stop and return on any other error.
-	if !stdin || !strings.Contains(err.String(), "expected 'package'") {
+	if !stdin || !strings.Contains(err.Error(), "expected 'package'") {
 		return nil, nil, err
 	}
 
@@ -280,7 +285,7 @@ func parse(filename string, src []byte, stdin bool) (*ast.File, func(orig, src [
 	// If the error is that the source file didn't begin with a
 	// declaration, fall through to try as a statement list.
 	// Stop and return on any other error.
-	if !strings.Contains(err.String(), "expected declaration") {
+	if !strings.Contains(err.Error(), "expected declaration") {
 		return nil, nil, err
 	}
 
@@ -318,7 +323,10 @@ func cutSpace(b []byte) (before, middle, after []byte) {
 	for j > 0 && (b[j-1] == ' ' || b[j-1] == '\t' || b[j-1] == '\n') {
 		j--
 	}
-	return b[:i], b[i:j], b[j:]
+	if i <= j {
+		return b[:i], b[i:j], b[j:]
+	}
+	return nil, nil, b[j:]
 }
 
 // matchSpace reformats src to use the same space context as orig.

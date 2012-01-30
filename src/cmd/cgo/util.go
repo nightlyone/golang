@@ -5,11 +5,11 @@
 package main
 
 import (
-	"exec"
 	"fmt"
 	"go/token"
 	"io/ioutil"
 	"os"
+	"os/exec"
 )
 
 // run runs the command argv, feeding in stdin on standard input.
@@ -72,7 +72,7 @@ func fatalf(msg string, args ...interface{}) {
 
 var nerrors int
 
-func error(pos token.Pos, msg string, args ...interface{}) {
+func error_(pos token.Pos, msg string, args ...interface{}) {
 	nerrors++
 	if pos.IsValid() {
 		fmt.Fprintf(os.Stderr, "%s: ", fset.Position(pos).String())
@@ -102,7 +102,7 @@ func creat(name string) *os.File {
 	return f
 }
 
-func slashToUnderscore(c int) int {
+func slashToUnderscore(c rune) rune {
 	if c == '/' || c == '\\' || c == ':' {
 		c = '_'
 	}

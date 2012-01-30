@@ -28,23 +28,23 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	_ "expvar" // to serve /debug/vars
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/build"
-	"http"
-	_ "http/pprof" // to serve /debug/pprof/*
 	"io"
 	"log"
+	"net/http"
+	_ "net/http/pprof" // to serve /debug/pprof/*
 	"os"
 	"path"
 	"path/filepath"
-	"exp/regexp"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
-	"url"
 )
 
 const defaultAddr = ":6060" // default webserver address
@@ -74,7 +74,7 @@ var (
 	query = flag.Bool("q", false, "arguments are considered search queries")
 )
 
-func serveError(w http.ResponseWriter, r *http.Request, relpath string, err os.Error) {
+func serveError(w http.ResponseWriter, r *http.Request, relpath string, err error) {
 	contents := applyTemplate(errorHTML, "errorHTML", err) // err may contain an absolute path!
 	w.WriteHeader(http.StatusNotFound)
 	servePage(w, "File "+relpath, "", "", contents)
@@ -141,10 +141,10 @@ func dosync(w http.ResponseWriter, r *http.Request) {
 	case 1:
 		// sync failed because no files changed;
 		// don't change the package tree
-		syncDelay.set(*syncMin) //  revert to regular sync schedule
+		syncDelay.set(time.Duration(*syncMin) * time.Minute) //  revert to regular sync schedule
 	default:
 		// sync failed because of an error - back off exponentially, but try at least once a day
-		syncDelay.backoff(24 * 60)
+		syncDelay.backoff(24 * time.Hour)
 	}
 }
 
@@ -163,9 +163,7 @@ func loggingHandler(h http.Handler) http.Handler {
 	})
 }
 
-func remoteSearch(query string) (res *http.Response, err os.Error) {
-	search := "/search?f=text&q=" + url.QueryEscape(query)
-
+func remoteSearch(query string) (res *http.Response, err error) {
 	// list of addresses to try
 	var addrs []string
 	if *serverAddr != "" {
@@ -179,6 +177,7 @@ func remoteSearch(query string) (res *http.Response, err os.Error) {
 	}
 
 	// remote search
+	search := remoteSearchURL(query, *html)
 	for _, addr := range addrs {
 		url := "http://" + addr + search
 		res, err = http.Get(url)
@@ -188,7 +187,7 @@ func remoteSearch(query string) (res *http.Response, err os.Error) {
 	}
 
 	if err == nil && res.StatusCode != http.StatusOK {
-		err = os.NewError(res.Status)
+		err = errors.New(res.Status)
 	}
 
 	return
@@ -329,13 +328,19 @@ func main() {
 				for {
 					dosync(nil, nil)
 					delay, _ := syncDelay.get()
+					dt := delay.(time.Duration)
 					if *verbose {
-						log.Printf("next sync in %dmin", delay.(int))
+						log.Printf("next sync in %s", dt)
 					}
-					time.Sleep(int64(delay.(int)) * 60e9)
+					time.Sleep(dt)
 				}
 			}()
 		}
+
+		// Immediately update metadata.
+		updateMetadata()
+		// Periodically refresh metadata.
+		go refreshMetadataLoop()
 
 		// Initialize search index.
 		if *indexEnabled {
@@ -387,13 +392,15 @@ func main() {
 	}
 
 	var mode PageInfoMode
+	if relpath == builtinPkgPath {
+		mode = noFiltering
+	}
 	if *srcMode {
 		// only filter exports if we don't have explicit command-line filter arguments
-		if flag.NArg() == 1 {
-			mode |= exportsOnly
+		if flag.NArg() > 1 {
+			mode |= noFiltering
 		}
-	} else {
-		mode = exportsOnly | genDoc
+		mode |= showSource
 	}
 	// TODO(gri): Provide a mechanism (flag?) to select a package
 	//            if there are multiple packages in a directory.

@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-
 // The template uses the function "code" to inject program
 // source into the output by extracting code from files and
 // injecting them as HTML-escaped <pre> blocks.
@@ -17,7 +16,13 @@
 //	{{code "foo.go" `/^func.main/` `/^}/`
 //
 // Patterns can be `/regular expression/`, a decimal number, or "$"
-// to signify the end of the file.
+// to signify the end of the file. In multi-line matches,
+// lines that end with the four characters
+//	OMIT
+// are omitted from the output, making it easy to provide marker
+// lines in the input that will not appear in the output but are easy
+// to identify by pattern.
+
 package main
 
 import (
@@ -26,14 +31,20 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
-	"template"
+	"text/template"
 )
 
 func Usage() {
 	fmt.Fprintf(os.Stderr, "usage: tmpltohtml file\n")
 	os.Exit(2)
+}
+
+var templateFuncs = template.FuncMap{
+	"code":      code,
+	"donotedit": donotedit,
 }
 
 func main() {
@@ -44,9 +55,9 @@ func main() {
 	}
 
 	// Read and parse the input.
-	name := flag.Args()[0]
-	tmpl := template.New(name).Funcs(template.FuncMap{"code": code})
-	if _, err := tmpl.ParseFile(name); err != nil {
+	name := flag.Arg(0)
+	tmpl := template.New(filepath.Base(name)).Funcs(templateFuncs)
+	if _, err := tmpl.ParseFiles(name); err != nil {
 		log.Fatal(err)
 	}
 
@@ -81,7 +92,12 @@ func format(arg interface{}) string {
 	return ""
 }
 
-func code(file string, arg ...interface{}) (string, os.Error) {
+func donotedit() string {
+	// No editing please.
+	return fmt.Sprintf("<!--\n  DO NOT EDIT: created by\n    tmpltohtml %s\n-->\n", flag.Args()[0])
+}
+
+func code(file string, arg ...interface{}) (string, error) {
 	text := contents(file)
 	var command string
 	switch len(arg) {
@@ -97,6 +113,8 @@ func code(file string, arg ...interface{}) (string, os.Error) {
 	default:
 		return "", fmt.Errorf("incorrect code invocation: code %q %q", file, arg)
 	}
+	// Trim spaces from output.
+	text = strings.Trim(text, "\n")
 	// Replace tabs by spaces, which work better in HTML.
 	text = strings.Replace(text, "\t", "    ", -1)
 	// Escape the program text for HTML.
@@ -142,7 +160,12 @@ func multipleLines(file, text string, arg1, arg2 interface{}) string {
 	if !isInt2 {
 		line2 = match(file, line1, lines, pattern2)
 	} else if line2 < line1 {
-		log.Fatal("lines out of order for %q: %d %d", line1, line2)
+		log.Fatalf("lines out of order for %q: %d %d", text, line1, line2)
+	}
+	for k := line1 - 1; k < line2; k++ {
+		if strings.HasSuffix(lines[k], "OMIT\n") {
+			lines[k] = ""
+		}
 	}
 	return strings.Join(lines[line1-1:line2], "")
 }
@@ -154,7 +177,7 @@ func match(file string, start int, lines []string, pattern string) int {
 	// $ matches the end of the file.
 	if pattern == "$" {
 		if len(lines) == 0 {
-			log.Fatal("%q: empty file", file)
+			log.Fatalf("%q: empty file", file)
 		}
 		return len(lines)
 	}
