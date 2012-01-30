@@ -7,9 +7,9 @@ Allow IPv4 on IPv6 sockets
 
 --- a/src/pkg/net/sock.go
 +++ b/src/pkg/net/sock.go
-@@ -37,6 +37,16 @@ func socket(net string, f, p, t int, la,
+@@ -30,6 +30,16 @@ func socket(net string, f, t, p int, la,
  
- 	setKernelSpecificSockopt(s, f)
+ 	setDefaultSockopts(s, f, t)
  
 +	// Allow IPv4 on IPv6 sockets.
 +	if f == syscall.AF_INET6 {
@@ -22,5 +22,5 @@ Allow IPv4 on IPv6 sockets
 +							       }
 +
  	if la != nil {
- 		e = syscall.Bind(s, la)
- 		if e != 0 {
+ 		err = syscall.Bind(s, la)
+ 		if err != nil {
