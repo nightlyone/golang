@@ -13,4 +13,4 @@ Description: Report installation of public packages to Go Dashboard?
  successful installation to the Go Dashboard.
  .
  This choice can be later modified by running "dpkg-reconfigure
- popularity-contest".
+ golang-weekly-tools".
