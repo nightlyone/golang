@@ -13,7 +13,7 @@ Package: golang-weekly-go
 Architecture: i386 amd64 kfreebsd-i386 kfreebsd-amd64 armel armhf
 Depends: ${shlibs:Depends}, ${misc:Depends}, ${perl:Depends}
 Replaces: golang-weekly-tools
-Conflicts: golang-go, golang-weekly-tools
+Conflicts: golang-go, golang-weekly-tools, golang-tools
 Provides: go-compiler, golang-go, golang-weekly-tools
 Description: Experimental Go programming language compiler
  This package provides assembler, compiler and linker for the Go
