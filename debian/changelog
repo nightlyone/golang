@@ -1,3 +1,10 @@
+golang-weekly (2012.02.22-3) unstable; urgency=low
+
+  * Conflict with golang-tools (Closes: #661726)
+  * Bump standards to 3.9.3
+
+ -- Ondřej Surý <ondrej@debian.org>  Wed, 29 Feb 2012 20:44:46 +0100
+
 golang-weekly (2012.02.22-2) unstable; urgency=low
 
   * Check for defined(__FreeBSD_kernel__) as well
