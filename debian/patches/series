@@ -4,3 +4,4 @@
 007-use_native_dynamic_linker_on_kfreebsd.patch
 #009-goinstall_can_install_to_GOPATH.patch
 #010-goinstall_check_conf.patch
+011-__FreeBSD_kernel__.patch
