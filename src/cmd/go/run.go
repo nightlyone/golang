@@ -4,7 +4,12 @@
 
 package main
 
-import "strings"
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+)
 
 var cmdRun = &Command{
 	UsageLine: "run [-a] [-n] [-x] gofiles... [arguments...]",
@@ -28,9 +33,14 @@ func init() {
 	cmdRun.Flag.BoolVar(&buildX, "x", false, "")
 }
 
+func printStderr(args ...interface{}) (int, error) {
+	return fmt.Fprint(os.Stderr, args...)
+}
+
 func runRun(cmd *Command, args []string) {
 	var b builder
 	b.init()
+	b.print = printStderr
 	i := 0
 	for i < len(args) && strings.HasSuffix(args[i], ".go") {
 		i++
@@ -52,6 +62,19 @@ func (b *builder) runProgram(a *action) error {
 			return nil
 		}
 	}
-	run(a.deps[0].target, a.args)
+
+	runStdin(a.deps[0].target, a.args)
 	return nil
+}
+
+// runStdin is like run, but connects Stdin.
+func runStdin(cmdargs ...interface{}) {
+	cmdline := stringList(cmdargs...)
+	cmd := exec.Command(cmdline[0], cmdline[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		errorf("%v", err)
+	}
 }

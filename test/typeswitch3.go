@@ -1,4 +1,4 @@
-// errchk $G -e $D/$F.go
+// errorcheck
 
 // Copyright 2011 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
@@ -29,6 +29,10 @@ func main(){
 	
 	switch r.(type) {
 	case io.Writer:
+	}
+	
+	// Issue 2827.
+	switch _ := r.(type) {  // ERROR "invalid variable name _"
 	}
 }
 

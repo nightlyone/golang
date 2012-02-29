@@ -87,6 +87,7 @@ void
 main(int argc, char *argv[])
 {
 	int c;
+	char *name, *val;
 
 	Binit(&bso, 1, OWRITE);
 	listinit();
@@ -98,6 +99,7 @@ main(int argc, char *argv[])
 	INITDAT = -1;
 	INITRND = -1;
 	INITENTRY = 0;
+	nuxiinit();
 
 	ARGBEGIN {
 	default:
@@ -138,9 +140,9 @@ main(int argc, char *argv[])
 		print("%cl version %s\n", thechar, getgoversion());
 		errorexit();
 	case 'X':
-		// TODO: golang.org/issue/2676
-		EARGF(usage());
-		EARGF(usage());
+		name = EARGF(usage());
+		val = EARGF(usage());
+		addstrdata(name, val);
 		break;
 	} ARGEND
 
@@ -280,7 +282,6 @@ main(int argc, char *argv[])
 	zprg.to = zprg.from;
 
 	pcstr = "%.6ux ";
-	nuxiinit();
 	histgen = 0;
 	pc = 0;
 	dtype = 4;
@@ -562,7 +563,7 @@ loop:
 			s->type = SBSS;
 			s->size = 0;
 		}
-		if(s->type != SBSS && !s->dupok) {
+		if(s->type != SBSS && s->type != SNOPTRBSS && !s->dupok) {
 			diag("%s: redefinition: %s in %s",
 				pn, s->name, TNAME);
 			s->type = SBSS;
@@ -574,6 +575,8 @@ loop:
 			s->dupok = 1;
 		if(p->from.scale & RODATA)
 			s->type = SRODATA;
+		else if(p->from.scale & NOPTR)
+			s->type = SNOPTRBSS;
 		goto loop;
 
 	case ADATA:

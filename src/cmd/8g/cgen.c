@@ -98,6 +98,9 @@ cgen(Node *n, Node *res)
 		if(isslice(n->left->type))
 			n->addable = n->left->addable;
 		break;
+	case OITAB:
+		n->addable = n->left->addable;
+		break;
 	}
 
 	// if both are addressable, move
@@ -248,6 +251,13 @@ cgen(Node *n, Node *res)
 	case OIND:
 	case ONAME:	// PHEAP or PPARAMREF var
 		igen(n, &n1, res);
+		gmove(&n1, res);
+		regfree(&n1);
+		break;
+
+	case OITAB:
+		igen(nl, &n1, res);
+		n1.type = ptrto(types[TUINTPTR]);
 		gmove(&n1, res);
 		regfree(&n1);
 		break;
@@ -1136,7 +1146,7 @@ sgen(Node *n, Node *res, int64 w)
 	int32 c, q, odst, osrc;
 
 	if(debug['g']) {
-		print("\nsgen w=%ld\n", w);
+		print("\nsgen w=%lld\n", w);
 		dump("r", n);
 		dump("res", res);
 	}

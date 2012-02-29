@@ -63,7 +63,7 @@ var (
 
 	// layout control
 	tabwidth       = flag.Int("tabwidth", 4, "tab width")
-	showTimestamps = flag.Bool("timestamps", true, "show timestamps with directory listings")
+	showTimestamps = flag.Bool("timestamps", false, "show timestamps with directory listings")
 	templateDir    = flag.String("templates", "", "directory containing alternate template files")
 
 	// search index
@@ -114,7 +114,12 @@ func registerPublicHandlers(mux *http.ServeMux) {
 }
 
 func initFSTree() {
-	fsTree.set(newDirectory(filepath.Join(*goroot, *testDir), nil, -1))
+	dir := newDirectory(filepath.Join(*goroot, *testDir), nil, -1)
+	if dir == nil {
+		log.Println("Warning: FSTree is nil")
+		return
+	}
+	fsTree.set(dir)
 	invalidateIndex()
 }
 
@@ -378,7 +383,7 @@ func writeNode(w io.Writer, fset *token.FileSet, x interface{}) {
 	//           with an another printer mode (which is more efficiently
 	//           implemented in the printer than here with another layer)
 	mode := printer.TabIndent | printer.UseSpaces
-	err := (&printer.Config{mode, *tabwidth}).Fprint(&tconv{output: w}, fset, x)
+	err := (&printer.Config{Mode: mode, Tabwidth: *tabwidth}).Fprint(&tconv{output: w}, fset, x)
 	if err != nil {
 		log.Print(err)
 	}
@@ -494,12 +499,14 @@ func startsWithUppercase(s string) bool {
 	return unicode.IsUpper(r)
 }
 
+var exampleOutputRx = regexp.MustCompile(`(?i)//[[:space:]]*output:`)
+
 func example_htmlFunc(funcName string, examples []*doc.Example, fset *token.FileSet) string {
 	var buf bytes.Buffer
 	for _, eg := range examples {
 		name := eg.Name
 
-		// strip lowercase braz in Foo_braz or Foo_Bar_braz from name 
+		// strip lowercase braz in Foo_braz or Foo_Bar_braz from name
 		// while keeping uppercase Braz in Foo_Braz
 		if i := strings.LastIndex(name, "_"); i != -1 {
 			if i < len(name)-1 && !startsWithUppercase(name[i+1:]) {
@@ -511,19 +518,65 @@ func example_htmlFunc(funcName string, examples []*doc.Example, fset *token.File
 			continue
 		}
 
-		// print code, unindent and remove surrounding braces
-		code := node_htmlFunc(eg.Body, fset)
-		code = strings.Replace(code, "\n    ", "\n", -1)
-		code = code[2 : len(code)-2]
+		// print code
+		cnode := &printer.CommentedNode{Node: eg.Code, Comments: eg.Comments}
+		code := node_htmlFunc(cnode, fset)
+		out := eg.Output
+
+		// additional formatting if this is a function body
+		if n := len(code); n >= 2 && code[0] == '{' && code[n-1] == '}' {
+			// remove surrounding braces
+			code = code[1 : n-1]
+			// unindent
+			code = strings.Replace(code, "\n    ", "\n", -1)
+			// remove output comment
+			if loc := exampleOutputRx.FindStringIndex(code); loc != nil {
+				code = strings.TrimSpace(code[:loc[0]])
+			}
+		} else {
+			// drop output, as the output comment will appear in the code
+			out = ""
+		}
 
 		err := exampleHTML.Execute(&buf, struct {
-			Code, Output string
-		}{code, eg.Output})
+			Name, Doc, Code, Output string
+		}{eg.Name, eg.Doc, code, out})
 		if err != nil {
 			log.Print(err)
 		}
 	}
 	return buf.String()
+}
+
+// example_nameFunc takes an example function name and returns its display
+// name. For example, "Foo_Bar_quux" becomes "Foo.Bar (Quux)".
+func example_nameFunc(s string) string {
+	name, suffix := splitExampleName(s)
+	// replace _ with . for method names
+	name = strings.Replace(name, "_", ".", 1)
+	// use "Package" if no name provided
+	if name == "" {
+		name = "Package"
+	}
+	return name + suffix
+}
+
+// example_suffixFunc takes an example function name and returns its suffix in
+// parenthesized form. For example, "Foo_Bar_quux" becomes " (Quux)".
+func example_suffixFunc(name string) string {
+	_, suffix := splitExampleName(name)
+	return suffix
+}
+
+func splitExampleName(s string) (name, suffix string) {
+	i := strings.LastIndex(s, "_")
+	if 0 <= i && i < len(s)-1 && !startsWithUppercase(s[i+1:]) {
+		name = s[:i]
+		suffix = " (" + strings.Title(s[i+1:]) + ")"
+		return
+	}
+	name = s
+	return
 }
 
 func pkgLinkFunc(path string) string {
@@ -602,7 +655,9 @@ var fmap = template.FuncMap{
 	"posLink_url": posLink_urlFunc,
 
 	// formatting of Examples
-	"example_html": example_htmlFunc,
+	"example_html":   example_htmlFunc,
+	"example_name":   example_nameFunc,
+	"example_suffix": example_suffixFunc,
 }
 
 func readTemplate(name string) *template.Template {
@@ -743,7 +798,11 @@ func applyTemplate(t *template.Template, name string, data interface{}) []byte {
 }
 
 func redirect(w http.ResponseWriter, r *http.Request) (redirected bool) {
-	if canonical := path.Clean(r.URL.Path) + "/"; r.URL.Path != canonical {
+	canonical := path.Clean(r.URL.Path)
+	if !strings.HasSuffix("/", canonical) {
+		canonical += "/"
+	}
+	if r.URL.Path != canonical {
 		http.Redirect(w, r, canonical, http.StatusMovedPermanently)
 		redirected = true
 	}
@@ -867,6 +926,7 @@ type PageInfoMode uint
 
 const (
 	noFiltering PageInfoMode = 1 << iota // do not filter exports
+	allMethods                           // show all embedded methods
 	showSource                           // show source code, do not extract documentation
 	noHtml                               // show result in textual form, do not generate HTML
 	flatDir                              // show directory in a flat (non-indented) manner
@@ -874,10 +934,11 @@ const (
 
 // modeNames defines names for each PageInfoMode flag.
 var modeNames = map[string]PageInfoMode{
-	"all":  noFiltering,
-	"src":  showSource,
-	"text": noHtml,
-	"flat": flatDir,
+	"all":     noFiltering,
+	"methods": allMethods,
+	"src":     showSource,
+	"text":    noHtml,
+	"flat":    flatDir,
 }
 
 // getPageInfoMode computes the PageInfoMode flags by analyzing the request
@@ -1063,6 +1124,7 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 			}
 		}
 		plist = plist[0:i]
+		sort.Strings(plist)
 	}
 
 	// get examples from *_test.go files
@@ -1074,7 +1136,11 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 		log.Println("parsing test files:", err)
 	} else {
 		for _, testpkg := range testpkgs {
-			examples = append(examples, doc.Examples(testpkg)...)
+			var files []*ast.File
+			for _, f := range testpkg.Files {
+				files = append(files, f)
+			}
+			examples = append(examples, doc.Examples(files...)...)
 		}
 	}
 
@@ -1087,6 +1153,9 @@ func (h *httpHandler) getPageInfo(abspath, relpath, pkgname string, mode PageInf
 			var m doc.Mode
 			if mode&noFiltering != 0 {
 				m = doc.AllDecls
+			}
+			if mode&allMethods != 0 {
+				m |= doc.AllMethods
 			}
 			pdoc = doc.New(pkg, path.Clean(relpath), m) // no trailing '/' in importpath
 		} else {
@@ -1495,9 +1564,12 @@ func updateIndex() {
 		log.Printf("index updated (%gs, %d bytes of source, %d files, %d lines, %d unique words, %d spots)",
 			secs, stats.Bytes, stats.Files, stats.Lines, stats.Words, stats.Spots)
 	}
-	log.Printf("before GC: bytes = %d footprint = %d", runtime.MemStats.HeapAlloc, runtime.MemStats.Sys)
+	memstats := new(runtime.MemStats)
+	runtime.ReadMemStats(memstats)
+	log.Printf("before GC: bytes = %d footprint = %d", memstats.HeapAlloc, memstats.Sys)
 	runtime.GC()
-	log.Printf("after  GC: bytes = %d footprint = %d", runtime.MemStats.HeapAlloc, runtime.MemStats.Sys)
+	runtime.ReadMemStats(memstats)
+	log.Printf("after  GC: bytes = %d footprint = %d", memstats.HeapAlloc, memstats.Sys)
 }
 
 func indexer() {

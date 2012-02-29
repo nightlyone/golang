@@ -91,6 +91,8 @@ enum {
 	ElfStrGnuVersion,
 	ElfStrGnuVersionR,
 	ElfStrNoteNetbsdIdent,
+	ElfStrNoPtrData,
+	ElfStrNoPtrBss,
 	NElfStr
 };
 
@@ -108,6 +110,7 @@ needlib(char *name)
 	/* reuse hash code in symbol table */
 	p = smprint(".dynlib.%s", name);
 	s = lookup(p, 0);
+	free(p);
 	if(s->type == 0) {
 		s->type = 100;	// avoid SDATA, etc.
 		return 1;
@@ -525,8 +528,10 @@ doelf(void)
 
 	elfstr[ElfStrEmpty] = addstring(shstrtab, "");
 	elfstr[ElfStrText] = addstring(shstrtab, ".text");
+	elfstr[ElfStrNoPtrData] = addstring(shstrtab, ".noptrdata");
 	elfstr[ElfStrData] = addstring(shstrtab, ".data");
 	elfstr[ElfStrBss] = addstring(shstrtab, ".bss");
+	elfstr[ElfStrNoPtrBss] = addstring(shstrtab, ".noptrbss");
 	if(HEADTYPE == Hnetbsd)
 		elfstr[ElfStrNoteNetbsdIdent] = addstring(shstrtab, ".note.netbsd.ident");
 	addstring(shstrtab, ".elfdata");
@@ -1003,6 +1008,9 @@ asmb(void)
 			phsh(ph, sh);
 		}
 
+		// Additions to the reserved area must be above this line.
+		USED(resoff);
+
 		elfphload(&segtext);
 		elfphload(&segdata);
 
@@ -1250,12 +1258,16 @@ genasmsym(void (*put)(Sym*, char*, int, vlong, vlong, int, Sym*))
 			case SSTRING:
 			case SGOSTRING:
 			case SWINDOWS:
+			case SNOPTRDATA:
+			case SSYMTAB:
+			case SPCLNTAB:
 				if(!s->reachable)
 					continue;
 				put(s, s->name, 'D', symaddr(s), s->size, s->version, s->gotype);
 				continue;
 
 			case SBSS:
+			case SNOPTRBSS:
 				if(!s->reachable)
 					continue;
 				put(s, s->name, 'B', symaddr(s), s->size, s->version, s->gotype);

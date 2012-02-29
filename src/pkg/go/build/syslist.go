@@ -1,4 +1,5 @@
 // Generated automatically by make.
+
 package build
 
 const goosList = "darwin freebsd linux netbsd openbsd plan9 windows "

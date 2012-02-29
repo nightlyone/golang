@@ -423,7 +423,7 @@ simple_stmt:
 				yyerror("expr.(type) must be alone in list");
 			if($1->next != nil)
 				yyerror("argument count mismatch: %d = %d", count($1), 1);
-			else if($1->n->op != ONAME && $1->n->op != OTYPE && $1->n->op != ONONAME)
+			else if(($1->n->op != ONAME && $1->n->op != OTYPE && $1->n->op != ONONAME) || isblank($1->n))
 				yyerror("invalid variable name %N in type switch", $1->n);
 			else
 				$$->left = dclname($1->n->sym);  // it's a colas, so must not re-use an oldname.
@@ -987,7 +987,10 @@ lbrace:
 new_name:
 	sym
 	{
-		$$ = newname($1);
+		if($1 == S)
+			$$ = N;
+		else
+			$$ = newname($1);
 	}
 
 dcl_name:
@@ -1417,6 +1420,20 @@ structdcl:
 	new_name_list ntype oliteral
 	{
 		NodeList *l;
+
+		Node *n;
+		l = $1;
+		if(l != nil && l->next == nil && l->n == nil) {
+			// ? symbol, during import
+			n = $2;
+			if(n->op == OIND)
+				n = n->left;
+			n = embedded(n->sym);
+			n->right = $2;
+			n->val = $3;
+			$$ = list1(n);
+			break;
+		}
 
 		for(l=$1; l; l=l->next) {
 			l->n = nod(ODCLFIELD, l->n, $2);
@@ -2011,7 +2028,7 @@ hidden_constant:
 	{
 		if($2->val.ctype == CTRUNE && $4->val.ctype == CTINT) {
 			$$ = $2;
-			mpaddfixfix($2->val.u.xval, $4->val.u.xval);
+			mpaddfixfix($2->val.u.xval, $4->val.u.xval, 0);
 			break;
 		}
 		$$ = nodcplxlit($2->val, $4->val);

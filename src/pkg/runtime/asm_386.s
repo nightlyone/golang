@@ -5,14 +5,6 @@
 #include "zasm_GOOS_GOARCH.h"
 
 TEXT _rt0_386(SB),7,$0
-	// Linux, Windows start the FPU in extended double precision.
-	// Other operating systems use double precision.
-	// Change to double precision to match them,
-	// and to match other hardware that only has double.
-	PUSHL $0x27F
-	FLDCW	0(SP)
-	POPL AX
-
 	// copy arguments forward on an even stack
 	MOVL	0(SP), AX		// argc
 	LEAL	4(SP), BX		// argv
@@ -97,6 +89,16 @@ ok:
 
 TEXT runtime·breakpoint(SB),7,$0
 	INT $3
+	RET
+
+TEXT runtime·asminit(SB),7,$0
+	// Linux, Windows start the FPU in extended double precision.
+	// Other operating systems use double precision.
+	// Change to double precision to match them,
+	// and to match other hardware that only has double.
+	PUSHL $0x27F
+	FLDCW	0(SP)
+	POPL AX
 	RET
 
 /*
@@ -522,6 +524,15 @@ TEXT runtime·setcallerpc(SB),7,$0
 
 TEXT runtime·getcallersp(SB), 7, $0
 	MOVL	sp+0(FP), AX
+	RET
+
+// int64 runtime·cputicks(void), so really
+// void runtime·cputicks(int64 *ticks)
+TEXT runtime·cputicks(SB),7,$0
+	RDTSC
+	MOVL	ret+0(FP), DI
+	MOVL	AX, 0(DI)
+	MOVL	DX, 4(DI)
 	RET
 
 TEXT runtime·ldt0setup(SB),7,$16

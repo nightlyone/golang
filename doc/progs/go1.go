@@ -11,6 +11,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 	"unicode"
@@ -27,6 +29,8 @@ func main() {
 	runeType()
 	errorExample()
 	timePackage()
+	walkExample()
+	osIsExist()
 }
 
 var timeout = flag.Duration("timeout", 30*time.Second, "how long to wait for completion")
@@ -181,6 +185,25 @@ func timePackage() {
 	sleepUntil(time.Now().Add(123 * time.Millisecond))
 }
 
+func walkExample() {
+	// STARTWALK OMIT
+	markFn := func(path string, info os.FileInfo, err error) error {
+		if path == "pictures" { // Will skip walking of directory pictures and its contents.
+			return filepath.SkipDir
+		}
+		if err != nil {
+			return err
+		}
+		log.Println(path)
+		return nil
+	}
+	err := filepath.Walk(".", markFn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// ENDWALK OMIT
+}
+
 func initializationFunction(c chan int) {
 	c <- 1
 }
@@ -205,4 +228,13 @@ func BenchmarkSprintf(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		fmt.Sprintf("%x", 23)
 	}
+}
+
+func osIsExist() {
+	name := "go1.go"
+	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+	if os.IsExist(err) {
+		log.Printf("%s already exists", name)
+	}
+	_ = f
 }

@@ -23,8 +23,7 @@ bindEvent(window, 'load', godocs_onload);
 function godocs_onload() {
   godocs_bindSearchEvents();
   godocs_generateTOC();
-  godocs_addTopLinks();
-  godocs_bindExampleToggles();
+  godocs_bindExamples();
 }
 
 function godocs_bindSearchEvents() {
@@ -64,8 +63,15 @@ function godocs_generateTOC() {
   var toc_items = [];
 
   var i;
+  var seenNav = false;
   for (i = 0; i < navbar.parentNode.childNodes.length; i++) {
     var node = navbar.parentNode.childNodes[i];
+    if (!seenNav) { 
+      if (node.id == 'nav') {
+        seenNav = true;
+      }
+      continue;
+    }
     if ((node.tagName != 'h2') && (node.tagName != 'H2') &&
         (node.tagName != 'h3') && (node.tagName != 'H3')) {
       continue;
@@ -152,38 +158,14 @@ function godocs_nodeToText(node) {
   return text;
 }
 
-/* For each H2 heading, add a link up to the #top of the document.
- * (As part of this: ensure existence of 'top' named anchor link
- * (theoretically at doc's top).)
- */
-function godocs_addTopLinks() {
-  /* Make sure there's a "top" to link to. */
-  var top = document.getElementById('top');
-  if (!top) {
-    document.body.id = 'top';
-  }
-
-  if (!document.getElementsByTagName) return; // no browser support
-
-  var headers = document.getElementsByTagName('h2');
-
-  for (var i = 0; i < headers.length; i++) {
-    var span = document.createElement('span');
-    span.className = 'navtop';
-    var link = document.createElement('a');
-    span.appendChild(link);
-    link.href = '#top';
-    var textNode = document.createTextNode('[Top]');
-    link.appendChild(textNode);
-    headers[i].appendChild(span);
-  }
-}
-
-function godocs_bindExampleToggles() {
+function godocs_bindExamples() {
   var examples = document.getElementsByClassName("example");
   for (var i = 0; i < examples.length; i++) {
-    var eg = examples[i];
-    godocs_bindExampleToggle(eg);
+    godocs_bindExampleToggle(examples[i]);
+  }
+  var links = document.getElementsByClassName("exampleLink");
+  for (var i = 0; i < links.length; i++) {
+    godocs_bindExampleLink(links[i]);
   }
 }
 function godocs_bindExampleToggle(eg) {
@@ -197,4 +179,15 @@ function godocs_bindExampleToggle(eg) {
       }
     });
   }
+}
+function godocs_bindExampleLink(l) {
+  var prefix = "example_";
+  bindEvent(l, "click", function() {
+    var i = l.href.indexOf("#"+prefix);
+    if (i < 0)
+      return;
+    var id = prefix + l.href.slice(i+1+prefix.length);
+    var eg = document.getElementById(id);
+    eg.className = "exampleVisible";
+  });
 }

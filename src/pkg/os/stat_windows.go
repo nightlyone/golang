@@ -11,10 +11,10 @@ import (
 )
 
 // Stat returns the FileInfo structure describing file.
-// It returns the FileInfo and an error, if any.
+// If there is an error, it will be of type *PathError.
 func (file *File) Stat() (fi FileInfo, err error) {
 	if file == nil || file.fd < 0 {
-		return nil, EINVAL
+		return nil, syscall.EINVAL
 	}
 	if file.isdir() {
 		// I don't know any better way to do that for directory
@@ -28,11 +28,8 @@ func (file *File) Stat() (fi FileInfo, err error) {
 	return toFileInfo(basename(file.name), d.FileAttributes, d.FileSizeHigh, d.FileSizeLow, d.CreationTime, d.LastAccessTime, d.LastWriteTime), nil
 }
 
-// Stat returns a FileInfo structure describing the named file and an error, if any.
-// If name names a valid symbolic link, the returned FileInfo describes
-// the file pointed at by the link and has fi.FollowedSymlink set to true.
-// If name names an invalid symbolic link, the returned FileInfo describes
-// the link itself and has fi.FollowedSymlink set to false.
+// Stat returns a FileInfo structure describing the named file.
+// If there is an error, it will be of type *PathError.
 func Stat(name string) (fi FileInfo, err error) {
 	if len(name) == 0 {
 		return nil, &PathError{"Stat", name, syscall.Errno(syscall.ERROR_PATH_NOT_FOUND)}
@@ -45,9 +42,10 @@ func Stat(name string) (fi FileInfo, err error) {
 	return toFileInfo(basename(name), d.FileAttributes, d.FileSizeHigh, d.FileSizeLow, d.CreationTime, d.LastAccessTime, d.LastWriteTime), nil
 }
 
-// Lstat returns the FileInfo structure describing the named file and an
-// error, if any.  If the file is a symbolic link, the returned FileInfo
+// Lstat returns the FileInfo structure describing the named file.
+// If the file is a symbolic link, the returned FileInfo
 // describes the symbolic link.  Lstat makes no attempt to follow the link.
+// If there is an error, it will be of type *PathError.
 func Lstat(name string) (fi FileInfo, err error) {
 	// No links on Windows
 	return Stat(name)
@@ -82,8 +80,12 @@ type winTimes struct {
 }
 
 func toFileInfo(name string, fa, sizehi, sizelo uint32, ctime, atime, mtime syscall.Filetime) FileInfo {
-	fs := new(FileStat)
-	fs.mode = 0
+	fs := &fileStat{
+		name:    name,
+		size:    int64(sizehi)<<32 + int64(sizelo),
+		modTime: time.Unix(0, mtime.Nanoseconds()),
+		sys:     &winTimes{atime, ctime},
+	}
 	if fa&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 {
 		fs.mode |= ModeDir
 	}
@@ -92,14 +94,10 @@ func toFileInfo(name string, fa, sizehi, sizelo uint32, ctime, atime, mtime sysc
 	} else {
 		fs.mode |= 0666
 	}
-	fs.size = int64(sizehi)<<32 + int64(sizelo)
-	fs.name = name
-	fs.modTime = time.Unix(0, mtime.Nanoseconds())
-	fs.Sys = &winTimes{atime, ctime}
 	return fs
 }
 
-func sameFile(fs1, fs2 *FileStat) bool {
+func sameFile(sys1, sys2 interface{}) bool {
 	// TODO(rsc): Do better than this, but this matches what
 	// used to happen when code compared .Dev and .Ino,
 	// which were both always zero.  Obviously not all files
@@ -109,5 +107,5 @@ func sameFile(fs1, fs2 *FileStat) bool {
 
 // For testing.
 func atime(fi FileInfo) time.Time {
-	return time.Unix(0, fi.(*FileStat).Sys.(*winTimes).atime.Nanoseconds())
+	return time.Unix(0, fi.Sys().(*winTimes).atime.Nanoseconds())
 }

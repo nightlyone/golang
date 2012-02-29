@@ -11,6 +11,12 @@ runtime·signame(int32)
 }
 
 void
+runtime·sigenable(uint32 sig)
+{
+	USED(sig);
+}
+
+void
 runtime·resetcpuprofiler(int32 hz)
 {
 	// TODO: Enable profiling interrupts.

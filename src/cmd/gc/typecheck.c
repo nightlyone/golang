@@ -20,7 +20,7 @@ static int	twoarg(Node*);
 static int	lookdot(Node*, Type*, int);
 static int	looktypedot(Node*, Type*, int);
 static void	typecheckaste(int, Node*, int, Type*, NodeList*, char*);
-static Type*	lookdot1(Sym *s, Type *t, Type *f, int);
+static Type*	lookdot1(Node*, Sym *s, Type *t, Type *f, int);
 static int	nokeys(NodeList*);
 static void	typecheckcomplit(Node**);
 static void	typecheckas2(Node*);
@@ -111,16 +111,15 @@ typekind(Type *t)
  * replaces *np with a new pointer in some cases.
  * returns the final value of *np as a convenience.
  */
+static void typecheck1(Node **, int);
 Node*
 typecheck(Node **np, int top)
 {
-	int et, aop, op, ptr;
-	Node *n, *l, *r;
-	NodeList *args;
-	int lno, ok, ntop;
-	Type *t, *tp, *ft, *missing, *have, *badtype;
-	Val v;
-	char *why;
+	Node *n;
+	int lno;
+	Fmt fmt;
+	NodeList *l;
+	static NodeList *tcstack, *tcfree;
 
 	// cannot type check until all the source has been parsed
 	if(!typecheckok)
@@ -157,11 +156,52 @@ typecheck(Node **np, int top)
 	}
 
 	if(n->typecheck == 2) {
-		yyerror("typechecking loop involving %N", n);
+		if(nsavederrors+nerrors == 0) {
+			fmtstrinit(&fmt);
+			for(l=tcstack; l; l=l->next)
+				fmtprint(&fmt, "\n\t%L %N", l->n->lineno, l->n);
+			yyerror("typechecking loop involving %N%s", n, fmtstrflush(&fmt));
+		}
 		lineno = lno;
 		return n;
 	}
 	n->typecheck = 2;
+	
+	if(tcfree != nil) {
+		l = tcfree;
+		tcfree = l->next;
+	} else
+		l = mal(sizeof *l);
+	l->next = tcstack;
+	l->n = n;
+	tcstack = l;
+
+	typecheck1(&n, top);
+	*np = n;
+	n->typecheck = 1;
+
+	if(tcstack != l)
+		fatal("typecheck stack out of sync");
+	tcstack = l->next;
+	l->next = tcfree;
+	tcfree = l;
+
+	lineno = lno;
+	return n;
+}
+
+static void
+typecheck1(Node **np, int top)
+{
+	int et, aop, op, ptr;
+	Node *n, *l, *r;
+	NodeList *args;
+	int ok, ntop;
+	Type *t, *tp, *ft, *missing, *have, *badtype;
+	Val v;
+	char *why;
+	
+	n = *np;
 
 	if(n->sym) {
 		if(n->op == ONAME && n->etype != 0 && !(top & Ecall)) {
@@ -486,7 +526,7 @@ reswitch:
 		t = l->type;
 		if(iscmp[n->op]) {
 			evconst(n);
-			t = types[TBOOL];
+			t = idealbool;
 			if(n->op != OLITERAL) {
 				defaultlit2(&l, &r, 1);
 				n->left = l;
@@ -581,6 +621,8 @@ reswitch:
 	case OXDOT:
 		n = adddot(n);
 		n->op = ODOT;
+		if(n->left == N)
+			goto error;
 		// fall through
 	case ODOT:
 		typecheck(&n->left, Erv|Etype);
@@ -1275,6 +1317,13 @@ reswitch:
 	case OPRINTN:
 		ok |= Etop;
 		typechecklist(n->list, Erv | Eindir);  // Eindir: address does not escape
+		for(args=n->list; args; args=args->next) {
+			// Special case for print: int constant is int64, not int.
+			if(isconst(args->n, CTINT))
+				defaultlit(&args->n, types[TINT64]);
+			else
+				defaultlit(&args->n, T);
+		}
 		goto ret;
 
 	case OPANIC:
@@ -1301,6 +1350,16 @@ reswitch:
 		typecheckclosure(n, top);
 		if(n->type == T)
 			goto error;
+		goto ret;
+	
+	case OITAB:
+		ok |= Erv;
+		typecheck(&n->left, Erv);
+		if((t = n->left->type) == T)
+			goto error;
+		if(t->etype != TINTER)
+			fatal("OITAB of %T", t);
+		n->type = ptrto(types[TUINTPTR]);
 		goto ret;
 
 	/*
@@ -1358,7 +1417,10 @@ reswitch:
 
 	case ORETURN:
 		ok |= Etop;
-		typechecklist(n->list, Erv | Efnstruct);
+		if(count(n->list) == 1)
+			typechecklist(n->list, Erv | Efnstruct);
+		else
+			typechecklist(n->list, Erv);
 		if(curfn == N) {
 			yyerror("return outside function");
 			goto error;
@@ -1472,10 +1534,7 @@ error:
 	n->type = T;
 
 out:
-	lineno = lno;
-	n->typecheck = 1;
 	*np = n;
-	return n;
 }
 
 static void
@@ -1495,6 +1554,7 @@ implicitstar(Node **nn)
 	if(!isfixedarray(t))
 		return;
 	n = nod(OIND, n, N);
+	n->implicit = 1;
 	typecheck(&n, Erv);
 	*nn = n;
 }
@@ -1554,7 +1614,7 @@ twoarg(Node *n)
 }
 
 static Type*
-lookdot1(Sym *s, Type *t, Type *f, int dostrcmp)
+lookdot1(Node *errnode, Sym *s, Type *t, Type *f, int dostrcmp)
 {
 	Type *r;
 
@@ -1565,7 +1625,12 @@ lookdot1(Sym *s, Type *t, Type *f, int dostrcmp)
 		if(f->sym != s)
 			continue;
 		if(r != T) {
-			yyerror("ambiguous selector %T.%S", t, s);
+			if(errnode)
+				yyerror("ambiguous selector %N", errnode);
+			else if(isptr[t->etype])
+				yyerror("ambiguous selector (%T).%S", t, s);
+			else
+				yyerror("ambiguous selector %T.%S", t, s);
 			break;
 		}
 		r = f;
@@ -1582,7 +1647,7 @@ looktypedot(Node *n, Type *t, int dostrcmp)
 	s = n->right->sym;
 
 	if(t->etype == TINTER) {
-		f1 = lookdot1(s, t, t->type, dostrcmp);
+		f1 = lookdot1(n, s, t, t->type, dostrcmp);
 		if(f1 == T)
 			return 0;
 
@@ -1604,7 +1669,7 @@ looktypedot(Node *n, Type *t, int dostrcmp)
 		return 0;
 
 	expandmeth(f2->sym, f2);
-	f2 = lookdot1(s, f2, f2->xmethod, dostrcmp);
+	f2 = lookdot1(n, s, f2, f2->xmethod, dostrcmp);
 	if(f2 == T)
 		return 0;
 
@@ -1643,7 +1708,7 @@ lookdot(Node *n, Type *t, int dostrcmp)
 	dowidth(t);
 	f1 = T;
 	if(t->etype == TSTRUCT || t->etype == TINTER)
-		f1 = lookdot1(s, t, t->type, dostrcmp);
+		f1 = lookdot1(n, s, t, t->type, dostrcmp);
 
 	f2 = T;
 	if(n->left->type == t || n->left->type->sym == S) {
@@ -1651,7 +1716,7 @@ lookdot(Node *n, Type *t, int dostrcmp)
 		if(f2 != T) {
 			// Use f2->method, not f2->xmethod: adddot has
 			// already inserted all the necessary embedded dots.
-			f2 = lookdot1(s, f2, f2->method, dostrcmp);
+			f2 = lookdot1(n, s, f2, f2->method, dostrcmp);
 		}
 	}
 
@@ -1666,6 +1731,7 @@ lookdot(Node *n, Type *t, int dostrcmp)
 		if(t->etype == TINTER) {
 			if(isptr[n->left->type->etype]) {
 				n->left = nod(OIND, n->left, N);	// implicitstar
+				n->left->implicit = 1;
 				typecheck(&n->left, Erv);
 			}
 			n->op = ODOTINTER;
@@ -2008,7 +2074,8 @@ pushtype(Node *n, Type *t)
 	
 	if(n->right == N) {
 		n->right = typenod(t);
-		n->right->implicit = 1;
+		n->implicit = 1;  // don't print
+		n->right->implicit = 1;  // * is okay
 	}
 	else if(debug['s']) {
 		typecheck(&n->right, Etype);
@@ -2047,9 +2114,8 @@ typecheckcomplit(Node **np)
 	n->type = t;
 	
 	if(isptr[t->etype]) {
-		// For better or worse, we don't allow pointers as
-		// the composite literal type, except when using
-		// the &T syntax, which sets implicit.
+		// For better or worse, we don't allow pointers as the composite literal type,
+		// except when using the &T syntax, which sets implicit on the OIND.
 		if(!n->right->implicit) {
 			yyerror("invalid pointer type %T for composite literal (use &%T instead)", t, t->type);
 			goto error;
@@ -2194,7 +2260,7 @@ typecheckcomplit(Node **np)
 				if(s->pkg != localpkg && exportname(s->name))
 					s = lookup(s->name);
 
-				f = lookdot1(s, t, t->type, 0);
+				f = lookdot1(nil, s, t, t->type, 0);
 				if(f == nil) {
 					yyerror("unknown %T field '%S' in struct literal", t, s);
 					continue;
@@ -2828,6 +2894,8 @@ typecheckdef(Node *n)
 	}
 
 ret:
+	if(n->op != OLITERAL && n->type != T && isideal(n->type))
+		fatal("got %T for %N", n->type, n);
 	if(typecheckdefstack->n != n)
 		fatal("typecheckdefstack mismatch");
 	l = typecheckdefstack;

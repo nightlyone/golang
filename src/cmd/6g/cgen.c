@@ -125,6 +125,9 @@ cgen(Node *n, Node *res)
 		if(isslice(n->left->type))
 			n->addable = n->left->addable;
 		break;
+	case OITAB:
+		n->addable = n->left->addable;
+		break;
 	}
 
 	if(complexop(n, res)) {
@@ -259,6 +262,14 @@ cgen(Node *n, Node *res)
 		gmove(&n1, res);
 		regfree(&n1);
 		break;
+	
+	case OITAB:
+		// interface table is first word of interface value
+		igen(nl, &n1, res);
+		n1.type = n->type;
+		gmove(&n1, res);
+		regfree(&n1);
+		break;
 
 	case OLEN:
 		if(istype(nl->type, TMAP) || istype(nl->type, TCHAN)) {
@@ -387,9 +398,9 @@ abop:	// asymmetric binary
 		regalloc(&n2, nr->type, N);
 		cgen(nr, &n2);
 	} else {
-		regalloc(&n2, nr->type, N);
+		regalloc(&n2, nr->type, res);
 		cgen(nr, &n2);
-		regalloc(&n1, nl->type, res);
+		regalloc(&n1, nl->type, N);
 		cgen(nl, &n1);
 	}
 	gins(a, &n2, &n1);

@@ -38,20 +38,38 @@ const (
 
 const (
 	// More invented values for signals
-	SIGHUP  = 0x1
-	SIGINT  = 0x2
-	SIGQUIT = 0x3
-	SIGILL  = 0x4
-	SIGTRAP = 0x5
-	SIGABRT = 0x6
-	SIGBUS  = 0x7
-	SIGFPE  = 0x8
-	SIGKILL = 0x9
-	SIGSEGV = 0xb
-	SIGPIPE = 0xd
-	SIGALRM = 0xe
-	SIGTERM = 0xf
+	SIGHUP  = Signal(0x1)
+	SIGINT  = Signal(0x2)
+	SIGQUIT = Signal(0x3)
+	SIGILL  = Signal(0x4)
+	SIGTRAP = Signal(0x5)
+	SIGABRT = Signal(0x6)
+	SIGBUS  = Signal(0x7)
+	SIGFPE  = Signal(0x8)
+	SIGKILL = Signal(0x9)
+	SIGSEGV = Signal(0xb)
+	SIGPIPE = Signal(0xd)
+	SIGALRM = Signal(0xe)
+	SIGTERM = Signal(0xf)
 )
+
+var signals = [...]string{
+	1:  "hangup",
+	2:  "interrupt",
+	3:  "quit",
+	4:  "illegal instruction",
+	5:  "trace/breakpoint trap",
+	6:  "aborted",
+	7:  "bus error",
+	8:  "floating point exception",
+	9:  "killed",
+	10: "user defined signal 1",
+	11: "segmentation fault",
+	12: "user defined signal 2",
+	13: "broken pipe",
+	14: "alarm clock",
+	15: "terminated",
+}
 
 const (
 	GENERIC_READ    = 0x80000000
@@ -98,6 +116,9 @@ const (
 	FILE_CURRENT = 1
 	FILE_END     = 2
 
+	LANG_ENGLISH       = 0x09
+	SUBLANG_ENGLISH_US = 0x01
+
 	FORMAT_MESSAGE_ALLOCATE_BUFFER = 256
 	FORMAT_MESSAGE_IGNORE_INSERTS  = 512
 	FORMAT_MESSAGE_FROM_STRING     = 1024
@@ -125,7 +146,6 @@ const (
 
 	CREATE_UNICODE_ENVIRONMENT = 0x00000400
 
-	STANDARD_RIGHTS_READ      = 0x00020000
 	PROCESS_QUERY_INFORMATION = 0x00000400
 	SYNCHRONIZE               = 0x00100000
 
@@ -143,6 +163,7 @@ const (
 )
 
 const (
+	// do not reorder
 	FILE_NOTIFY_CHANGE_FILE_NAME = 1 << iota
 	FILE_NOTIFY_CHANGE_DIR_NAME
 	FILE_NOTIFY_CHANGE_ATTRIBUTES
@@ -153,6 +174,7 @@ const (
 )
 
 const (
+	// do not reorder
 	FILE_ACTION_ADDED = iota + 1
 	FILE_ACTION_REMOVED
 	FILE_ACTION_MODIFIED
@@ -388,8 +410,13 @@ const (
 	SO_SNDBUF                = 0x1001
 	SO_UPDATE_ACCEPT_CONTEXT = 0x700b
 
+	// cf. http://support.microsoft.com/default.aspx?scid=kb;en-us;257460
+
 	IP_TOS             = 0x3
 	IP_TTL             = 0x4
+	IP_MULTICAST_IF    = 0x9
+	IP_MULTICAST_TTL   = 0xa
+	IP_MULTICAST_LOOP  = 0xb
 	IP_ADD_MEMBERSHIP  = 0xc
 	IP_DROP_MEMBERSHIP = 0xd
 
@@ -674,6 +701,7 @@ type CertContext struct {
 }
 
 const (
+	// do not reorder
 	HKEY_CLASSES_ROOT = 0x80000000 + iota
 	HKEY_CURRENT_USER
 	HKEY_LOCAL_MACHINE
@@ -697,6 +725,7 @@ const (
 )
 
 const (
+	// do not reorder
 	REG_NONE = iota
 	REG_SZ
 	REG_EXPAND_SZ

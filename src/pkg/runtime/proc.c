@@ -164,6 +164,9 @@ setmcpumax(uint32 n)
 	}
 }
 
+// Keep trace of scavenger's goroutine for deadlock detection.
+static G *scvg;
+
 // The bootstrap sequence is:
 //
 //	call osinit
@@ -206,6 +209,8 @@ runtime·schedinit(void)
 
 	mstats.enablegc = 1;
 	m->nomemprof--;
+
+	scvg = runtime·newproc1((byte*)runtime·MHeap_Scavenger, nil, 0, 0, runtime·schedinit);
 }
 
 extern void main·init(void);
@@ -324,20 +329,22 @@ runtime·idlegoroutine(void)
 static void
 mcommoninit(M *m)
 {
-	// Add to runtime·allm so garbage collector doesn't free m
-	// when it is just in a register or thread-local storage.
-	m->alllink = runtime·allm;
-	// runtime·Cgocalls() iterates over allm w/o schedlock,
-	// so we need to publish it safely.
-	runtime·atomicstorep(&runtime·allm, m);
-
 	m->id = runtime·sched.mcount++;
-	m->fastrand = 0x49f6428aUL + m->id;
+	m->fastrand = 0x49f6428aUL + m->id + runtime·cputicks();
 	m->stackalloc = runtime·malloc(sizeof(*m->stackalloc));
 	runtime·FixAlloc_Init(m->stackalloc, FixedStack, runtime·SysAlloc, nil, nil);
 
 	if(m->mcache == nil)
 		m->mcache = runtime·allocmcache();
+
+	runtime·callers(1, m->createstack, nelem(m->createstack));
+	
+	// Add to runtime·allm so garbage collector doesn't free m
+	// when it is just in a register or thread-local storage.
+	m->alllink = runtime·allm;
+	// runtime·NumCgoCall() iterates over allm w/o schedlock,
+	// so we need to publish it safely.
+	runtime·atomicstorep(&runtime·allm, m);
 }
 
 // Try to increment mcpu.  Report whether succeeded.
@@ -580,9 +587,12 @@ top:
 		mput(m);
 	}
 
-	v = runtime·atomicload(&runtime·sched.atomic);
-	if(runtime·sched.grunning == 0)
-		runtime·throw("all goroutines are asleep - deadlock!");
+	// Look for deadlock situation: one single active g which happens to be scvg.
+	if(runtime·sched.grunning == 1 && runtime·sched.gwait == 0) {
+		if(scvg->status == Grunning || scvg->status == Gsyscall)
+			runtime·throw("all goroutines are asleep - deadlock!");
+	}
+
 	m->nextg = nil;
 	m->waitnextg = 1;
 	runtime·noteclear(&m->havenextg);
@@ -591,6 +601,7 @@ top:
 	// Entersyscall might have decremented mcpu too, but if so
 	// it will see the waitstop and take the slow path.
 	// Exitsyscall never increments mcpu beyond mcpumax.
+	v = runtime·atomicload(&runtime·sched.atomic);
 	if(atomic_waitstop(v) && atomic_mcpu(v) <= atomic_mcpumax(v)) {
 		// set waitstop = 0 (known to be 1)
 		runtime·xadd(&runtime·sched.atomic, -1<<waitstopShift);
@@ -718,6 +729,7 @@ runtime·mstart(void)
 	runtime·gosave(&m->g0->sched);
 	m->g0->sched.pc = (void*)-1;  // make sure it is never used
 
+	runtime·asminit();
 	runtime·minit();
 	schedule(nil);
 }
@@ -999,6 +1011,7 @@ runtime·oldstack(void)
 {
 	Stktop *top, old;
 	uint32 argsize;
+	uintptr cret;
 	byte *sp;
 	G *g1;
 	int32 goid;
@@ -1022,7 +1035,9 @@ runtime·oldstack(void)
 	g1->stackbase = old.stackbase;
 	g1->stackguard = old.stackguard;
 
-	runtime·gogo(&old.gobuf, m->cret);
+	cret = m->cret;
+	m->cret = 0;  // drop reference
+	runtime·gogo(&old.gobuf, cret);
 }
 
 // Called from reflect·call or from runtime·morestack when a new
@@ -1088,6 +1103,9 @@ runtime·newstack(void)
 	top->argp = m->moreargp;
 	top->argsize = argsize;
 	top->free = free;
+	m->moreargp = nil;
+	m->morebuf.pc = nil;
+	m->morebuf.sp = nil;
 
 	// copy flag from panic
 	top->panic = g1->ispanic;
@@ -1099,7 +1117,7 @@ runtime·newstack(void)
 	sp = (byte*)top;
 	if(argsize > 0) {
 		sp -= argsize;
-		runtime·memmove(sp, m->moreargp, argsize);
+		runtime·memmove(sp, top->argp, argsize);
 	}
 	if(thechar == '5') {
 		// caller would have saved its LR below args.
@@ -1640,10 +1658,16 @@ runtime·mid(uint32 ret)
 }
 
 void
-runtime·Goroutines(int32 ret)
+runtime·NumGoroutine(int32 ret)
 {
 	ret = runtime·sched.gcount;
 	FLUSH(&ret);
+}
+
+int32
+runtime·gcount(void)
+{
+	return runtime·sched.gcount;
 }
 
 int32

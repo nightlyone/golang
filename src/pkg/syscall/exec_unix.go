@@ -101,9 +101,9 @@ type Credential struct {
 // ProcAttr holds attributes that will be applied to a new process started
 // by StartProcess.
 type ProcAttr struct {
-	Dir   string   // Current working directory.
-	Env   []string // Environment.
-	Files []int    // File descriptors.
+	Dir   string    // Current working directory.
+	Env   []string  // Environment.
+	Files []uintptr // File descriptors.
 	Sys   *SysProcAttr
 }
 
@@ -208,7 +208,7 @@ func ForkExec(argv0 string, argv []string, attr *ProcAttr) (pid int, err error) 
 }
 
 // StartProcess wraps ForkExec for package os.
-func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid, handle int, err error) {
+func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle uintptr, err error) {
 	pid, err = forkExec(argv0, argv, attr)
 	return pid, 0, err
 }

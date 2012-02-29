@@ -895,7 +895,7 @@ def CheckFormat(ui, repo, files, just_warn=False):
 
 # Check that gofmt run on the list of files does not change them
 def CheckGofmt(ui, repo, files, just_warn):
-	files = [f for f in files if (not f.startswith('test/') or f.startswith('test/bench/')) and f.endswith('.go')]
+	files = gofmt_required(files)
 	if not files:
 		return
 	cwd = os.getcwd()
@@ -925,7 +925,7 @@ def CheckGofmt(ui, repo, files, just_warn):
 
 # Check that *.[chys] files indent using tabs.
 def CheckTabfmt(ui, repo, files, just_warn):
-	files = [f for f in files if f.startswith('src/') and re.search(r"\.[chys]$", f)]
+	files = [f for f in files if f.startswith('src/') and re.search(r"\.[chys]$", f) and not re.search(r"\.tab\.[ch]$", f)]
 	if not files:
 		return
 	cwd = os.getcwd()
@@ -1572,7 +1572,7 @@ def clpatch_or_undo(ui, repo, clname, opts, mode):
 	try:
 		cmd = subprocess.Popen(argv, shell=False, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, close_fds=sys.platform != "win32")
 	except:
-		return "hgpatch: " + ExceptionDetail()
+		return "hgpatch: " + ExceptionDetail() + "\nInstall hgpatch with:\n$ go get code.google.com/p/go.codereview/cmd/hgpatch\n"
 
 	out, err = cmd.communicate(patch)
 	if cmd.returncode != 0 and not opts["ignore_hgpatch_failure"]:
@@ -1749,7 +1749,7 @@ def gofmt(ui, repo, *pats, **opts):
 		return codereview_disabled
 
 	files = ChangedExistingFiles(ui, repo, pats, opts)
-	files = [f for f in files if f.endswith(".go")]
+	files = gofmt_required(files)
 	if not files:
 		return "no modified go files"
 	cwd = os.getcwd()
@@ -1765,6 +1765,9 @@ def gofmt(ui, repo, *pats, **opts):
 	except:
 		raise hg_util.Abort("gofmt: " + ExceptionDetail())
 	return
+
+def gofmt_required(files):
+	return [f for f in files if (not f.startswith('test/') or f.startswith('test/bench/')) and f.endswith('.go')]
 
 #######################################################################
 # hg mail
@@ -1946,9 +1949,17 @@ def submit(ui, repo, *pats, **opts):
 	# We're committed. Upload final patch, close review, add commit message.
 	changeURL = hg_node.short(node)
 	url = ui.expandpath("default")
-	m = re.match("^https?://([^@/]+@)?([^.]+)\.googlecode\.com/hg/?", url)
+	m = re.match("(^https?://([^@/]+@)?([^.]+)\.googlecode\.com/hg/?)" + "|" +
+		"(^https?://([^@/]+@)?code\.google\.com/p/([^/.]+)(\.[^./]+)?/?)", url)
 	if m:
-		changeURL = "http://code.google.com/p/%s/source/detail?r=%s" % (m.group(2), changeURL)
+		if m.group(1): # prj.googlecode.com/hg/ case
+			changeURL = "http://code.google.com/p/%s/source/detail?r=%s" % (m.group(3), changeURL)
+		elif m.group(4) and m.group(7): # code.google.com/p/prj.subrepo/ case
+			changeURL = "http://code.google.com/p/%s/source/detail?r=%s&repo=%s" % (m.group(6), changeURL, m.group(7)[1:])
+		elif m.group(4): # code.google.com/p/prj/ case
+			changeURL = "http://code.google.com/p/%s/source/detail?r=%s" % (m.group(6), changeURL)
+		else:
+			print >>sys.stderr, "URL: ", url
 	else:
 		print >>sys.stderr, "URL: ", url
 	pmsg = "*** Submitted as " + changeURL + " ***\n\n" + message
@@ -2171,10 +2182,20 @@ def norollback(*pats, **opts):
 	"""(disabled when using this extension)"""
 	raise hg_util.Abort("codereview extension enabled; use undo instead of rollback")
 
+codereview_init = False
+
 def reposetup(ui, repo):
 	global codereview_disabled
 	global defaultcc
 	
+	# reposetup gets called both for the local repository
+	# and also for any repository we are pulling or pushing to.
+	# Only initialize the first time.
+	global codereview_init
+	if codereview_init:
+		return
+	codereview_init = True
+
 	# Read repository-specific options from lib/codereview/codereview.cfg or codereview.cfg.
 	root = ''
 	try:
@@ -2183,7 +2204,7 @@ def reposetup(ui, repo):
 		# Yes, repo might not have root; see issue 959.
 		codereview_disabled = 'codereview disabled: repository has no root'
 		return
-
+	
 	repo_config_path = ''
 	p1 = root + '/lib/codereview/codereview.cfg'
 	p2 = root + '/codereview.cfg'
@@ -2202,6 +2223,10 @@ def reposetup(ui, repo):
 	except:
 		codereview_disabled = 'codereview disabled: cannot open ' + repo_config_path
 		return
+
+	remote = ui.config("paths", "default", "")
+	if remote.find("://") < 0:
+		raise hg_util.Abort("codereview: default path '%s' is not a URL" % (remote,))
 
 	InstallMatch(ui, repo)
 	RietveldSetup(ui, repo)
