@@ -134,7 +134,7 @@ get-orig-source:
 	VERSION=$$(hg identify -t -r"weekly" | perl -e '<> =~ /weekly\.(\d+)-(\d+)-(\d+)([\.\d]*)/; print "$$1.$$2.$$3$$4"'); \
 	rm -rf "$(CURDIR)/../$(PACKAGE)-$$VERSION/"; \
 	hg archive -tfiles -r"weekly" -X'.hg*' -X'doc/talks/go_talk-20091030.pdf' "$(CURDIR)/../$(PACKAGE)-$$VERSION/"; \
-	src/version.bash -save; \
+	$(CURDIR)/debian/version.sh "weekly"; \
 	cp VERSION "$(CURDIR)/../$(PACKAGE)-$$VERSION/"; \
 	cd ..; \
 	tar -czf "$(CURDIR)/../$(PACKAGE)_$$VERSION.orig.tar.gz" "$(PACKAGE)-$$VERSION/"; \
