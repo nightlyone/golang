@@ -1,8 +1,9 @@
 golang-weekly (2012.02.22-2) unstable; urgency=low
 
   * Check for defined(__FreeBSD_kernel__) as well
+  * Add more kFreeBSD patches (Missing symbols SIGFILLSET and AI_MASK)
 
- -- Ondřej Surý <ondrej@debian.org>  Wed, 29 Feb 2012 15:42:39 +0100
+ -- Ondřej Surý <ondrej@debian.org>  Wed, 29 Feb 2012 16:12:23 +0100
 
 golang-weekly (2012.02.22-1) unstable; urgency=low
 
