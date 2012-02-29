@@ -1058,7 +1058,7 @@ exprfmt(Fmt *f, Node *n, int prec)
 	NodeList *l;
 	Type *t;
 
-	while(n && n->implicit)
+	while(n && n->implicit && (n->op == OIND || n->op == OADDR))
 		n = n->left;
 
 	if(n == N)
@@ -1097,6 +1097,16 @@ exprfmt(Fmt *f, Node *n, int prec)
 		return fmtprint(f, "%V", &n->val);
 
 	case ONAME:
+		// Special case: explicit name of func (*T) method(...) is turned into pkg.(*T).method,
+		// but for export, this should be rendered as (*pkg.T).meth.
+		// These nodes have the special property that they are names with a left OTYPE and a right ONAME.
+		if(fmtmode == FExp && n->left && n->left->op == OTYPE && n->right && n->right->op == ONAME) {
+			if(isptr[n->left->type->etype])
+				return fmtprint(f, "(%T).%hhS", n->left->type, n->right->sym);
+			else
+				return fmtprint(f, "%T.%hhS", n->left->type, n->right->sym);
+		}
+		//fallthrough
 	case OPACK:
 	case ONONAME:
 		return fmtprint(f, "%S", n->sym);
@@ -1150,11 +1160,16 @@ exprfmt(Fmt *f, Node *n, int prec)
 		return fmtprint(f, "%N{ %,H }", n->right, n->list);
 
 	case OPTRLIT:
+		if(fmtmode == FExp && n->left->implicit)
+			return fmtprint(f, "%N", n->left);
 		return fmtprint(f, "&%N", n->left);
 
 	case OSTRUCTLIT:
-		if (fmtmode == FExp) {   // requires special handling of field names
-			fmtprint(f, "%T{", n->type);
+		if(fmtmode == FExp) {   // requires special handling of field names
+			if(n->implicit)
+				fmtstrcpy(f, "{");
+			else 
+				fmtprint(f, "%T{", n->type);
 			for(l=n->list; l; l=l->next) {
 				// another special case: if n->left is an embedded field of builtin type,
 				// it needs to be non-qualified.  Can't figure that out in %S, so do it here
@@ -1179,6 +1194,8 @@ exprfmt(Fmt *f, Node *n, int prec)
 	case OMAPLIT:
 		if(fmtmode == FErr)
 			return fmtprint(f, "%T literal", n->type);
+		if(fmtmode == FExp && n->implicit)
+			return fmtprint(f, "{ %,H }", n->list);
 		return fmtprint(f, "%T{ %,H }", n->type, n->list);
 
 	case OKEY:
@@ -1329,15 +1346,11 @@ nodefmt(Fmt *f, Node *n)
 	Type *t;
 
 	t = n->type;
-	if(n->orig == N) {
-		n->orig = n;
-		fatal("node with no orig %N", n);
-	}
 
 	// we almost always want the original, except in export mode for literals
 	// this saves the importer some work, and avoids us having to redo some
 	// special casing for package unsafe
-	if(fmtmode != FExp || n->op != OLITERAL)
+	if((fmtmode != FExp || n->op != OLITERAL) && n->orig != N)
 		n = n->orig;
 
 	if(f->flags&FmtLong && t != T) {
@@ -1411,7 +1424,7 @@ nodedump(Fmt *fp, Node *n)
 		fmtprint(fp, "%O-%O%J", n->op, n->etype, n);
 		break;
 	case OTYPE:
-		fmtprint(fp, "%O %S type=%T", n->op, n->sym, n->type);
+		fmtprint(fp, "%O %S%J type=%T", n->op, n->sym, n, n->type);
 		if(recur && n->type == T && n->ntype) {
 			indent(fp);
 			fmtprint(fp, "%O-ntype%N", n->op, n->ntype);

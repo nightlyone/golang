@@ -7,14 +7,14 @@ package main
 var cmdFix = &Command{
 	Run:       runFix,
 	UsageLine: "fix [importpath...]",
-	Short:     "run gofix on packages",
+	Short:     "run go tool fix on packages",
 	Long: `
-Fix runs the gofix command on the packages named by the import paths.
+Fix runs the Go fix command on the packages named by the import paths.
 
-For more about gofix, see 'godoc gofix'.
+For more about fix, see 'godoc fix'.
 For more about import paths, see 'go help importpath'.
 
-To run gofix with specific options, run gofix itself.
+To run fix with specific options, run 'go tool fix'.
 
 See also: go fmt, go vet.
 	`,
@@ -25,6 +25,6 @@ func runFix(cmd *Command, args []string) {
 		// Use pkg.gofiles instead of pkg.Dir so that
 		// the command only applies to this package,
 		// not to packages in subdirectories.
-		run(stringList("gofix", relPaths(pkg.gofiles)))
+		run(stringList(tool("fix"), relPaths(pkg.gofiles)))
 	}
 }

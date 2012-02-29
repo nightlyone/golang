@@ -1,4 +1,4 @@
-// errchk $G -e $D/$F.go
+// errorcheck
 
 // Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
@@ -23,10 +23,10 @@ func whatis(x interface{}) string {
 		w()
 	}:
 		return "rw"
-	case interface {
+	case interface {	// GCCGO_ERROR "duplicate"
 		w()
 		r()
-	}: // ERROR "duplicate"
+	}: // GC_ERROR "duplicate"
 		return "wr"
 
 	}

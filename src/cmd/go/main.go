@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"text/template"
 	"unicode"
 	"unicode/utf8"
@@ -63,10 +64,17 @@ func (c *Command) Usage() {
 	os.Exit(2)
 }
 
+// Runnable reports whether the command can be run; otherwise
+// it is a documentation pseudo-command such as importpath.
+func (c *Command) Runnable() bool {
+	return c.Run != nil
+}
+
 // Commands lists the available commands and help topics.
 // The order here is the order in which they are printed by 'go help'.
 var commands = []*Command{
 	cmdBuild,
+	cmdClean,
 	cmdDoc,
 	cmdFix,
 	cmdFmt,
@@ -75,6 +83,7 @@ var commands = []*Command{
 	cmdList,
 	cmdRun,
 	cmdTest,
+	cmdTool,
 	cmdVersion,
 	cmdVet,
 
@@ -86,6 +95,15 @@ var commands = []*Command{
 }
 
 var exitStatus = 0
+var exitMu sync.Mutex
+
+func setExitStatus(n int) {
+	exitMu.Lock()
+	if exitStatus < n {
+		exitStatus = n
+	}
+	exitMu.Unlock()
+}
 
 func main() {
 	flag.Usage = usage
@@ -126,20 +144,20 @@ var usageTemplate = `Go is a tool for managing Go source code.
 Usage: go command [arguments]
 
 The commands are:
-{{range .}}{{if .Run}}
+{{range .}}{{if .Runnable}}
     {{.Name | printf "%-11s"}} {{.Short}}{{end}}{{end}}
 
 Use "go help [command]" for more information about a command.
 
 Additional help topics:
-{{range .}}{{if not .Run}}
+{{range .}}{{if not .Runnable}}
     {{.Name | printf "%-11s"}} {{.Short}}{{end}}{{end}}
 
 Use "go help [topic]" for more information about that topic.
 
 `
 
-var helpTemplate = `{{if .Run}}usage: go {{.UsageLine}}
+var helpTemplate = `{{if .Runnable}}usage: go {{.UsageLine}}
 
 {{end}}{{.Long | trim}}
 `
@@ -151,7 +169,7 @@ var documentationTemplate = `// Copyright 2011 The Go Authors.  All rights reser
 /*
 {{range .}}{{if .Short}}{{.Short | capitalize}}
 
-{{end}}{{if .Run}}Usage:
+{{end}}{{if .Runnable}}Usage:
 
 	go {{.UsageLine}}
 
@@ -266,7 +284,7 @@ func fatalf(format string, args ...interface{}) {
 
 func errorf(format string, args ...interface{}) {
 	log.Printf(format, args...)
-	exitStatus = 1
+	setExitStatus(1)
 }
 
 var logf = log.Printf
@@ -335,7 +353,7 @@ func allPackages(pattern string) []string {
 	goroot := build.Path[0].Path
 	cmd := filepath.Join(goroot, "src/cmd") + string(filepath.Separator)
 	filepath.Walk(cmd, func(path string, fi os.FileInfo, err error) error {
-		if err != nil || !fi.IsDir() {
+		if err != nil || !fi.IsDir() || path == cmd {
 			return nil
 		}
 		name := path[len(cmd):]
@@ -366,7 +384,7 @@ func allPackages(pattern string) []string {
 		}
 		src := t.SrcDir() + string(filepath.Separator)
 		filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
-			if err != nil || !fi.IsDir() {
+			if err != nil || !fi.IsDir() || path == src {
 				return nil
 			}
 
@@ -386,7 +404,7 @@ func allPackages(pattern string) []string {
 			have[name] = true
 
 			_, err = build.ScanDir(path)
-			if err != nil {
+			if err != nil && strings.Contains(err.Error(), "no Go source files") {
 				return nil
 			}
 
@@ -433,7 +451,7 @@ func allPackagesInFS(pattern string) []string {
 
 	var pkgs []string
 	filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
-		if err != nil || !fi.IsDir() {
+		if err != nil || !fi.IsDir() || path == dir {
 			return nil
 		}
 

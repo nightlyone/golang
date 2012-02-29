@@ -1,6 +1,6 @@
 <!--{
 	"Title": "The Go Programming Language Specification",
-	"Subtitle": "Version of January 21, 2012"
+	"Subtitle": "Version of February 22, 2012"
 }-->
 
 <!--
@@ -74,8 +74,8 @@ double quotes <code>""</code> or back quotes <code>``</code>.
 <p>
 The form <code>a … b</code> represents the set of characters from
 <code>a</code> through <code>b</code> as alternatives. The horizontal
-ellipis … is also used elsewhere in the spec to informally denote various
-enumerations or code snippets that are not further specified. The character …
+ellipis <code>…</code> is also used elsewhere in the spec to informally denote various
+enumerations or code snippets that are not further specified. The character <code>…</code>
 (as opposed to the three characters <code>...</code>) is not a token of the Go
 language.
 </p>
@@ -589,11 +589,33 @@ functions return and test for those values at run time.
 </p>
 
 <p>
-Implementation restriction: A compiler may implement numeric constants by choosing
-an internal representation with at least twice as many bits as any machine type;
-for floating-point values, both the mantissa and exponent must be twice as large.
+Implementation restriction: Although numeric constants have arbitrary
+precision in the language, a compiler may implement them using an
+internal representation with limited precision.  That said, every
+implementation must:
 </p>
+<ul>
+	<li>Represent integer constants with at least 256 bits.</li>
 
+	<li>Represent floating-point constants, including the parts of
+	    a complex constant, with a mantissa of at least 256 bits
+	    and a signed exponent of at least 32 bits.</li>
+
+	<li>Give an error if unable to represent an integer constant
+	    precisely.</li>
+
+	<li>Give an error if unable to represent a floating-point or
+	    complex constant due to overflow.</li>
+
+	<li>Round to the nearest representable constant if unable to
+	    represent a floating-point or complex constant due to limits
+	    on precision.</li>
+</ul>
+<p>
+These requirements apply both to literal constants and to the result
+of evaluating <a href="#Constant_expressions">constant
+expressions</a>.
+</p>
 
 <h2 id="Types">Types</h2>
 
@@ -662,9 +684,15 @@ The method set of the corresponding pointer type <code>*T</code>
 is the set of all methods with receiver <code>*T</code> or <code>T</code>
 (that is, it also contains the method set of <code>T</code>).
 Any other type has an empty method set.
-In a method set, each method must have a unique name.
+In a method set, each method must have a unique <a href="#MethodName">method name</a>.
 </p>
 
+<p>
+The method set of a type determines the interfaces that the
+type <a href="#Interface_types">implements</a>
+and the methods that can be <a href="#Calls">called</a>
+using a receiver of that type.
+</p>
 
 <h3 id="Boolean_types">Boolean types</h3>
 
@@ -731,7 +759,7 @@ particular architecture.
 
 <p>
 A <i>string type</i> represents the set of string values.
-Strings behave like arrays of bytes but are immutable: once created,
+Strings behave like slices of bytes but are immutable: once created,
 it is impossible to change the contents of a string.
 The predeclared string type is <code>string</code>.
 
@@ -891,9 +919,9 @@ struct {
 </pre>
 
 <p>
-A field declared with a type but no explicit field name is an <i>anonymous field</i>
-(colloquially called an embedded field).
-Such a field type must be specified as
+A field declared with a type but no explicit field name is an <i>anonymous field</i>,
+also called an <i>embedded</i> field or an embedding of the type in the struct.
+An embedded type must be specified as
 a type name <code>T</code> or as a pointer to a non-interface type name <code>*T</code>,
 and <code>T</code> itself may not be
 a pointer type. The unqualified type name acts as the field name.
@@ -1114,9 +1142,10 @@ they implement the <code>Lock</code> interface as well
 as the <code>File</code> interface.
 </p>
 <p>
-An interface may contain an interface type name <code>T</code>
+An interface may use an interface type name <code>T</code>
 in place of a method specification.
-The effect is equivalent to enumerating the methods of <code>T</code> explicitly
+The effect, called embedding an interface,
+is equivalent to enumerating the methods of <code>T</code> explicitly
 in the interface.
 </p>
 
@@ -1130,6 +1159,26 @@ type File interface {
 	ReadWrite  // same as enumerating the methods in ReadWrite
 	Lock       // same as enumerating the methods in Lock
 	Close()
+}
+</pre>
+
+<p>
+An interface type <code>T</code> may not embed itself
+or any interface type that embeds <code>T</code>, recursively.
+</p>
+
+<pre>
+// illegal: Bad cannot embed itself
+type Bad interface {
+	Bad
+}
+
+// illegal: Bad1 cannot embed itself using Bad2
+type Bad1 interface {
+	Bad2
+}
+type Bad2 interface {
+	Bad1
 }
 </pre>
 
@@ -1150,7 +1199,8 @@ KeyType     = Type .
 <p>
 The comparison operators <code>==</code> and <code>!=</code>
 (§<a href="#Comparison_operators">Comparison operators</a>) must be fully defined
-for operands of the key type; thus the key type must not be a struct, array or slice.
+for operands of the key type; thus the key type must not be a function, map, or
+slice.
 If the key type is an interface type, these
 comparison operators must be defined for the dynamic key values;
 failure will cause a <a href="#Run_time_panics">run-time panic</a>.
@@ -1834,11 +1884,13 @@ they can be used to declare local temporary variables (§<a href="#Statements">S
 <h3 id="Function_declarations">Function declarations</h3>
 
 <p>
-A function declaration binds an identifier to a function (§<a href="#Function_types">Function types</a>).
+A function declaration binds an identifier, the <i>function name</i>,
+to a function.
 </p>
 
 <pre class="ebnf">
-FunctionDecl = "func" identifier Signature [ Body ] .
+FunctionDecl = "func" FunctionName Signature [ Body ] .
+FunctionName = identifier .
 Body         = Block .
 </pre>
 
@@ -1862,8 +1914,10 @@ func flushICache(begin, end uintptr)  // implemented externally
 
 <p>
 A method is a function with a <i>receiver</i>.
-A method declaration binds an identifier to a method.
+A method declaration binds an identifier, the <i>method name</i>, to a method.
+It also associates the method with the receiver's <i>base type</i>.
 </p>
+
 <pre class="ebnf">
 MethodDecl   = "func" Receiver MethodName Signature [ Body ] .
 Receiver     = "(" [ identifier ] [ "*" ] BaseTypeName ")" .
@@ -1872,13 +1926,18 @@ BaseTypeName = identifier .
 
 <p>
 The receiver type must be of the form <code>T</code> or <code>*T</code> where
-<code>T</code> is a type name. <code>T</code> is called the
-<i>receiver base type</i> or just <i>base type</i>.
-The base type must not be a pointer or interface type and must be
-declared in the same package as the method.
-The method is said to be <i>bound</i> to the base type
-and is visible only within selectors for that type
-(§<a href="#Type_declarations">Type declarations</a>, §<a href="#Selectors">Selectors</a>).
+<code>T</code> is a type name. The type denoted by <code>T</code> is called
+the receiver <i>base type</i>; it must not be a pointer or interface type and
+it must be declared in the same package as the method.
+The method is said to be <i>bound</i> to the base type and the method name
+is visible only within selectors for that type.
+</p>
+
+<p>
+For a base type, the non-<a href="#Blank_identifier">blank</a> names of
+methods bound to it must be unique.
+If the base type is a <a href="#Struct_types">struct type</a>,
+the non-blank method and field names must be distinct.
 </p>
 
 <p>
@@ -2142,7 +2201,7 @@ Examples of valid array, slice, and map literals:
 
 <pre>
 // list of prime numbers
-primes := []int{2, 3, 5, 7, 9, 11, 13, 17, 19, 991}
+primes := []int{2, 3, 5, 7, 9, 2147483647}
 
 // vowels[ch] is true if ch is a vowel
 vowels := [128]bool{'a': true, 'e': true, 'i': true, 'o': true, 'u': true, 'y': true}
@@ -2179,7 +2238,7 @@ A function literal can be assigned to a variable or invoked directly.
 
 <pre>
 f := func(x, y int) int { return x + y }
-func(ch chan int) { ch &lt;- ACK } (reply_chan)
+func(ch chan int) { ch &lt;- ACK }(replyChan)
 </pre>
 
 <p>
@@ -2768,7 +2827,7 @@ For instance, <code>x / y * z</code> is the same as <code>(x / y) * z</code>.
 x &lt;= f()
 ^a &gt;&gt; b
 f() || g()
-x == y+1 &amp;&amp; &lt;-chan_ptr &gt; 0
+x == y+1 &amp;&amp; &lt;-chanPtr &gt; 0
 </pre>
 
 
@@ -2918,7 +2977,7 @@ not occur. For instance, it may not assume that <code>x &lt; x + 1</code> is alw
 <h3 id="Comparison_operators">Comparison operators</h3>
 
 <p>
-Comparison operators compare two operands and yield a value of type <code>bool</code>.
+Comparison operators compare two operands and yield a boolean value.
 </p>
 
 <pre class="grammar">
@@ -2999,8 +3058,9 @@ These terms and the result of the comparisons are defined as follows:
 	</li>
 
 	<li>
-	Struct values are comparable if all the fields are comparable.
-	Two struct values are equal if their corresponding fields are equal.
+	Struct values are comparable if all their fields are comparable.
+	Two struct values are equal if their corresponding
+	non-<a href="#Blank_identifier">blank</a> fields are equal.
 	</li>
 	
 	<li>
@@ -3024,6 +3084,23 @@ be compared to the predeclared identifier <code>nil</code>.
 Comparison of pointer, channel, and interface values to <code>nil</code>
 is also allowed and follows from the general rules above.
 </p>
+
+<p>
+The result of a comparison can be assigned to any boolean type.
+If the context does not demand a specific boolean type,
+the result has type <code>bool</code>.
+</p>
+
+<pre>
+type MyBool bool
+
+var x, y int
+var (
+	b1 MyBool = x == y // result of comparison has type MyBool
+	b2 bool   = x == y // result of comparison has type bool
+	b3        = x == y // result of comparison has type bool
+)
+</pre>
 
 <h3 id="Logical_operators">Logical operators</h3>
 
@@ -3451,7 +3528,7 @@ Untyped boolean, numeric, and string constants may be used as operands
 wherever it is legal to use an operand of boolean, numeric, or string type,
 respectively.
 Except for shift operations, if the operands of a binary operation are
-different kinds of untyped constants, the operation and result use
+different kinds of untyped constants, the operation and, for non-boolean operations, the result use
 the kind that appears later in this list: integer, character, floating-point, complex.
 For example, an untyped integer constant divided by an
 untyped complex constant yields an untyped complex constant.
@@ -3459,7 +3536,7 @@ untyped complex constant yields an untyped complex constant.
 
 <p>
 A constant <a href="#Comparison_operators">comparison</a> always yields
-an untyped boolean constant. If the left operand of a constant
+an untyped boolean constant.  If the left operand of a constant
 <a href="#Operators">shift expression</a> is an untyped constant, the
 result is an integer constant; otherwise it is a constant of the same
 type as the left operand, which must be of integer type
@@ -3536,6 +3613,16 @@ uint8(^1)  // error, same as uint8(-2), out of range
 int8(^1)   // same as int8(-2)
 ^int8(1)   // same as -1 ^ int8(1) = -2
 </pre>
+
+<p>
+Implementation restriction: A compiler may use rounding while
+computing untyped floating-point or complex constant expressions; see
+the implementation restriction in the section
+on <a href="#Constants">constants</a>.  This rounding may cause a
+floating-point constant expression to be invalid in an integer
+context, even if it would be integral when calculated using infinite
+precision.
+</p>
 
 <!--
 <p>
@@ -3659,10 +3746,10 @@ Channel  = Expression .
 
 <p>
 Both the channel and the value expression are evaluated before communication
-begins. Communication blocks until the send can proceed, at which point the
-value is transmitted on the channel.
+begins. Communication blocks until the send can proceed.
 A send on an unbuffered channel can proceed if a receiver is ready.
 A send on a buffered channel can proceed if there is room in the buffer.
+A send on a closed channel proceeds by causing a <a href="#Run_time_panics">run-time panic</a>.
 A send on a <code>nil</code> channel blocks forever.
 </p>
 
@@ -3796,8 +3883,8 @@ operand to which it is assigned. If an untyped <a href="#Constants">constant</a>
 is assigned to a variable of interface type, the constant is <a href="#Conversions">converted</a>
 to type <code>bool</code>, <code>rune</code>, <code>int</code>, <code>float64</code>,
 <code>complex128</code> or <code>string</code>
-respectively, depending on whether the value is a boolean,
-character, integer, floating-point, complex, or string constant.
+respectively, depending on whether the value is a
+boolean, character, integer, floating-point, complex, or string constant.
 </p>
 
 
@@ -3936,7 +4023,8 @@ TypeList        = Type { "," Type } .
 <p>
 The TypeSwitchGuard may include a
 <a href="#Short_variable_declarations">short variable declaration</a>.
-When that form is used, the variable is declared in each clause.
+When that form is used, the variable is declared at the beginning of
+the <a href="#Blocks">implicit block</a> in each clause.
 In clauses with a case listing exactly one type, the variable
 has that type; otherwise, the variable has the type of the expression
 in the TypeSwitchGuard.
@@ -3979,16 +4067,16 @@ could be rewritten:
 v := x  // x is evaluated exactly once
 if v == nil {
 	printString("x is nil")
-} else if i, is_int := v.(int); is_int {
+} else if i, isInt := v.(int); isInt {
 	printInt(i)  // i is an int
-} else if i, is_float64 := v.(float64); is_float64 {
+} else if i, isFloat64 := v.(float64); isFloat64 {
 	printFloat64(i)  // i is a float64
-} else if i, is_func := v.(func(int) float64); is_func {
+} else if i, isFunc := v.(func(int) float64); isFunc {
 	printFunction(i)  // i is a function
 } else {
-	i1, is_bool := v.(bool)
-	i2, is_string := v.(string)
-	if is_bool || is_string {
+	i1, isBool := v.(bool)
+	i2, isString := v.(string)
+	if isBool || isString {
 		i := v
 		printString("type is bool or string")  // i is an interface{}
 	} else {
@@ -4318,7 +4406,7 @@ In a function without a result type, a "return" statement must not
 specify any result values.
 </p>
 <pre>
-func no_result() {
+func noResult() {
 	return
 }
 </pre>
@@ -4334,11 +4422,11 @@ type:
 		and <a href="#Assignability">assignable</a>
 		to the corresponding element of the function's result type.
 <pre>
-func simple_f() int {
+func simpleF() int {
 	return 2
 }
 
-func complex_f1() (re float64, im float64) {
+func complexF1() (re float64, im float64) {
 	return -7.0, -4.0
 }
 </pre>
@@ -4350,8 +4438,8 @@ func complex_f1() (re float64, im float64) {
 		"return" statement listing these variables, at which point the
 		rules of the previous case apply.
 <pre>
-func complex_f2() (re float64, im float64) {
-	return complex_f1()
+func complexF2() (re float64, im float64) {
+	return complexF1()
 }
 </pre>
 	</li>
@@ -4361,7 +4449,7 @@ func complex_f2() (re float64, im float64) {
 		and the function may assign values to them as necessary.
 		The "return" statement returns the values of these variables.
 <pre>
-func complex_f3() (re float64, im float64) {
+func complexF3() (re float64, im float64) {
 	re = 7.0
 	im = 4.0
 	return

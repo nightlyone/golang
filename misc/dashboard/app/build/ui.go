@@ -9,14 +9,13 @@ package build
 
 import (
 	"bytes"
-	"exp/template/html"
-	"http"
-	"os"
+	"errors"
+	"html/template"
+	"net/http"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"template"
 
 	"appengine"
 	"appengine/datastore"
@@ -25,7 +24,6 @@ import (
 
 func init() {
 	http.HandleFunc("/", uiHandler)
-	html.Escape(uiTemplate)
 }
 
 // uiHandler draws the build status page.
@@ -53,12 +51,16 @@ func uiHandler(w http.ResponseWriter, r *http.Request) {
 		logErr(w, r, err)
 		return
 	}
-	builders := commitBuilders(commits)
+	builders := commitBuilders(commits, "")
 
-	tipState, err := TagState(c, "tip")
-	if err != nil {
-		logErr(w, r, err)
-		return
+	var tipState *TagState
+	if page == 0 {
+		// only show sub-repo state on first page
+		tipState, err = TagStateByName(c, "tip")
+		if err != nil {
+			logErr(w, r, err)
+			return
+		}
 	}
 
 	p := &Pagination{}
@@ -92,7 +94,7 @@ type Pagination struct {
 
 // goCommits gets a slice of the latest Commits to the Go repository.
 // If page > 0 it paginates by commitsPerPage.
-func goCommits(c appengine.Context, page int) ([]*Commit, os.Error) {
+func goCommits(c appengine.Context, page int) ([]*Commit, error) {
 	q := datastore.NewQuery("Commit").
 		Ancestor((&Package{}).Key(c)).
 		Order("-Time").
@@ -105,10 +107,10 @@ func goCommits(c appengine.Context, page int) ([]*Commit, os.Error) {
 
 // commitBuilders returns the names of the builders that provided
 // Results for the provided commits.
-func commitBuilders(commits []*Commit) []string {
+func commitBuilders(commits []*Commit, goHash string) []string {
 	builders := make(map[string]bool)
 	for _, commit := range commits {
-		for _, r := range commit.Results("") {
+		for _, r := range commit.Results(goHash) {
 			builders[r.Builder] = true
 		}
 	}
@@ -123,52 +125,53 @@ func keys(m map[string]bool) (s []string) {
 	return
 }
 
-// PackageState represents the state of a Package at a tag.
-type PackageState struct {
-	*Package
-	*Commit
-	Results []*Result
-	OK      bool
+// TagState represents the state of all Packages at a Tag.
+type TagState struct {
+	Tag      *Commit
+	Packages []*PackageState
 }
 
-// TagState fetches the results for all non-Go packages at the specified tag.
-func TagState(c appengine.Context, name string) ([]*PackageState, os.Error) {
+// PackageState represents the state of a Package at a Tag.
+type PackageState struct {
+	Package *Package
+	Commit  *Commit
+}
+
+// TagStateByName fetches the results for all Go subrepos at the specified Tag.
+func TagStateByName(c appengine.Context, name string) (*TagState, error) {
 	tag, err := GetTag(c, name)
 	if err != nil {
 		return nil, err
 	}
-	pkgs, err := Packages(c)
+	pkgs, err := Packages(c, "subrepo")
 	if err != nil {
 		return nil, err
 	}
-	var states []*PackageState
+	var st TagState
 	for _, pkg := range pkgs {
-		commit, err := pkg.LastCommit(c)
+		com, err := pkg.LastCommit(c)
 		if err != nil {
-			c.Errorf("no Commit found: %v", pkg)
+			c.Warningf("%v: no Commit found: %v", pkg, err)
 			continue
 		}
-		results := commit.Results(tag.Hash)
-		ok := len(results) > 0
-		for _, r := range results {
-			ok = ok && r.OK
-		}
-		states = append(states, &PackageState{
-			pkg, commit, results, ok,
-		})
+		st.Packages = append(st.Packages, &PackageState{pkg, com})
 	}
-	return states, nil
+	st.Tag, err = tag.Commit(c)
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
 }
 
 type uiTemplateData struct {
 	Commits    []*Commit
 	Builders   []string
-	TipState   []*PackageState
+	TipState   *TagState
 	Pagination *Pagination
 }
 
 var uiTemplate = template.Must(
-	template.New("ui").Funcs(tmplFuncs).ParseFile("build/ui.html"),
+	template.New("ui.html").Funcs(tmplFuncs).ParseFiles("build/ui.html"),
 )
 
 var tmplFuncs = template.FuncMap{
@@ -288,13 +291,13 @@ func shortUser(user string) string {
 var repoRe = regexp.MustCompile(`^code\.google\.com/p/([a-z0-9\-]+)(\.[a-z0-9\-]+)?$`)
 
 // repoURL returns the URL of a change at a Google Code repository or subrepo.
-func repoURL(hash, packagePath string) (string, os.Error) {
+func repoURL(hash, packagePath string) (string, error) {
 	if packagePath == "" {
 		return "https://code.google.com/p/go/source/detail?r=" + hash, nil
 	}
 	m := repoRe.FindStringSubmatch(packagePath)
 	if m == nil {
-		return "", os.NewError("unrecognized package: " + packagePath)
+		return "", errors.New("unrecognized package: " + packagePath)
 	}
 	url := "https://code.google.com/p/" + m[1] + "/source/detail?r=" + hash
 	if len(m) > 2 {

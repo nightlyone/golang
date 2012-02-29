@@ -4,12 +4,22 @@
 # license that can be found in the LICENSE file.
 
 set -e
-if [ ! -f env.bash ]; then
+if [ ! -f run.bash ]; then
 	echo 'make.bash must be run from $GOROOT/src' 1>&2
 	exit 1
 fi
-. ./env.bash
 
+# Test for Windows.
+case "$(uname)" in
+*MINGW* | *WIN32* | *CYGWIN*)
+	echo 'ERROR: Do not use make.bash to build on Windows.'
+	echo 'Use make.bat instead.'
+	echo
+	exit 1
+	;;
+esac
+
+# Test for bad ld.
 if ld --version 2>&1 | grep 'gold.* 2\.20' >/dev/null; then
 	echo 'ERROR: Your system has gold 2.20 installed.'
 	echo 'This version is shipped by Ubuntu even though'
@@ -21,34 +31,9 @@ if ld --version 2>&1 | grep 'gold.* 2\.20' >/dev/null; then
 	exit 1
 fi
 
-# Create target directories
-if [ "$GOBIN" = "$GOROOT/bin" ]; then
-	mkdir -p "$GOROOT/bin"
-fi
-mkdir -p "$GOROOT/pkg"
-
-GOROOT_FINAL=${GOROOT_FINAL:-$GOROOT}
-
-MAKEFLAGS=${MAKEFLAGS:-"-j4"}
-export MAKEFLAGS
-unset CDPATH	# in case user has it set
-
-rm -f "$GOBIN"/quietgcc
-CC=${CC:-gcc}
-export CC
-sed -e "s|@CC@|$CC|" < "$GOROOT"/src/quietgcc.bash > "$GOBIN"/quietgcc
-chmod +x "$GOBIN"/quietgcc
-
-rm -f "$GOBIN"/gomake
-(
-	echo '#!/bin/sh'
-	echo 'export GOROOT=${GOROOT:-'$GOROOT_FINAL'}'
-	echo 'exec '$MAKE' "$@"'
-) >"$GOBIN"/gomake
-chmod +x "$GOBIN"/gomake
-
-# on Fedora 16 the selinux filesystem is mounted at /sys/fs/selinux,
-# so loop through the possible selinux mount points
+# Test for bad SELinux.
+# On Fedora 16 the selinux filesystem is mounted at /sys/fs/selinux,
+# so loop through the possible selinux mount points.
 for se_mount in /selinux /sys/fs/selinux
 do
 	if [ -d $se_mount -a -f $se_mount/booleans/allow_execstack -a -x /usr/sbin/selinuxenabled ] && /usr/sbin/selinuxenabled; then
@@ -68,76 +53,51 @@ do
 	fi
 done
 
-$USE_GO_TOOL ||
-(
-	cd "$GOROOT"/src/pkg;
-	bash deps.bash	# do this here so clean.bash will work in the pkg directory
-) || exit 1
-bash "$GOROOT"/src/clean.bash
+# Finally!  Run the build.
 
-# pkg builds runtime/cgo and the Go programs in cmd.
-for i in lib9 libbio libmach cmd
-do
-	echo; echo; echo %%%% making $i %%%%; echo
-	gomake -C $i install
-done
+echo '# Building C bootstrap tool.'
+echo cmd/dist
+export GOROOT="$(cd .. && pwd)"
+GOROOT_FINAL="${GOROOT_FINAL:-$GOROOT}"
+DEFGOROOT='-DGOROOT_FINAL="'"$GOROOT_FINAL"'"'
+gcc -O2 -Wall -Werror -ggdb -o cmd/dist/dist -Icmd/dist "$DEFGOROOT" cmd/dist/*.c
+eval $(./cmd/dist/dist env -p)
+echo
 
-echo; echo; echo %%%% making runtime generated files %%%%; echo
-
-(
-	cd "$GOROOT"/src/pkg/runtime
-	./autogen.sh
-	gomake install; gomake clean # copy runtime.h to pkg directory
-) || exit 1
-
-if $USE_GO_TOOL; then
-	echo
-	echo '# Building go_bootstrap command from bootstrap script.'
-	if ! ./buildscript/${GOOS}_$GOARCH.sh; then
-		echo '# Bootstrap script failed.'
-		if [ ! -x "$GOBIN/go" ]; then
-			exit 1
-		fi
-		echo '# Regenerating bootstrap script using pre-existing go binary.'
-		./buildscript.sh
-		./buildscript/${GOOS}_$GOARCH.sh
+if [ "$1" = "--dist-tool" ]; then
+	# Stop after building dist tool.
+	mkdir -p $GOTOOLDIR
+	if [ "$2" != "" ]; then
+		cp cmd/dist/dist "$2"
 	fi
-
-	echo '# Building Go code.'
-	go_bootstrap install -a -v std
-	rm -f "$GOBIN/go_bootstrap"
-
-else
-	echo; echo; echo %%%% making pkg %%%%; echo
-	gomake -C pkg install
+	mv cmd/dist/dist $GOTOOLDIR/dist
+	exit 0
 fi
 
-# Print post-install messages.
-# Implemented as a function so that all.bash can repeat the output
-# after run.bash finishes running all the tests.
-installed() {
-	eval $(gomake --no-print-directory -f Make.inc go-env)
+echo "# Building compilers and Go bootstrap tool for host, $GOHOSTOS/$GOHOSTARCH."
+buildall="-a"
+if [ "$1" = "--no-clean" ]; then
+	buildall=""
+fi
+./cmd/dist/dist bootstrap $buildall -v # builds go_bootstrap
+# Delay move of dist tool to now, because bootstrap may clear tool directory.
+mv cmd/dist/dist $GOTOOLDIR/dist
+$GOTOOLDIR/go_bootstrap clean -i std
+echo
+
+if [ "$GOHOSTARCH" != "$GOARCH" -o "$GOHOSTOS" != "$GOOS" ]; then
+	echo "# Building packages and commands for host, $GOHOSTOS/$GOHOSTARCH."
+	GOOS=$GOHOSTOS GOARCH=$GOHOSTARCH \
+		$GOTOOLDIR/go_bootstrap install -v std
 	echo
-	echo ---
-	echo Installed Go for $GOOS/$GOARCH in "$GOROOT".
-	echo Installed commands in "$GOBIN".
-	case "$OLDPATH" in
-	"$GOBIN:"* | *":$GOBIN" | *":$GOBIN:"*)
-		;;
-	*)
-		echo '***' "You need to add $GOBIN to your "'$PATH.' '***'
-	esac
-	echo The compiler is $GC.
-	if [ "$(uname)" = "Darwin" ]; then
-		echo
-		echo On OS X the debuggers must be installed setgrp procmod.
-		echo Read and run ./sudo.bash to install the debuggers.
-	fi
-	if [ "$GOROOT_FINAL" != "$GOROOT" ]; then
-		echo
-		echo The binaries expect "$GOROOT" to be copied or moved to "$GOROOT_FINAL".
-	fi
-}
+fi
 
-(installed)  # run in sub-shell to avoid polluting environment
+echo "# Building packages and commands for $GOOS/$GOARCH."
+$GOTOOLDIR/go_bootstrap install -v std
+echo
 
+rm -f $GOTOOLDIR/go_bootstrap
+
+if [ "$1" != "--no-banner" ]; then
+	$GOTOOLDIR/dist banner
+fi

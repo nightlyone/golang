@@ -29,7 +29,7 @@ and 'go install'.  See 'go help install'.
 The -d flag instructs get to stop after downloading the packages; that is,
 it instructs get not to install the packages.
 
-The -fix flag instructs get to run gofix on the downloaded packages
+The -fix flag instructs get to run the fix tool on the downloaded packages
 before resolving dependencies or building the code.
 
 The -u flag instructs get to use the network to update the named packages
@@ -119,7 +119,7 @@ func download(arg string, stk *importStack) {
 		stk.push(p.ImportPath)
 		defer stk.pop()
 		if err := downloadPackage(p); err != nil {
-			errorf("%s", &PackageError{stk.copy(), err.Error()})
+			errorf("%s", &PackageError{ImportStack: stk.copy(), Err: err.Error()})
 			return
 		}
 
@@ -132,7 +132,7 @@ func download(arg string, stk *importStack) {
 	}
 
 	if *getFix {
-		run(stringList("gofix", relPaths(p.gofiles)))
+		run(stringList(tool("fix"), relPaths(p.gofiles)))
 
 		// The imports might have changed, so reload again.
 		p = reloadPackage(arg, stk)
@@ -215,11 +215,7 @@ func downloadPackage(p *Package) error {
 	if i := strings.Index(vers, " "); i >= 0 {
 		vers = vers[:i]
 	}
-	tag := selectTag(vers, tags)
-	if tag == "" {
-		tag = vcs.tagDefault
-	}
-	if err := vcs.tagSync(root, tag); err != nil {
+	if err := vcs.tagSync(root, selectTag(vers, tags)); err != nil {
 		return err
 	}
 

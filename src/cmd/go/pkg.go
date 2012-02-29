@@ -5,7 +5,11 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"go/build"
+	"go/doc"
+	"go/scanner"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,6 +26,7 @@ type Package struct {
 	Name       string        `json:",omitempty"` // package name
 	Doc        string        `json:",omitempty"` // package documentation string
 	Dir        string        `json:",omitempty"` // directory containing package sources
+	Target     string        `json:",omitempty"` // install path
 	Version    string        `json:",omitempty"` // version of installed package (TODO)
 	Standard   bool          `json:",omitempty"` // is this package part of the standard Go library?
 	Stale      bool          `json:",omitempty"` // would 'go install' do anything for this package?
@@ -58,10 +63,14 @@ type Package struct {
 // A PackageError describes an error loading information about a package.
 type PackageError struct {
 	ImportStack []string // shortest path from package named on command line to this one
+	Pos         string   // position of error
 	Err         string   // the error itself
 }
 
 func (p *PackageError) Error() string {
+	if p.Pos != "" {
+		return strings.Join(p.ImportStack, "\n\timports ") + ": " + p.Pos + ": " + p.Err
+	}
 	return strings.Join(p.ImportStack, "\n\timports ") + ": " + p.Err
 }
 
@@ -128,6 +137,7 @@ func loadPackage(arg string, stk *importStack) *Package {
 	}
 
 	// Find basic information about package path.
+	isCmd := false
 	t, importPath, err := build.FindTree(arg)
 	dir := ""
 	// Maybe it is a standard command.
@@ -139,6 +149,7 @@ func loadPackage(arg string, stk *importStack) *Package {
 			importPath = arg
 			dir = p
 			err = nil
+			isCmd = true
 		}
 	}
 	// Maybe it is a path to a standard command.
@@ -151,6 +162,7 @@ func loadPackage(arg string, stk *importStack) *Package {
 			importPath = filepath.FromSlash(arg[len(cmd):])
 			dir = arg
 			err = nil
+			isCmd = true
 		}
 	}
 	if err != nil {
@@ -171,12 +183,23 @@ func loadPackage(arg string, stk *importStack) *Package {
 	}
 
 	// Maybe we know the package by its directory.
-	if p := packageCache[dir]; p != nil {
+	p := packageCache[dir]
+	if p != nil {
 		packageCache[importPath] = p
-		return reusePackage(p, stk)
+		p = reusePackage(p, stk)
+	} else {
+		p = scanPackage(&buildContext, t, arg, importPath, dir, stk, false)
 	}
 
-	return scanPackage(&buildContext, t, arg, importPath, dir, stk)
+	// If we loaded the files from the Go root's cmd/ tree,
+	// it must be a command (package main).
+	if isCmd && p.Error == nil && p.Name != "main" {
+		p.Error = &PackageError{
+			ImportStack: stk.copy(),
+			Err:         fmt.Sprintf("expected package main in %q; found package %s", dir, p.Name),
+		}
+	}
+	return p
 }
 
 func reusePackage(p *Package, stk *importStack) *Package {
@@ -198,33 +221,19 @@ func reusePackage(p *Package, stk *importStack) *Package {
 	return p
 }
 
-// firstSentence returns the first sentence of the document text.
-// The sentence ends after the first period followed by a space.
-// The returned sentence will have no \n \r or \t characters and
-// will use only single spaces between words.
-func firstSentence(text string) string {
-	var b []byte
-	space := true
-Loop:
-	for i := 0; i < len(text); i++ {
-		switch c := text[i]; c {
-		case ' ', '\t', '\r', '\n':
-			if !space {
-				space = true
-				if len(b) > 0 && b[len(b)-1] == '.' {
-					break Loop
-				}
-				b = append(b, ' ')
-			}
-		default:
-			space = false
-			b = append(b, c)
-		}
-	}
-	return string(b)
+// isGoTool is the list of directories for Go programs that are installed in
+// $GOROOT/bin/tool.
+var isGoTool = map[string]bool{
+	"cmd/api":      true,
+	"cmd/cgo":      true,
+	"cmd/fix":      true,
+	"cmd/vet":      true,
+	"cmd/yacc":     true,
+	"exp/gotype":   true,
+	"exp/ebnflint": true,
 }
 
-func scanPackage(ctxt *build.Context, t *build.Tree, arg, importPath, dir string, stk *importStack) *Package {
+func scanPackage(ctxt *build.Context, t *build.Tree, arg, importPath, dir string, stk *importStack, useAllFiles bool) *Package {
 	// Read the files in the directory to learn the structure
 	// of the package.
 	p := &Package{
@@ -236,11 +245,27 @@ func scanPackage(ctxt *build.Context, t *build.Tree, arg, importPath, dir string
 	packageCache[dir] = p
 	packageCache[importPath] = p
 
+	ctxt.UseAllFiles = useAllFiles
 	info, err := ctxt.ScanDir(dir)
+	useAllFiles = false // flag does not apply to dependencies
 	if err != nil {
 		p.Error = &PackageError{
 			ImportStack: stk.copy(),
 			Err:         err.Error(),
+		}
+		// Look for parser errors.
+		if err, ok := err.(scanner.ErrorList); ok {
+			// Prepare error with \n before each message.
+			// When printed in something like context: %v
+			// this will put the leading file positions each on
+			// its own line.  It will also show all the errors
+			// instead of just the first, as err.Error does.
+			var buf bytes.Buffer
+			for _, e := range err {
+				buf.WriteString("\n")
+				buf.WriteString(e.Error())
+			}
+			p.Error.Err = buf.String()
 		}
 		p.Incomplete = true
 		return p
@@ -248,7 +273,7 @@ func scanPackage(ctxt *build.Context, t *build.Tree, arg, importPath, dir string
 
 	p.info = info
 	p.Name = info.Package
-	p.Doc = firstSentence(info.PackageComment.Text())
+	p.Doc = doc.Synopsis(info.PackageComment.Text())
 	p.Imports = info.Imports
 	p.GoFiles = info.GoFiles
 	p.TestGoFiles = info.TestGoFiles
@@ -262,12 +287,26 @@ func scanPackage(ctxt *build.Context, t *build.Tree, arg, importPath, dir string
 
 	if info.Package == "main" {
 		_, elem := filepath.Split(importPath)
-		p.target = filepath.Join(t.BinDir(), elem)
+		full := ctxt.GOOS + "_" + ctxt.GOARCH + "/" + elem
+		if t.Goroot && isGoTool[p.ImportPath] {
+			p.target = filepath.Join(t.Path, "pkg/tool", full)
+		} else {
+			if ctxt.GOOS != toolGOOS || ctxt.GOARCH != toolGOARCH {
+				// Install cross-compiled binaries to subdirectories of bin.
+				elem = full
+			}
+			p.target = filepath.Join(t.BinDir(), elem)
+		}
 		if ctxt.GOOS == "windows" {
 			p.target += ".exe"
 		}
 	} else {
-		p.target = filepath.Join(t.PkgDir(), filepath.FromSlash(importPath)+".a")
+		dir := t.PkgDir()
+		// For gccgo, rewrite p.target with the expected library name.
+		if _, ok := buildToolchain.(gccgoToolchain); ok {
+			dir = filepath.Join(filepath.Dir(dir), "gccgo", filepath.Base(dir))
+		}
+		p.target = buildToolchain.pkgpath(dir, p)
 	}
 
 	var built time.Time
@@ -334,6 +373,12 @@ Stale:
 		}
 		deps[path] = true
 		p1 := loadPackage(path, stk)
+		if p1.Error != nil {
+			if info.ImportPos != nil && len(info.ImportPos[path]) > 0 {
+				pos := info.ImportPos[path][0]
+				p1.Error.Pos = pos.String()
+			}
+		}
 		imports = append(imports, p1)
 		for _, dep := range p1.Deps {
 			deps[dep] = true
@@ -379,6 +424,8 @@ Stale:
 		p.target = ""
 	}
 
+	p.Target = p.target
+
 	return p
 }
 
@@ -397,7 +444,7 @@ func packages(args []string) []*Package {
 	for _, arg := range args {
 		pkg := loadPackage(arg, &stk)
 		if pkg.Error != nil {
-			errorf("%s", pkg.Error)
+			errorf("can't load package: %s", pkg.Error)
 			continue
 		}
 		pkgs = append(pkgs, pkg)
@@ -427,7 +474,7 @@ func packagesForBuild(args []string) []*Package {
 	printed := map[*PackageError]bool{}
 	for _, pkg := range pkgs {
 		if pkg.Error != nil {
-			errorf("%s", pkg.Error)
+			errorf("can't load package: %s", pkg.Error)
 		}
 		for _, err := range pkg.DepsErrors {
 			// Since these are errors in dependencies,

@@ -250,7 +250,7 @@ struct	Node
 	uchar	used;
 	uchar	isddd;
 	uchar	readonly;
-	uchar	implicit;	// don't show in printout
+	uchar	implicit;
 	uchar	addrtaken;	// address taken, even if not moved to heap
 	uchar	dupok;	// duplicate definitions ok (for func)
 
@@ -484,6 +484,7 @@ enum
 	ODDD,
 	ODDDARG,
 	OINLCALL,	// intermediary representation of an inlined call
+	OITAB,	// itable word of interface value
 
 	// for back ends
 	OCMP, ODEC, OEXTEND, OINC, OREGISTER, OINDREG,
@@ -763,6 +764,7 @@ EXTERN	Pkg*	gostringpkg;	// fake pkg for Go strings
 EXTERN	Pkg*	runtimepkg;	// package runtime
 EXTERN	Pkg*	stringpkg;	// fake package for C strings
 EXTERN	Pkg*	typepkg;	// fake package for runtime type info
+EXTERN	Pkg*	weaktypepkg;	// weak references to runtime type info
 EXTERN	Pkg*	unsafepkg;	// package unsafe
 EXTERN	Pkg*	phash[128];
 EXTERN	int	tptr;		// either TPTR32 or TPTR64
@@ -1048,7 +1050,7 @@ void	mpsubfltflt(Mpflt *a, Mpflt *b);
 /*
  *	mparith2.c
  */
-void	mpaddfixfix(Mpint *a, Mpint *b);
+void	mpaddfixfix(Mpint *a, Mpint *b, int);
 void	mpandfixfix(Mpint *a, Mpint *b);
 void	mpandnotfixfix(Mpint *a, Mpint *b);
 void	mpdivfract(Mpint *a, Mpint *b);
@@ -1170,6 +1172,7 @@ int	implements(Type *t, Type *iface, Type **missing, Type **have, int *ptr);
 void	importdot(Pkg *opkg, Node *pack);
 int	is64(Type *t);
 int	isblank(Node *n);
+int	isblanksym(Sym *s);
 int	isfixedarray(Type *t);
 int	isideal(Type *t);
 int	isinter(Type *t);

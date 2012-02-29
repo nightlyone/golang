@@ -485,6 +485,7 @@ or how the <code>image</code> packages generate compressed
 image files.  All these ideas stem from a single interface
 (<code>io.Writer</code>) representing a single method
 (<code>Write</code>).  And that's only scratching the surface.
+Go's interfaces have a profound influence on how programs are structured.
 </p>
 
 <p>
@@ -680,6 +681,85 @@ for i, v := range t {
 }
 </pre>
 
+<h3 id="nil_error">
+Why is my nil error value not equal to nil?
+</h3>
+
+<p>
+Under the covers, interfaces are implemented as two elements, a type and a value.
+The value, called the interface's dynamic value,
+is an arbitrary concrete value and the type is that of the value.
+For the <code>int</code> value 3, an interface value contains,
+schematically, (<code>int</code>, <code>3</code>).
+</p>
+
+<p>
+An interface value is <code>nil</code> only if the inner value and type are both unset,
+(<code>nil</code>, <code>nil</code>).
+In particular, a <code>nil</code> interface will always hold a <code>nil</code> type.
+If we store a pointer of type <code>*int</code> inside
+an interface value, the inner type will be <code>*int</code> regardless of the value of the pointer:
+(<code>*int</code>, <code>nil</code>).
+Such an interface value will therefore be non-<code>nil</code>
+<em>even when the pointer inside is</em> <code>nil</code>.
+</p>
+
+<p>
+This situation can be confusing, and often arises when a <code>nil</code> value is
+stored inside an interface value such as an <code>error</code> return:
+</p>
+
+<pre>
+func returnsError() error {
+	var p *MyError = nil
+	if bad() {
+		p = ErrBad
+	}
+	return p // Will always return a non-nil error.
+}
+</pre>
+
+<p>
+If all goes well, the function returns a <code>nil</code> <code>p</code>,
+so the return value is an <code>error</code> interface
+value holding (<code>*MyError</code>, <code>nil</code>).
+This means that if the caller compares the returned error to <code>nil</code>,
+it will always look as if there was an error even if nothing bad happened.
+To return a proper <code>nil</code> <code>error</code> to the caller,
+the function must return an explicit <code>nil</code>:
+</p>
+
+
+<pre>
+func returnsError() error {
+	if bad() {
+		return ErrBad
+	}
+	return nil
+}
+</pre>
+
+<p>
+It's a good idea for functions
+that return errors always to use the <code>error</code> type in
+their signature (as we did above) rather than a concrete type such
+as <code>*MyError</code>, to help guarantee the error is
+created correctly. As an example,
+<a href="/pkg/os/#Open"><code>os.Open</code></a>
+returns an <code>error</code> even though, if not <code>nil</code>,
+it's always of concrete type
+<a href="/pkg/os/#PathError"><code>*os.PathError</code></a>.
+</p>
+
+<p>
+Similar situations to those described here can arise whenever interfaces are used.
+Just keep in mind that if any concrete value
+has been stored in the interface, the interface will not be <code>nil</code>.
+For more information, see
+<a href="http://blog.golang.org/2011/09/laws-of-reflection.html">this blog post</a>.
+</p>
+
+
 <h3 id="unions">
 Why are there no untagged unions, as in C?</h3>
 
@@ -761,12 +841,12 @@ there are multiple considerations involving shallow vs. deep comparison, pointer
 value comparison, how to deal with recursive types, and so on.
 We may revisit this issue&mdash;and implementing equality for slices
 will not invalidate any existing programs&mdash;but without a clear idea of what
-equality of structs and arrays should mean, it was simpler to leave it out for now.
+equality of slices should mean, it was simpler to leave it out for now.
 </p>
 
 <p>
-In Go 1, equality is defined for structs and arrays, so such
-types can be used as map keys, but slices still do not have a definition of equality.
+In Go 1, unlike prior releases, equality is defined for structs and arrays, so such
+types can be used as map keys. Slices still do not have a definition of equality, though.
 </p>
 
 <h3 id="references">
@@ -862,7 +942,7 @@ func (s MyStruct)  valueMethod()   { } // method on value
 For programmers unaccustomed to pointers, the distinction between these
 two examples can be confusing, but the situation is actually very simple.
 When defining a method on a type, the receiver (<code>s</code> in the above
-example) behaves exactly as if it were an argument to the method.
+examples) behaves exactly as if it were an argument to the method.
 Whether to define the receiver as a value or as a pointer is the same
 question, then, as whether a function argument should be a value or
 a pointer.
@@ -1003,15 +1083,15 @@ See the <a href="/doc/codewalk/sharemem/">Share Memory By Communicating</a> code
 Why doesn't my multi-goroutine program use multiple CPUs?</h3>
 
 <p>
-You must set <code>GOMAXPROCS</code> to allow the
+You must set the <code>GOMAXPROCS</code> shell environment variable
+or use the similarly-named <a href="/pkg/runtime/#GOMAXPROCS"><code>function</code></a>
+of the runtime package to allow the
 run-time support to utilize more than one OS thread. 
 </p>
 
 <p>
 Programs that perform parallel computation should benefit from an increase in
-<code>GOMAXPROCS</code>. (See the <a
-href="http://golang.org/pkg/runtime/#GOMAXPROCS"><code>runtime</code> package's
-documentation</a>.)
+<code>GOMAXPROCS</code>.
 </p>
 
 <h3 id="Why_GOMAXPROCS">
@@ -1069,7 +1149,10 @@ there is no useful way for a method call to obtain a pointer.
 </p>
 
 <p>
-If not for this restriction, this code:
+Even in cases where the compiler could take the address of a value
+to pass to the method, if the method modifies the value the changes
+will be lost in the caller.
+As a common example, this code:
 </p>
 
 <pre>
@@ -1095,7 +1178,7 @@ Consider the following program:
 func main() {
     done := make(chan bool)
 
-    values := []string{ "a", "b", "c" }
+    values := []string{"a", "b", "c"}
     for _, v := range values {
         go func() {
             fmt.Println(v)
@@ -1189,18 +1272,21 @@ func TestFoo(t *testing.T) {
 </pre>
 
 <p>
-Run <code>gotest</code> in that directory.
+Run <code>go test</code> in that directory.
 That script finds the <code>Test</code> functions,
 builds a test binary, and runs it.
 </p>
 
-<p>See the <a href="/doc/code.html">How to Write Go Code</a> document for more details.</p>
+<p>See the <a href="/doc/code.html">How to Write Go Code</a> document,
+the <a href="/pkg/testing/"><code>testing</code></a> package
+and the <a href="/cmd/go/#Test_packages"><code>go test</code></a> subcommand for more details.
+</p>
 
 <h3 id="testing_framework">
 Where is my favorite helper function for testing?</h3>
 
 <p>
-Go's standard <code>testing</code> package makes it easy to write unit tests, but it lacks
+Go's standard <a href="/pkg/testing/"><code>testing</code></a> package makes it easy to write unit tests, but it lacks
 features provided in other language's testing frameworks such as assertion functions.
 An <a href="#assertions">earlier section</a> of this document explained why Go
 doesn't have assertions, and
@@ -1276,8 +1362,8 @@ it now. <code>Gccgo</code>'s run-time support uses <code>glibc</code>.
 control; it is
 compiled with a version of the Plan 9 C compiler that supports
 segmented stacks for goroutines.
-The <code>gccgo</code> compiler also implements segmented
-stacks, supported by recent modifications to its linker.
+The <code>gccgo</code> compiler implements segmented
+stacks on Linux only, supported by recent modifications to the gold linker.
 </p>
 
 <h3 id="Why_is_my_trivial_program_such_a_large_binary">
@@ -1292,9 +1378,9 @@ type checks, reflection, and even panic-time stack traces.
 
 <p>
 A trivial C "hello, world" program compiled and linked statically using gcc
-on Linux is around 750 kB.  An equivalent Go program is around 1.1 MB, but
-that includes more powerful run-time support.  We believe that with some effort
-the size of Go binaries can be reduced.
+on Linux is around 750 kB.  An equivalent Go program using <code>fmt.Printf</code>
+is around 1.3 MB, but
+that includes more powerful run-time support.
 </p>
 
 <h3 id="unused_variables_and_imports">
@@ -1359,7 +1445,7 @@ Why does Go perform badly on benchmark X?</h3>
 <p>
 One of Go's design goals is to approach the performance of C for comparable
 programs, yet on some benchmarks it does quite poorly, including several 
-in <a href="/test/bench/">test/bench</a>. The slowest depend on libraries 
+in <a href="/test/bench/shootout/">test/bench/shootout</a>. The slowest depend on libraries 
 for which versions of comparable performance are not available in Go. 
 For instance, <a href="/test/bench/shootout/pidigits.go">pidigits.go</a>
 depends on a multi-precision math package, and the C
@@ -1388,7 +1474,10 @@ garbage can have a huge effect.)
 </p>
 
 <p>
-In any case, Go can often be very competitive. See the blog post about
+In any case, Go can often be very competitive.
+There has been significant improvement in the performance of many programs
+as the language and tools have developed.
+See the blog post about
 <a href="http://blog.golang.org/2011/06/profiling-go-programs.html">profiling
 Go programs</a> for an informative example.
 

@@ -299,5 +299,22 @@ TEXT runtime·sysctl(SB),7,$28
 	MOVL	$0, AX
 	RET
 
+TEXT runtime·osyield(SB),7,$-4
+	MOVL	$331, AX		// sys_sched_yield
+	INT	$0x80
+	RET
+
+TEXT runtime·sigprocmask(SB),7,$16
+	MOVL	$0, 0(SP)		// syscall gap
+	MOVL	$3, 4(SP)		// arg 1 - how (SIG_SETMASK)
+	MOVL	args+0(FP), AX
+	MOVL	AX, 8(SP)		// arg 2 - set
+	MOVL	args+4(FP), AX
+	MOVL	AX, 12(SP)		// arg 3 - oset
+	MOVL	$340, AX		// sys_sigprocmask
+	INT	$0x80
+	JAE	2(PC)
+	CALL	runtime·notok(SB)
+	RET
 
 GLOBL runtime·tlsoffset(SB),$4

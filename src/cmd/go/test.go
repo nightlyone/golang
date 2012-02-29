@@ -9,11 +9,15 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build"
+	"go/doc"
 	"go/parser"
 	"go/token"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
@@ -28,7 +32,7 @@ func init() {
 
 var cmdTest = &Command{
 	CustomFlags: true,
-	UsageLine:   "test [-c] [-file a.go -file b.go ...] [-p n] [-x] [importpath...] [flags for test binary]",
+	UsageLine:   "test [-c] [-i] [-p n] [-x] [importpath...] [flags for test binary]",
 	Short:       "test packages",
 	Long: `
 'Go test' automates testing the packages named by the import paths.
@@ -47,15 +51,26 @@ benchmark functions, and example functions.  See 'go help testfunc' for more.
 
 By default, go test needs no arguments.  It compiles and tests the package
 with source in the current directory, including tests, and runs the tests.
-If file names are given (with flag -file=test.go, one per extra test source file),
-only those test files are added to the package.  (The non-test files are always
-compiled.)
 
 The package is built in a temporary directory so it does not interfere with the
 non-test installation.
 
-See 'go help testflag' for details about flags handled by 'go test'
-and the test binary.
+The flags handled by 'go test' itself are:
+
+	-c  Compile the test binary to pkg.test but do not run it.
+
+	-i
+	    Install packages that are dependencies of the test.
+	    Do not run the test.
+
+	-p n
+	    Compile and test up to n packages in parallel.
+	    The default value is the number of CPUs available.
+
+	-x  Print each subcommand go test executes.
+
+The test binary also accepts flags that control execution of the test; these
+flags are also accessible by 'go test'.  See 'go help testflag' for details.
 
 See 'go help importpath' for more about import paths.
 
@@ -70,21 +85,8 @@ var helpTestflag = &Command{
 The 'go test' command takes both flags that apply to 'go test' itself
 and flags that apply to the resulting test binary.
 
-The flags handled by 'go test' are:
-
-	-c  Compile the test binary to test.out but do not run it.
-
-	-file a.go
-	    Use only the tests in the source file a.go.
-	    Multiple -file flags may be provided.
-
-	-p n
-	    Compile and test up to n packages in parallel.
-	    The default value is the number of CPUs available.
-
-	-x  Print each subcommand go test executes.
-
-The resulting test binary, called test.out, has its own flags:
+The test binary, called pkg.test, where pkg is the name of the
+directory containing the package sources, has its own flags:
 
 	-test.v
 	    Verbose output: log all tests as they are run.
@@ -138,11 +140,11 @@ For convenience, each of these -test.X flags of the test binary is
 also available as the flag -X in 'go test' itself.  Flags not listed
 here are passed through unaltered.  For instance, the command
 
-	go test -x -v -cpuprofile=prof.out -dir=testdata -update -file x_test.go
+	go test -x -v -cpuprofile=prof.out -dir=testdata -update
 
-will compile the test binary using x_test.go and then run it as
+will compile the test binary and then run it as
 
-	test.out -test.v -test.cpuprofile=prof.out -dir=testdata -update
+	pkg.test -test.v -test.cpuprofile=prof.out -dir=testdata -update
 	`,
 }
 
@@ -175,34 +177,38 @@ where xxx is a suffix not beginning with an upper case letter.
 
 Here is an example of an example:
 
-	// The output of this example function.
 	func ExamplePrintln() {
 		Println("The output of this example function.")
+		// Output: The output of this example function.
 	}
+
+The entire test file is presented as the example when it contains a single
+example function, at least one other function, type, variable, or constant
+declaration, and no test or benchmark functions.
 
 See the documentation of the testing package for more information.
 		`,
 }
 
 var (
-	testC        bool     // -c flag
-	testP        int      // -p flag
-	testX        bool     // -x flag
-	testV        bool     // -v flag
-	testFiles    []string // -file flag(s)  TODO: not respected
-	testArgs     []string
-	testShowPass bool // whether to display passing output
-	testBench    bool
+	testC            bool     // -c flag
+	testI            bool     // -i flag
+	testP            int      // -p flag
+	testX            bool     // -x flag
+	testV            bool     // -v flag
+	testFiles        []string // -file flag(s)  TODO: not respected
+	testTimeout      string   // -timeout flag
+	testArgs         []string
+	testBench        bool
+	testStreamOutput bool // show output as it is generated
+	testShowPass     bool // show passing output
+
+	testKillTimeout = 10 * time.Minute
 )
 
 func runTest(cmd *Command, args []string) {
 	var pkgArgs []string
 	pkgArgs, testArgs = testFlags(args)
-
-	// show test PASS output when no packages
-	// are listed (implicitly current directory: "go test")
-	// or when the -v flag has been given.
-	testShowPass = len(pkgArgs) == 0 || testV
 
 	pkgs := packagesForBuild(pkgArgs)
 	if len(pkgs) == 0 {
@@ -213,6 +219,29 @@ func runTest(cmd *Command, args []string) {
 		fatalf("cannot use -c flag with multiple packages")
 	}
 
+	// If a test timeout was given and is parseable, set our kill timeout
+	// to that timeout plus one minute.  This is a backup alarm in case
+	// the test wedges with a goroutine spinning and its background
+	// timer does not get a chance to fire.
+	if dt, err := time.ParseDuration(testTimeout); err == nil {
+		testKillTimeout = dt + 1*time.Minute
+	}
+
+	// show passing test output (after buffering) with -v flag.
+	// must buffer because tests are running in parallel, and
+	// otherwise the output will get mixed.
+	testShowPass = testV
+
+	// stream test output (no buffering) when no package has
+	// been given on the command line (implicit current directory)
+	// or when benchmarking.
+	// Also stream if we're showing output anyway with a
+	// single package under test.  In that case, streaming the
+	// output produces the same result as not streaming,
+	// just more immediately.
+	testStreamOutput = len(pkgArgs) == 0 || testBench ||
+		(len(pkgs) <= 1 && testShowPass)
+
 	buildX = testX
 	if testP > 0 {
 		buildP = testP
@@ -220,6 +249,49 @@ func runTest(cmd *Command, args []string) {
 
 	var b builder
 	b.init()
+
+	if testI {
+		buildV = testV
+
+		deps := map[string]bool{
+			// Dependencies for testmain.
+			"testing": true,
+			"regexp":  true,
+		}
+		for _, p := range pkgs {
+			// Dependencies for each test.
+			for _, path := range p.info.Imports {
+				deps[path] = true
+			}
+			for _, path := range p.info.TestImports {
+				deps[path] = true
+			}
+		}
+
+		// translate C to runtime/cgo
+		if deps["C"] {
+			delete(deps, "C")
+			deps["runtime/cgo"] = true
+			if buildContext.GOOS == runtime.GOOS && buildContext.GOARCH == runtime.GOARCH {
+				deps["cmd/cgo"] = true
+			}
+		}
+		// Ignore pseudo-packages.
+		delete(deps, "unsafe")
+
+		all := []string{}
+		for path := range deps {
+			all = append(all, path)
+		}
+		sort.Strings(all)
+
+		a := &action{}
+		for _, p := range packagesForBuild(all) {
+			a.deps = append(a.deps, b.action(modeInstall, modeInstall, p))
+		}
+		b.do(a)
+		return
+	}
 
 	var builds, runs, prints []*action
 
@@ -279,7 +351,11 @@ func runTest(cmd *Command, args []string) {
 		}
 	}
 	if warned {
-		fmt.Fprintf(os.Stderr, "installing these packages with 'go install' will speed future tests.\n\n")
+		args := strings.Join(pkgArgs, " ")
+		if args != "" {
+			args = " " + args
+		}
+		fmt.Fprintf(os.Stderr, "installing these packages with 'go test -i%s' will speed future tests.\n\n", args)
 	}
 
 	b.do(root)
@@ -296,7 +372,7 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 	// Build Package structs describing:
 	//	ptest - package + test files
 	//	pxtest - package of external test files
-	//	pmain - test.out binary
+	//	pmain - pkg.test binary
 	var ptest, pxtest, pmain *Package
 
 	// go/build does not distinguish the dependencies used
@@ -315,6 +391,11 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 	}
 	stk.pop()
 
+	// Use last element of import path, not package name.
+	// They differ when package name is "main".
+	_, elem := path.Split(p.ImportPath)
+	testBinary := elem + ".test"
+
 	// The ptest package needs to be importable under the
 	// same import path that p has, but we cannot put it in
 	// the usual place in the temporary tree, because then
@@ -330,8 +411,7 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 	// We write the external test package archive to
 	// $WORK/unicode/utf8/_test/unicode/utf8_test.a.
 	testDir := filepath.Join(b.work, filepath.FromSlash(p.ImportPath+"/_test"))
-	ptestObj := filepath.Join(testDir, filepath.FromSlash(p.ImportPath+".a"))
-	pxtestObj := filepath.Join(testDir, filepath.FromSlash(p.ImportPath+"_test.a"))
+	ptestObj := buildToolchain.pkgpath(testDir, p)
 
 	// Create the directory for the .a files.
 	ptestDir, _ := filepath.Split(ptestObj)
@@ -380,11 +460,11 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 		pxtest.imports = append(pxtest.imports, ptest)
 		a := b.action(modeBuild, modeBuild, pxtest)
 		a.objdir = testDir + string(filepath.Separator)
-		a.objpkg = pxtestObj
-		a.target = pxtestObj
+		a.objpkg = buildToolchain.pkgpath(testDir, pxtest)
+		a.target = a.objpkg
 	}
 
-	// Action for building test.out.
+	// Action for building pkg.test.
 	pmain = &Package{
 		Name:    "main",
 		Dir:     testDir,
@@ -413,7 +493,7 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 	a := b.action(modeBuild, modeBuild, pmain)
 	a.objdir = testDir + string(filepath.Separator)
 	a.objpkg = filepath.Join(testDir, "main.a")
-	a.target = filepath.Join(testDir, "test.out") + b.exe
+	a.target = filepath.Join(testDir, testBinary) + b.exe
 	pmainAction := a
 
 	if testC {
@@ -422,7 +502,7 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 			f:      (*builder).install,
 			deps:   []*action{pmainAction},
 			p:      pmain,
-			target: "test.out" + b.exe,
+			target: testBinary + b.exe,
 		}
 		printAction = &action{p: p, deps: []*action{runAction}} // nop
 	} else {
@@ -433,9 +513,14 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 			p:          p,
 			ignoreFail: true,
 		}
+		cleanAction := &action{
+			f:    (*builder).cleanTest,
+			deps: []*action{runAction},
+			p:    p,
+		}
 		printAction = &action{
 			f:    (*builder).printTest,
-			deps: []*action{runAction},
+			deps: []*action{cleanAction},
 			p:    p,
 		}
 	}
@@ -459,15 +544,20 @@ func (b *builder) runTest(a *action) error {
 		// We were unable to build the binary.
 		a.failed = false
 		fmt.Fprintf(a.testOutput, "FAIL\t%s [build failed]\n", a.p.ImportPath)
-		exitStatus = 1
+		setExitStatus(1)
 		return nil
 	}
 
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = a.p.Dir
 	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	if testStreamOutput {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	} else {
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+	}
 
 	t0 := time.Now()
 	err := cmd.Start()
@@ -475,9 +565,7 @@ func (b *builder) runTest(a *action) error {
 	// This is a last-ditch deadline to detect and
 	// stop wedged test binaries, to keep the builders
 	// running.
-	const deadline = 10 * time.Minute
-
-	tick := time.NewTimer(deadline)
+	tick := time.NewTimer(testKillTimeout)
 	if err == nil {
 		done := make(chan error)
 		go func() {
@@ -497,27 +585,37 @@ func (b *builder) runTest(a *action) error {
 	t1 := time.Now()
 	t := fmt.Sprintf("%.3fs", t1.Sub(t0).Seconds())
 	if err == nil {
-		fmt.Fprintf(a.testOutput, "ok  \t%s\t%s\n", a.p.ImportPath, t)
 		if testShowPass {
 			a.testOutput.Write(out)
 		}
+		fmt.Fprintf(a.testOutput, "ok  \t%s\t%s\n", a.p.ImportPath, t)
 		return nil
 	}
 
-	fmt.Fprintf(a.testOutput, "FAIL\t%s\t%s\n", a.p.ImportPath, t)
-	exitStatus = 1
+	setExitStatus(1)
 	if len(out) > 0 {
 		a.testOutput.Write(out)
 		// assume printing the test binary's exit status is superfluous
 	} else {
 		fmt.Fprintf(a.testOutput, "%s\n", err)
 	}
+	fmt.Fprintf(a.testOutput, "FAIL\t%s\t%s\n", a.p.ImportPath, t)
+
+	return nil
+}
+
+// cleanTest is the action for cleaning up after a test.
+func (b *builder) cleanTest(a *action) error {
+	run := a.deps[0]
+	testDir := filepath.Join(b.work, filepath.FromSlash(run.p.ImportPath+"/_test"))
+	os.RemoveAll(testDir)
 	return nil
 }
 
 // printTest is the action for printing a test result.
 func (b *builder) printTest(a *action) error {
-	run := a.deps[0]
+	clean := a.deps[0]
+	run := clean.deps[0]
 	os.Stdout.Write(run.testOutput.Bytes())
 	run.testOutput = nil
 	return nil
@@ -613,17 +711,16 @@ func (t *testFuncs) load(filename, pkg string, seen *bool) error {
 		case isTest(name, "Benchmark"):
 			t.Benchmarks = append(t.Benchmarks, testFunc{pkg, name, ""})
 			*seen = true
-		case isTest(name, "Example"):
-			output := n.Doc.Text()
-			if output == "" {
-				// Don't run examples with no output.
-				continue
-			}
-			t.Examples = append(t.Examples, testFunc{pkg, name, output})
-			*seen = true
 		}
 	}
-
+	for _, e := range doc.Examples(f) {
+		if e.Output == "" {
+			// Don't run examples with no output.
+			continue
+		}
+		t.Examples = append(t.Examples, testFunc{pkg, "Example" + e.Name, e.Output})
+		*seen = true
+	}
 	return nil
 }
 

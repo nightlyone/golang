@@ -103,16 +103,16 @@ func exec(rw http.ResponseWriter, args []string) (status int) {
 
 	var buf bytes.Buffer
 	io.Copy(&buf, r)
-	wait, err := p.Wait(0)
+	wait, err := p.Wait()
 	if err != nil {
 		os.Stderr.Write(buf.Bytes())
 		log.Printf("os.Wait(%d, 0): %v", p.Pid, err)
 		return 2
 	}
-	status = wait.ExitStatus()
-	if !wait.Exited() || status > 1 {
+	if !wait.Success() {
 		os.Stderr.Write(buf.Bytes())
-		log.Printf("executing %v failed (exit status = %d)", args, status)
+		log.Printf("executing %v failed", args)
+		status = 1 // See comment in default case in dosync.
 		return
 	}
 
@@ -143,6 +143,8 @@ func dosync(w http.ResponseWriter, r *http.Request) {
 		// don't change the package tree
 		syncDelay.set(time.Duration(*syncMin) * time.Minute) //  revert to regular sync schedule
 	default:
+		// TODO(r): this cannot happen now, since Wait has a boolean exit condition,
+		// not an integer.
 		// sync failed because of an error - back off exponentially, but try at least once a day
 		syncDelay.backoff(24 * time.Hour)
 	}
@@ -374,11 +376,16 @@ func main() {
 	}
 
 	// determine paths
+	const cmdPrefix = "cmd/"
 	path := flag.Arg(0)
-	if len(path) > 0 && path[0] == '.' {
+	var forceCmd bool
+	if strings.HasPrefix(path, ".") {
 		// assume cwd; don't assume -goroot
 		cwd, _ := os.Getwd() // ignore errors
 		path = filepath.Join(cwd, path)
+	} else if strings.HasPrefix(path, cmdPrefix) {
+		path = path[len(cmdPrefix):]
+		forceCmd = true
 	}
 	relpath := path
 	abspath := path
@@ -393,6 +400,7 @@ func main() {
 
 	var mode PageInfoMode
 	if relpath == builtinPkgPath {
+		// the fake built-in package contains unexported identifiers
 		mode = noFiltering
 	}
 	if *srcMode {
@@ -404,20 +412,37 @@ func main() {
 	}
 	// TODO(gri): Provide a mechanism (flag?) to select a package
 	//            if there are multiple packages in a directory.
-	info := pkgHandler.getPageInfo(abspath, relpath, "", mode)
 
+	// first, try as package unless forced as command
+	var info PageInfo
+	if !forceCmd {
+		info = pkgHandler.getPageInfo(abspath, relpath, "", mode)
+	}
+
+	// second, try as command unless the path is absolute
+	// (the go command invokes godoc w/ absolute paths; don't override)
+	var cinfo PageInfo
+	if !filepath.IsAbs(path) {
+		abspath = absolutePath(path, cmdHandler.fsRoot)
+		cinfo = cmdHandler.getPageInfo(abspath, relpath, "", mode)
+	}
+
+	// determine what to use
 	if info.IsEmpty() {
-		// try again, this time assume it's a command
-		if !filepath.IsAbs(path) {
-			abspath = absolutePath(path, cmdHandler.fsRoot)
+		if !cinfo.IsEmpty() {
+			// only cinfo exists - switch to cinfo
+			info = cinfo
 		}
-		cmdInfo := cmdHandler.getPageInfo(abspath, relpath, "", mode)
-		// only use the cmdInfo if it actually contains a result
-		// (don't hide errors reported from looking up a package)
-		if !cmdInfo.IsEmpty() {
-			info = cmdInfo
+	} else if !cinfo.IsEmpty() {
+		// both info and cinfo exist - use cinfo if info
+		// contains only subdirectory information
+		if info.PAst == nil && info.PDoc == nil {
+			info = cinfo
+		} else {
+			fmt.Printf("use 'godoc %s%s' for documentation on the %s command \n\n", cmdPrefix, relpath, relpath)
 		}
 	}
+
 	if info.Err != nil {
 		log.Fatalf("%v", info.Err)
 	}

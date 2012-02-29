@@ -18,7 +18,7 @@ type SysProcAttr struct {
 	Setpgid    bool        // Set process group ID to new pid (SYSV setpgrp)
 	Setctty    bool        // Set controlling terminal to fd 0
 	Noctty     bool        // Detach fd 0 from controlling terminal
-	Pdeathsig  int         // Signal that the process will get when its parent dies (Linux only)
+	Pdeathsig  Signal      // Signal that the process will get when its parent dies (Linux only)
 }
 
 // Fork, dup fd onto 0..len(fd), and exec(argv0, argvv, envv) in child.
@@ -40,7 +40,10 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 	)
 
 	// guard against side effects of shuffling fds below.
-	fd := append([]int(nil), attr.Files...)
+	fd := make([]int, len(attr.Files))
+	for i, ufd := range attr.Files {
+		fd[i] = int(ufd)
+	}
 
 	// About to call fork.
 	// No more allocation or calls of non-assembly functions.

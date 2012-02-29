@@ -77,6 +77,8 @@ func Getpagesize() int { return 4096 }
 // Errno is the Windows error number.
 type Errno uintptr
 
+func langid(pri, sub uint16) uint32 { return uint32(sub)<<10 | uint32(pri) }
+
 func (e Errno) Error() string {
 	// deal with special go errors
 	idx := int(e - APPLICATION_ERROR)
@@ -86,7 +88,7 @@ func (e Errno) Error() string {
 	// ask windows for the remaining errors
 	var flags uint32 = FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ARGUMENT_ARRAY | FORMAT_MESSAGE_IGNORE_INSERTS
 	b := make([]uint16, 300)
-	n, err := FormatMessage(flags, 0, uint32(e), 0, b, nil)
+	n, err := FormatMessage(flags, 0, uint32(e), langid(LANG_ENGLISH, SUBLANG_ENGLISH_US), b, nil)
 	if err != nil {
 		return "error " + itoa(int(e)) + " (FormatMessage failed with err=" + itoa(int(err.(Errno))) + ")"
 	}
@@ -610,7 +612,7 @@ func (w WaitStatus) Exited() bool { return true }
 
 func (w WaitStatus) ExitStatus() int { return int(w.ExitCode) }
 
-func (w WaitStatus) Signal() int { return -1 }
+func (w WaitStatus) Signal() Signal { return -1 }
 
 func (w WaitStatus) CoreDump() bool { return false }
 
@@ -618,7 +620,7 @@ func (w WaitStatus) Stopped() bool { return false }
 
 func (w WaitStatus) Continued() bool { return false }
 
-func (w WaitStatus) StopSignal() int { return -1 }
+func (w WaitStatus) StopSignal() Signal { return -1 }
 
 func (w WaitStatus) Signaled() bool { return false }
 
@@ -657,6 +659,9 @@ type IPv6Mreq struct {
 
 func GetsockoptInt(fd Handle, level, opt int) (int, error)              { return -1, EWINDOWS }
 func SetsockoptLinger(fd Handle, level, opt int, l *Linger) (err error) { return EWINDOWS }
+func SetsockoptInet4Addr(fd Handle, level, opt int, value [4]byte) (err error) {
+	return Setsockopt(fd, int32(level), int32(opt), (*byte)(unsafe.Pointer(&value[0])), 4)
+}
 func SetsockoptIPMreq(fd Handle, level, opt int, mreq *IPMreq) (err error) {
 	return Setsockopt(fd, int32(level), int32(opt), (*byte)(unsafe.Pointer(mreq)), int32(unsafe.Sizeof(*mreq)))
 }
@@ -682,3 +687,17 @@ func Geteuid() (euid int)                { return -1 }
 func Getgid() (gid int)                  { return -1 }
 func Getegid() (egid int)                { return -1 }
 func Getgroups() (gids []int, err error) { return nil, EWINDOWS }
+
+type Signal int
+
+func (s Signal) Signal() {}
+
+func (s Signal) String() string {
+	if 0 <= s && int(s) < len(signals) {
+		str := signals[s]
+		if str != "" {
+			return str
+		}
+	}
+	return "signal " + itoa(int(s))
+}

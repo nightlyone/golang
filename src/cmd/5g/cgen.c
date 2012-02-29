@@ -64,6 +64,9 @@ cgen(Node *n, Node *res)
 		if(isslice(n->left->type))
 			n->addable = n->left->addable;
 		break;
+	case OITAB:
+		n->addable = n->left->addable;
+		break;
 	}
 
 	// if both are addressable, move
@@ -280,6 +283,20 @@ cgen(Node *n, Node *res)
 		regfree(&n1);
 		break;
 
+	case OITAB:
+		// itable of interface value
+		igen(nl, &n1, res);
+		n1.op = OREGISTER;	// was OINDREG
+		regalloc(&n2, n->type, &n1);
+		n1.op = OINDREG;
+		n1.type = n->type;
+		n1.xoffset = 0;
+		gmove(&n1, &n2);
+		gmove(&n2, res);
+		regfree(&n1);
+		regfree(&n2);
+		break;
+
 	case OLEN:
 		if(istype(nl->type, TMAP) || istype(nl->type, TCHAN)) {
 			// map has len in the first 32-bit word.
@@ -402,9 +419,9 @@ abop:	// asymmetric binary
 		regalloc(&n2, nr->type, N);
 		cgen(nr, &n2);
 	} else {
-		regalloc(&n2, nr->type, N);
+		regalloc(&n2, nr->type, res);
 		cgen(nr, &n2);
-		regalloc(&n1, nl->type, res);
+		regalloc(&n1, nl->type, N);
 		cgen(nl, &n1);
 	}
 	gins(a, &n2, &n1);

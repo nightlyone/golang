@@ -56,17 +56,25 @@ func run(stdin []byte, argv []string) (stdout, stderr []byte, ok bool) {
 	<-c
 	<-c
 
-	w, err := p.Wait(0)
+	state, err := p.Wait()
 	if err != nil {
 		fatalf("%s", err)
 	}
-	ok = w.Exited() && w.ExitStatus() == 0
+	ok = state.Success()
 	return
+}
+
+func lineno(pos token.Pos) string {
+	return fset.Position(pos).String()
 }
 
 // Die with an error message.
 func fatalf(msg string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, msg+"\n", args...)
+	// If we've already printed other errors, they might have
+	// caused the fatal condition.  Assume they're enough.
+	if nerrors == 0 {
+		fmt.Fprintf(os.Stderr, msg+"\n", args...)
+	}
 	os.Exit(2)
 }
 
