@@ -1,8 +1,0 @@
-bin/go /usr/bin
-bin/goapi /usr/bin
-bin/godoc /usr/bin
-bin/gofix /usr/bin
-bin/gofmt /usr/bin
-bin/goinstall /usr/bin
-bin/govet /usr/bin
-bin/gotype /usr/bin
