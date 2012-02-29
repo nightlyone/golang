@@ -1,3 +1,14 @@
+golang-weekly (2012.02.22-1) unstable; urgency=low
+
+  * Imported Upstream version 2012.02.22
+  * Add custom version of version.sh
+  * Update IPv6 patch to new release
+  * Remove patches obsoleted by new build system (this will need more
+    checking if everything works as expected)
+  * Update lintian-overrides
+
+ -- Ondřej Surý <ondrej@debian.org>  Wed, 29 Feb 2012 11:30:52 +0100
+
 golang-weekly (2012.01.27-2) unstable; urgency=low
 
   * Don't double install ebnflint (Closes: #658062)
