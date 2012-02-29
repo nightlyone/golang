@@ -1,5 +1,4 @@
 pkg /usr/lib/go/
-bin/gopack /usr/bin/
 bin/gotest /usr/bin/
 bin/cgo /usr/bin/
 bin/goyacc /usr/bin/
