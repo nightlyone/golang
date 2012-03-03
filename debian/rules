@@ -32,7 +32,7 @@ override_dh_compress:
 override_dh_install:
 	dh_install --fail-missing
 	for f in $$(find src/cmd -name doc.go ; find src/pkg -name \*.go); do \
-	  install -D -m 0644 $$f debian/$(PACKAGE)-src/$(datadir)/$$f; \
+	  install -p -D -m 0644 $$f debian/$(PACKAGE)-src/$(datadir)/$$f; \
 	done
 
 override_dh_strip:
