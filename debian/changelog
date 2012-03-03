@@ -1,3 +1,9 @@
+golang-weekly (2012.02.22-4) unstable; urgency=low
+
+  * Preserve timestamps on source files (Closes: #658421)
+
+ -- Ondřej Surý <ondrej@debian.org>  Sat, 03 Mar 2012 20:37:23 +0100
+
 golang-weekly (2012.02.22-3) unstable; urgency=low
 
   * Conflict with golang-tools (Closes: #661726)
