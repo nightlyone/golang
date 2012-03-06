@@ -772,6 +772,7 @@ extern	char*	runtimeimport;
 extern	char*	unsafeimport;
 EXTERN	char*	myimportpath;
 EXTERN	Idir*	idirs;
+EXTERN	char*	localimport;
 
 EXTERN	Type*	types[NTYPE];
 EXTERN	Type*	idealstring;
@@ -955,7 +956,7 @@ NodeList*	variter(NodeList *vl, Node *t, NodeList *el);
 /*
  *	esc.c
  */
-void	escapes(void);
+void	escapes(NodeList*);
 
 /*
  *	export.c
@@ -1171,6 +1172,7 @@ Type*	getthisx(Type *t);
 int	implements(Type *t, Type *iface, Type **missing, Type **have, int *ptr);
 void	importdot(Pkg *opkg, Node *pack);
 int	is64(Type *t);
+int	isbadimport(Strlit *s);
 int	isblank(Node *n);
 int	isblanksym(Sym *s);
 int	isfixedarray(Type *t);

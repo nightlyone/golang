@@ -31,8 +31,10 @@ will be easy for other Go programmers to understand.
 
 <p>
 This document gives tips for writing clear, idiomatic Go code.
-It augments the <a href="go_spec.html">language specification</a>
-and the <a href="go_tutorial.html">tutorial</a>, both of which you
+It augments the <a href="/ref/spec">language specification</a>,
+the <a href="http://tour.golang.org/">Tour of Go</a>,
+and <a href="/doc/code.html">How to Write Go Code</a>,
+all of which you
 should read first.
 </p>
 
@@ -67,7 +69,7 @@ With Go we take an unusual
 approach and let the machine
 take care of most formatting issues.
 The <code>gofmt</code> program
-(also available as <code>go tool fmt</code>, which
+(also available as <code>go fmt</code>, which
 operates at the package level rather than source file level)
 reads a Go program
 and emits the source in a standard style of indentation
@@ -1454,7 +1456,7 @@ fmt.Println(fmt.Sprint("Hello ", 23))
 </pre>
 <p>
 As mentioned in
-the <a href="go_tutorial.html">tutorial</a>, <code>fmt.Fprint</code>
+the <a href="http://code.google.com/p/go-tour/">Tour</a>, <code>fmt.Fprint</code>
 and friends take as a first argument any object
 that implements the <code>io.Writer</code> interface; the variables <code>os.Stdout</code>
 and <code>os.Stderr</code> are familiar instances.
@@ -1615,40 +1617,49 @@ Now we have the missing piece we needed to explain the design of
 the <code>append</code> built-in function.  The signature of <code>append</code>
 is different from our custom <code>Append</code> function above.
 Schematically, it's like this:
+</p>
 <pre>
 func append(slice []<i>T</i>, elements...T) []<i>T</i>
 </pre>
+<p>
 where <i>T</i> is a placeholder for any given type.  You can't
 actually write a function in Go where the type <code>T</code>
 is determined by the caller.
 That's why <code>append</code> is built in: it needs support from the
 compiler.
+</p>
 <p>
 What <code>append</code> does is append the elements to the end of
 the slice and return the result.  The result needs to be returned
 because, as with our hand-written <code>Append</code>, the underlying
 array may change.  This simple example
+</p>
 <pre>
 x := []int{1,2,3}
 x = append(x, 4, 5, 6)
 fmt.Println(x)
 </pre>
+<p>
 prints <code>[1 2 3 4 5 6]</code>.  So <code>append</code> works a
 little like <code>Printf</code>, collecting an arbitrary number of
 arguments.
+</p>
 <p>
 But what if we wanted to do what our <code>Append</code> does and
 append a slice to a slice?  Easy: use <code>...</code> at the call
 site, just as we did in the call to <code>Output</code> above.  This
 snippet produces identical output to the one above.
+</p>
 <pre>
 x := []int{1,2,3}
 y := []int{4,5,6}
 x = append(x, y...)
 fmt.Println(x)
 </pre>
+<p>
 Without that <code>...</code>, it wouldn't compile because the types
 would be wrong; <code>y</code> is not of type <code>int</code>.
+</p>
 
 <h2 id="initialization">Initialization</h2>
 

@@ -52,6 +52,13 @@ TEXT runtime·read(SB),7,$0
 	CALL	*runtime·_vdso(SB)
 	RET
 
+TEXT runtime·getrlimit(SB),7,$0
+	MOVL	$191, AX		// syscall - ugetrlimit
+	MOVL	4(SP), BX
+	MOVL	8(SP), CX
+	CALL	*runtime·_vdso(SB)
+	RET
+
 TEXT runtime·usleep(SB),7,$8
 	MOVL	$0, DX
 	MOVL	usec+0(FP), AX
@@ -134,6 +141,18 @@ TEXT runtime·nanotime(SB), 7, $32
 	MOVL	ret+0(FP), DI
 	MOVL	AX, 0(DI)
 	MOVL	DX, 4(DI)
+	RET
+
+TEXT runtime·rtsigprocmask(SB),7,$0
+	MOVL	$175, AX		// syscall entry
+	MOVL	4(SP), BX
+	MOVL	8(SP), CX
+	MOVL	12(SP), DX
+	MOVL	16(SP), SI
+	CALL	*runtime·_vdso(SB)
+	CMPL	AX, $0xfffff001
+	JLS	2(PC)
+	INT $3
 	RET
 
 TEXT runtime·rt_sigaction(SB),7,$0

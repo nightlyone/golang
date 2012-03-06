@@ -8,10 +8,7 @@
 
 #include "zasm_GOOS_GOARCH.h"
 
-// OABI
-//#define SYS_BASE 0x00900000
-
-// EABI
+// for EABI, as we don't support OABI
 #define SYS_BASE 0x0
 
 #define SYS_exit (SYS_BASE + 1)
@@ -23,6 +20,7 @@
 #define SYS_clone (SYS_BASE + 120)
 #define SYS_rt_sigreturn (SYS_BASE + 173)
 #define SYS_rt_sigaction (SYS_BASE + 174)
+#define SYS_rt_sigprocmask (SYS_BASE + 175)
 #define SYS_sigaltstack (SYS_BASE + 186)
 #define SYS_mmap2 (SYS_BASE + 192)
 #define SYS_futex (SYS_BASE + 240)
@@ -35,9 +33,15 @@
 #define SYS_tkill (SYS_BASE + 238)
 #define SYS_sched_yield (SYS_BASE + 158)
 #define SYS_select (SYS_BASE + 142) // newselect
+#define SYS_ugetrlimit (SYS_BASE + 191)
 
 #define ARM_BASE (SYS_BASE + 0x0f0000)
 #define SYS_ARM_cacheflush (ARM_BASE + 2)
+
+TEXT notok<>(SB),7,$0
+	MOVW	$0, R9
+	MOVW	R9, (R9)
+	B   	0(PC)
 
 TEXT runtime·open(SB),7,$0
 	MOVW	0(FP), R0
@@ -66,6 +70,13 @@ TEXT runtime·read(SB),7,$0
 	MOVW	4(FP), R1
 	MOVW	8(FP), R2
 	MOVW	$SYS_read, R7
+	SWI	$0
+	RET
+
+TEXT runtime·getrlimit(SB),7,$0
+	MOVW	0(FP), R0
+	MOVW	4(FP), R1
+	MOVW	$SYS_ugetrlimit, R7
 	SWI	$0
 	RET
 
@@ -103,6 +114,9 @@ TEXT runtime·mmap(SB),7,$0
 	MOVW	20(FP), R5
 	MOVW	$SYS_mmap2, R7
 	SWI	$0
+	MOVW	$0xfffff001, R6
+	CMP		R6, R0
+	RSB.HI	$0, R0
 	RET
 
 TEXT runtime·munmap(SB),7,$0
@@ -110,6 +124,9 @@ TEXT runtime·munmap(SB),7,$0
 	MOVW	4(FP), R1
 	MOVW	$SYS_munmap, R7
 	SWI	$0
+	MOVW	$0xfffff001, R6
+	CMP 	R6, R0
+	BL.HI	notok<>(SB)
 	RET
 
 TEXT runtime·madvise(SB),7,$0
@@ -118,6 +135,9 @@ TEXT runtime·madvise(SB),7,$0
 	MOVW	8(FP), R2
 	MOVW	$SYS_madvise, R7
 	SWI	$0
+	MOVW	$0xfffff001, R6
+	CMP 	R6, R0
+	BL.HI	notok<>(SB)
 	RET
 
 TEXT runtime·setitimer(SB),7,$0
@@ -269,6 +289,9 @@ TEXT runtime·sigaltstack(SB),7,$0
 	MOVW	4(FP), R1
 	MOVW	$SYS_sigaltstack, R7
 	SWI	$0
+	MOVW	$0xfffff001, R6
+	CMP 	R6, R0
+	BL.HI	notok<>(SB)
 	RET
 
 TEXT runtime·sigtramp(SB),7,$24
@@ -290,6 +313,15 @@ TEXT runtime·sigtramp(SB),7,$24
 	// restore g
 	MOVW	20(R13), g
 
+	RET
+
+TEXT runtime·rtsigprocmask(SB),7,$0
+	MOVW	0(FP), R0
+	MOVW	4(FP), R1
+	MOVW	8(FP), R2
+	MOVW	12(FP), R3
+	MOVW	$SYS_rt_sigprocmask, R7
+	SWI	$0
 	RET
 
 TEXT runtime·rt_sigaction(SB),7,$0
@@ -323,8 +355,8 @@ TEXT runtime·usleep(SB),7,$12
 	SWI	$0
 	RET
 
-// Use kernel version instead of native armcas in ../../arm.s.
-// See ../../../sync/atomic/asm_linux_arm.s for details.
+// Use kernel version instead of native armcas in asm_arm.s.
+// See ../sync/atomic/asm_linux_arm.s for details.
 TEXT cas<>(SB),7,$0
 	MOVW	$0xffff0fc0, PC
 

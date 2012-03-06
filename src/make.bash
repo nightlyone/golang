@@ -3,6 +3,29 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
+# Environment variables that control make.bash:
+#
+# GOROOT_FINAL: The expected final Go root, baked into binaries.
+# The default is the location of the Go tree during the build.
+#
+# GOHOSTARCH: The architecture for host tools (compilers and
+# binaries).  Binaries of this type must be executable on the current
+# system, so the only common reason to set this is to set
+# GOHOSTARCH=386 on an amd64 machine.
+#
+# GOARCH: The target architecture for installed packages and tools.
+#
+# GOOS: The target operating system for installed packages and tools.
+#
+# GO_GCFLAGS: Additional 5g/6g/8g arguments to use when
+# building the packages and commands.
+#
+# GO_LDFLAGS: Additional 5l/6l/8l arguments to use when
+# building the packages and commands.
+#
+# CGO_ENABLED: Setting this to 0 disables the use of cgo
+# in the built and installed packages and tools.
+
 set -e
 if [ ! -f run.bash ]; then
 	echo 'make.bash must be run from $GOROOT/src' 1>&2
@@ -66,11 +89,11 @@ echo
 
 if [ "$1" = "--dist-tool" ]; then
 	# Stop after building dist tool.
-	mkdir -p $GOTOOLDIR
+	mkdir -p "$GOTOOLDIR"
 	if [ "$2" != "" ]; then
 		cp cmd/dist/dist "$2"
 	fi
-	mv cmd/dist/dist $GOTOOLDIR/dist
+	mv cmd/dist/dist "$GOTOOLDIR"/dist
 	exit 0
 fi
 
@@ -81,23 +104,23 @@ if [ "$1" = "--no-clean" ]; then
 fi
 ./cmd/dist/dist bootstrap $buildall -v # builds go_bootstrap
 # Delay move of dist tool to now, because bootstrap may clear tool directory.
-mv cmd/dist/dist $GOTOOLDIR/dist
-$GOTOOLDIR/go_bootstrap clean -i std
+mv cmd/dist/dist "$GOTOOLDIR"/dist
+"$GOTOOLDIR"/go_bootstrap clean -i std
 echo
 
 if [ "$GOHOSTARCH" != "$GOARCH" -o "$GOHOSTOS" != "$GOOS" ]; then
 	echo "# Building packages and commands for host, $GOHOSTOS/$GOHOSTARCH."
 	GOOS=$GOHOSTOS GOARCH=$GOHOSTARCH \
-		$GOTOOLDIR/go_bootstrap install -v std
+		"$GOTOOLDIR"/go_bootstrap install -gcflags "$GO_GCFLAGS" -ldflags "$GO_LDFLAGS" -v std
 	echo
 fi
 
 echo "# Building packages and commands for $GOOS/$GOARCH."
-$GOTOOLDIR/go_bootstrap install -v std
+"$GOTOOLDIR"/go_bootstrap install -gcflags "$GO_GCFLAGS" -ldflags "$GO_LDFLAGS" -v std
 echo
 
-rm -f $GOTOOLDIR/go_bootstrap
+rm -f "$GOTOOLDIR"/go_bootstrap
 
 if [ "$1" != "--no-banner" ]; then
-	$GOTOOLDIR/dist banner
+	"$GOTOOLDIR"/dist banner
 fi

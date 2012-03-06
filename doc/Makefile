@@ -6,9 +6,9 @@ HTML=\
 	articles/defer_panic_recover.html\
 	articles/error_handling.html\
 	articles/slices_usage_and_internals.html\
+	articles/laws_of_reflection.html\
 	effective_go.html\
 	go1.html\
-	go_tutorial.html\
 
 all: tmpltohtml $(HTML)
 

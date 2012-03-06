@@ -226,7 +226,7 @@ void
 time·now(int64 sec, int32 usec)
 {
 	int64 ns;
-	
+
 	ns = runtime·nanotime();
 	sec = ns / 1000000000LL;
 	usec = ns - sec * 1000000000LL;
@@ -424,4 +424,16 @@ void
 os·sigpipe(void)
 {
 	runtime·throw("too many writes on closed pipe");
+}
+
+uintptr
+runtime·memlimit(void)
+{
+	return 0;
+}
+
+void
+runtime·setprof(bool on)
+{
+	USED(on);
 }

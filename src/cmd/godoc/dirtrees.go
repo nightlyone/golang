@@ -15,15 +15,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 )
 
+// Conventional name for directories containing test data.
+// Excluded from directory trees.
+//
+const testdataDirName = "testdata"
+
 type Directory struct {
-	Depth int
-	Path  string // includes Name
-	Name  string
-	Text  string       // package documentation, if any
-	Dirs  []*Directory // subdirectories
+	Depth    int
+	Path     string       // directory path; includes Name
+	Name     string       // directory name
+	HasPkg   bool         // true if the directory contains at least one package
+	Synopsis string       // package documentation, if any
+	Dirs     []*Directory // subdirectories
 }
 
 func isGoFile(fi os.FileInfo) bool {
@@ -44,48 +49,13 @@ func isPkgDir(fi os.FileInfo) bool {
 		name[0] != '_' && name[0] != '.' // ignore _files and .files
 }
 
-func firstSentence(s string) string {
-	i := -1 // index+1 of first terminator (punctuation ending a sentence)
-	j := -1 // index+1 of first terminator followed by white space
-	prev := 'A'
-	for k, ch := range s {
-		k1 := k + 1
-		if ch == '.' || ch == '!' || ch == '?' {
-			if i < 0 {
-				i = k1 // first terminator
-			}
-			if k1 < len(s) && s[k1] <= ' ' {
-				if j < 0 {
-					j = k1 // first terminator followed by white space
-				}
-				if !unicode.IsUpper(prev) {
-					j = k1
-					break
-				}
-			}
-		}
-		prev = ch
-	}
-
-	if j < 0 {
-		// use the next best terminator
-		j = i
-		if j < 0 {
-			// no terminator at all, use the entire string
-			j = len(s)
-		}
-	}
-
-	return s[0:j]
-}
-
 type treeBuilder struct {
 	pathFilter func(string) bool
 	maxDepth   int
 }
 
 func (b *treeBuilder) newDirTree(fset *token.FileSet, path, name string, depth int) *Directory {
-	if b.pathFilter != nil && !b.pathFilter(path) {
+	if b.pathFilter != nil && !b.pathFilter(path) || name == testdataDirName {
 		return nil
 	}
 
@@ -93,7 +63,11 @@ func (b *treeBuilder) newDirTree(fset *token.FileSet, path, name string, depth i
 		// return a dummy directory so that the parent directory
 		// doesn't get discarded just because we reached the max
 		// directory depth
-		return &Directory{depth, path, name, "", nil}
+		return &Directory{
+			Depth: depth,
+			Path:  path,
+			Name:  name,
+		}
 	}
 
 	list, err := fs.ReadDir(path)
@@ -176,7 +150,14 @@ func (b *treeBuilder) newDirTree(fset *token.FileSet, path, name string, depth i
 		}
 	}
 
-	return &Directory{depth, path, name, synopsis, dirs}
+	return &Directory{
+		Depth:    depth,
+		Path:     path,
+		Name:     name,
+		HasPkg:   hasPkgFiles,
+		Synopsis: synopsis,
+		Dirs:     dirs,
+	}
 }
 
 // newDirectory creates a new package directory tree with at most maxDepth
@@ -278,9 +259,10 @@ func (dir *Directory) lookup(path string) *Directory {
 type DirEntry struct {
 	Depth    int    // >= 0
 	Height   int    // = DirList.MaxHeight - Depth, > 0
-	Path     string // includes Name, relative to DirList root
-	Name     string
-	Synopsis string
+	Path     string // directory path; includes Name, relative to DirList root
+	Name     string // directory name
+	HasPkg   bool   // true if the directory contains at least one package 
+	Synopsis string // package documentation, if any
 }
 
 type DirList struct {
@@ -335,7 +317,8 @@ func (root *Directory) listing(skipRoot bool) *DirList {
 		}
 		p.Path = path
 		p.Name = d.Name
-		p.Synopsis = d.Text
+		p.HasPkg = d.HasPkg
+		p.Synopsis = d.Synopsis
 		i++
 	}
 
