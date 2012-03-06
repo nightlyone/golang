@@ -1,6 +1,7 @@
 <!--{
 	"Title": "The Go Programming Language Specification",
-	"Subtitle": "Version of February 22, 2012"
+	"Subtitle": "Version of March 1, 2012",
+	"Path": "/ref/spec"
 }-->
 
 <!--
@@ -67,7 +68,7 @@ operators, in increasing precedence:
 
 <p>
 Lower-case production names are used to identify lexical tokens.
-Non-terminals are in CamelCase. Lexical symbols are enclosed in
+Non-terminals are in CamelCase. Lexical tokens are enclosed in
 double quotes <code>""</code> or back quotes <code>``</code>.
 </p>
 
@@ -678,13 +679,14 @@ and <code>T4</code> is <code>[]T1</code>.
 A type may have a <i>method set</i> associated with it
 (§<a href="#Interface_types">Interface types</a>, §<a href="#Method_declarations">Method declarations</a>).
 The method set of an <a href="#Interface_types">interface type</a> is its interface.
-The method set of any other named type <code>T</code>
+The method set of any other type <code>T</code>
 consists of all methods with receiver type <code>T</code>.
 The method set of the corresponding pointer type <code>*T</code>
 is the set of all methods with receiver <code>*T</code> or <code>T</code>
 (that is, it also contains the method set of <code>T</code>).
 Any other type has an empty method set.
-In a method set, each method must have a unique <a href="#MethodName">method name</a>.
+In a method set, each method must have a
+<a href="#Uniqueness_of_identifiers">unique</a> <a href="#MethodName">method name</a>.
 </p>
 
 <p>
@@ -696,10 +698,11 @@ using a receiver of that type.
 
 <h3 id="Boolean_types">Boolean types</h3>
 
+<p>
 A <i>boolean type</i> represents the set of Boolean truth values
 denoted by the predeclared constants <code>true</code>
 and <code>false</code>. The predeclared boolean type is <code>bool</code>.
-
+</p>
 
 <h3 id="Numeric_types">Numeric types</h3>
 
@@ -894,7 +897,7 @@ A struct is a sequence of named elements, called fields, each of which has a
 name and a type. Field names may be specified explicitly (IdentifierList) or
 implicitly (AnonymousField).
 Within a struct, non-<a href="#Blank_identifier">blank</a> field names must
-be unique.
+be <a href="#Uniqueness_of_identifiers">unique</a>.
 </p>
 
 <pre class="ebnf">
@@ -954,7 +957,7 @@ struct {
 <p>
 Fields and methods (§<a href="#Method_declarations">Method declarations</a>) of an anonymous field are
 promoted to be ordinary fields and methods of the struct (§<a href="#Selectors">Selectors</a>).
-The following rules apply for a struct type named <code>S</code> and
+The following rules apply for a struct type <code>S</code> and
 a type named <code>T</code>:
 </p>
 <ul>
@@ -1006,8 +1009,8 @@ BaseType = Type .
 </pre>
 
 <pre>
-*int
-*map[string]*chan int
+*Point
+*[4]int
 </pre>
 
 <h3 id="Function_types">Function types</h3>
@@ -1045,11 +1048,10 @@ may be invoked with zero or more arguments for that parameter.
 
 <pre>
 func()
-func(x int)
-func() int
-func(prefix string, values ...int)
-func(a, b int, z float32) bool
+func(x int) int
+func(a, _ int, z float32) bool
 func(a, b int, z float32) (bool)
+func(prefix string, values ...int)
 func(a, b int, z float64, opt ...interface{}) (success bool)
 func(int, int, float64) (float64, *[]int)
 func(n int) func(p *T)
@@ -1074,7 +1076,8 @@ InterfaceTypeName  = TypeName .
 </pre>
 
 <p>
-As with all method sets, in an interface type, each method must have a unique name.
+As with all method sets, in an interface type, each method must have a
+<a href="#Uniqueness_of_identifiers">unique</a> name.
 </p>
 
 <pre>
@@ -1538,10 +1541,19 @@ the body of any nested function.
 </p>
 
 
+<h3 id="Blank_identifier">Blank identifier</h3>
+
+<p>
+The <i>blank identifier</i>, represented by the underscore character <code>_</code>, may be used in a declaration like
+any other identifier but the declaration does not introduce a new binding.
+</p>
+
+
 <h3 id="Predeclared_identifiers">Predeclared identifiers</h3>
 
 <p>
-The following identifiers are implicitly declared in the universe block:
+The following identifiers are implicitly declared in the
+<a href="#Blocks">universe block</a>:
 </p>
 <pre class="grammar">
 Types:
@@ -1564,27 +1576,30 @@ Functions:
 <h3 id="Exported_identifiers">Exported identifiers</h3>
 
 <p>
-An identifier may be <i>exported</i> to permit access to it from another package
-using a <a href="#Qualified_identifiers">qualified identifier</a>. An identifier
-is exported if both:
+An identifier may be <i>exported</i> to permit access to it from another package.
+An identifier is exported if both:
 </p>
 <ol>
-	<li>the first character of the identifier's name is a Unicode upper case letter (Unicode class "Lu"); and</li>
-	<li>the identifier is declared in the <a href="#Blocks">package block</a> or denotes a field or method of a type
-	    declared in that block.</li>
+	<li>the first character of the identifier's name is a Unicode upper case
+	letter (Unicode class "Lu"); and</li>
+	<li>the identifier is declared in the <a href="#Blocks">package block</a>
+	or it is a <a href="#Struct_types">field name</a> or
+	<a href="#MethodName">method name</a>.</li>
 </ol>
 <p>
 All other identifiers are not exported.
 </p>
 
 
-<h3 id="Blank_identifier">Blank identifier</h3>
+<h3 id="Uniqueness_of_identifiers">Uniqueness of identifiers</h3>
 
 <p>
-The <i>blank identifier</i>, represented by the underscore character <code>_</code>, may be used in a declaration like
-any other identifier but the declaration does not introduce a new binding.
+Given a set of identifiers, an identifier is called <i>unique</i> if it is
+<i>different</i> from every other in the set.
+Two identifiers are different if they are spelled differently, or if they
+appear in different <a href="#Packages">packages</a> and are not
+<a href="Exported_identifiers">exported</a>. Otherwise, they are the same.
 </p>
-
 
 <h3 id="Constant_declarations">Constant declarations</h3>
 
@@ -1832,6 +1847,13 @@ of the expression list.
 If the type is absent and the corresponding expression evaluates to an
 untyped <a href="#Constants">constant</a>, the type of the declared variable
 is as described in §<a href="#Assignments">Assignments</a>.
+</p>
+
+<p>
+Implementation restriction: A compiler may make it illegal to declare a variable
+inside a <a href="#Function_declarations">function body</a> if the variable is
+never used.
+</p>
 
 <h3 id="Short_variable_declarations">Short variable declarations</h3>
 
@@ -1844,8 +1866,8 @@ ShortVarDecl = IdentifierList ":=" ExpressionList .
 </pre>
 
 <p>
-It is a shorthand for a regular variable declaration with
-initializer expressions but no types:
+It is a shorthand for a regular <a href="#Variable_declarations">variable declaration</a>
+with initializer expressions but no types:
 </p>
 
 <pre class="grammar">
@@ -1935,7 +1957,7 @@ is visible only within selectors for that type.
 
 <p>
 For a base type, the non-<a href="#Blank_identifier">blank</a> names of
-methods bound to it must be unique.
+methods bound to it must be <a href="#Uniqueness_of_identifiers">unique</a>.
 If the base type is a <a href="#Struct_types">struct type</a>,
 the non-blank method and field names must be distinct.
 </p>
@@ -2004,7 +2026,8 @@ BasicLit   = int_lit | float_lit | imaginary_lit | char_lit | string_lit .
 <h3 id="Qualified_identifiers">Qualified identifiers</h3>
 
 <p>
-A qualified identifier is a non-<a href="#Blank_identifier">blank</a> identifier qualified by a package name prefix.
+A qualified identifier is a non-<a href="#Blank_identifier">blank</a> identifier
+qualified by a package name prefix.
 </p>
 
 <pre class="ebnf">
@@ -2012,20 +2035,15 @@ QualifiedIdent = [ PackageName "." ] identifier .
 </pre>
 
 <p>
-A qualified identifier accesses an identifier in a separate package.
-The identifier must be <a href="#Exported_identifiers">exported</a> by that
-package, which means that it must begin with a Unicode upper case letter.
+A qualified identifier accesses an identifier in a different package, which
+must be <a href="#Import_declarations">imported</a>.
+The identifier must be <a href="#Exported_identifiers">exported</a> and
+declared in the <a href="#Blocks">package block</a> of that package.
 </p>
 
 <pre>
-math.Sin
+math.Sin	// denotes the Sin function in package math
 </pre>
-
-<!--
-<p>
-<span class="alert">TODO: Unify this section with Selectors - it's the same syntax.</span>
-</p>
--->
 
 <h3 id="Composite_literals">Composite literals</h3>
 
@@ -2329,8 +2347,8 @@ where <code>T</code> is not an interface type,
 <code>x.f</code> denotes the field or method at the shallowest depth
 in <code>T</code> where there
 is such an <code>f</code>.
-If there is not exactly one <code>f</code> with shallowest depth, the selector
-expression is illegal.
+If there is not exactly <a href="#Uniqueness_of_identifiers">one <code>f</code></a>
+with shallowest depth, the selector expression is illegal.
 </li>
 <li>
 For a variable <code>x</code> of type <code>I</code>
@@ -2784,13 +2802,13 @@ var s uint = 33
 var i = 1&lt;&lt;s           // 1 has type int
 var j int32 = 1&lt;&lt;s     // 1 has type int32; j == 0
 var k = uint64(1&lt;&lt;s)   // 1 has type uint64; k == 1&lt;&lt;33
-var m int = 1.0&lt;&lt;s     // legal: 1.0 has type int
-var n = 1.0&lt;&lt;s != 0    // legal: 1.0 has type int; n == false if ints are 32bits in size
-var o = 1&lt;&lt;s == 2&lt;&lt;s   // legal: 1 and 2 have type int; o == true if ints are 32bits in size
+var m int = 1.0&lt;&lt;s     // 1.0 has type int
+var n = 1.0&lt;&lt;s != 0    // 1.0 has type int; n == false if ints are 32bits in size
+var o = 1&lt;&lt;s == 2&lt;&lt;s   // 1 and 2 have type int; o == true if ints are 32bits in size
 var p = 1&lt;&lt;s == 1&lt;&lt;33  // illegal if ints are 32bits in size: 1 has type int, but 1&lt;&lt;33 overflows int
 var u = 1.0&lt;&lt;s         // illegal: 1.0 has type float64, cannot shift
 var v float32 = 1&lt;&lt;s   // illegal: 1 has type float32, cannot shift
-var w int64 = 1.0&lt;&lt;33  // legal: 1.0&lt;&lt;33 is a constant shift expression
+var w int64 = 1.0&lt;&lt;33  // 1.0&lt;&lt;33 is a constant shift expression
 </pre>
 
 <h3 id="Operator_precedence">Operator precedence</h3>
@@ -4238,7 +4256,9 @@ iteration variables as in an <a href="#Assignments">assignment statement</a>.
 </p>
 
 <p>
-The iteration variables may be declared by the "range" clause (<code>:=</code>).
+The iteration variables may be declared by the "range" clause using a form of
+<a href="#Short_variable_declarations">short variable declaration</a>
+(<code>:=</code>).
 In this case their types are set to the types of the respective iteration values
 and their <a href="#Declarations_and_scope">scope</a> ends at the end of the "for"
 statement; they are re-used in each iteration.
@@ -4889,7 +4909,7 @@ a no-op. Calling <code>delete</code> with a nil map causes a
 </p>
 
 
-<h3 id="Complex_numbers">Assembling and disassembling complex numbers</h3>
+<h3 id="Complex_numbers">Manipulating complex numbers</h3>
 
 <p>
 Three functions assemble and disassemble complex numbers.
@@ -5065,11 +5085,12 @@ An implementation may require that all source files for a package inhabit the sa
 <h3 id="Import_declarations">Import declarations</h3>
 
 <p>
-An import declaration states that the source file containing the
-declaration uses identifiers
-<a href="#Exported_identifiers">exported</a> by the <i>imported</i>
-package and enables access to them.  The import names an
-identifier (PackageName) to be used for access and an ImportPath
+An import declaration states that the source file containing the declaration
+depends on functionality of the <i>imported</i> package
+(<a href="#Program_initialization_and_execution">§Program initialization and execution</a>)
+and it enables access to <a href="#Exported_identifiers">exported</a> identifiers
+of that package.
+The import names an identifier (PackageName) to be used for access and an ImportPath
 that specifies the package to be imported.
 </p>
 
@@ -5081,19 +5102,30 @@ ImportPath       = string_lit .
 
 <p>
 The PackageName is used in <a href="#Qualified_identifiers">qualified identifiers</a>
-to access the exported identifiers of the package within the importing source file.
+to access exported identifiers of the package within the importing source file.
 It is declared in the <a href="#Blocks">file block</a>.
 If the PackageName is omitted, it defaults to the identifier specified in the
 <a href="#Package_clause">package clause</a> of the imported package.
 If an explicit period (<code>.</code>) appears instead of a name, all the
-package's exported identifiers will be declared in the current file's
-file block and can be accessed without a qualifier.
+package's exported identifiers declared in that package's
+<a href="#Blocks">package block</a> will be declared in the importing source
+file's file block and can be accessed without a qualifier.
 </p>
 
 <p>
 The interpretation of the ImportPath is implementation-dependent but
 it is typically a substring of the full file name of the compiled
 package and may be relative to a repository of installed packages.
+</p>
+
+<p>
+Implementation restriction: A compiler may restrict ImportPaths to
+non-empty strings using only characters belonging to
+<a href="http://www.unicode.org/versions/Unicode6.0.0/">Unicode's</a>
+L, M, N, P, and S general categories (the Graphic characters without
+spaces) and may also exclude the characters
+<code>!"#$%&amp;'()*,:;&lt;=&gt;?[\]^`{|}</code>
+and the Unicode replacement character U+FFFD.
 </p>
 
 <p>

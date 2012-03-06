@@ -22,3 +22,22 @@ void	runtime·raisesigpipe(void);
 
 #define	NSIG	65
 #define	SI_USER 0
+
+// It's hard to tease out exactly how big a Sigset is, but
+// rt_sigprocmask crashes if we get it wrong, so if binaries
+// are running, this is right.
+typedef struct Sigset Sigset;
+struct Sigset
+{
+	uint32 mask[2];
+};
+void	runtime·rtsigprocmask(int32, Sigset*, Sigset*, int32);
+#define SIG_SETMASK 2
+
+#define RLIMIT_AS 9
+typedef struct Rlimit Rlimit;
+struct Rlimit {
+	uintptr	rlim_cur;
+	uintptr	rlim_max;
+};
+int32	runtime·getrlimit(int32, Rlimit*);

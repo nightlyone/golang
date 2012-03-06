@@ -148,6 +148,7 @@ usage(void)
 	// -y print declarations in cannedimports (used with -d)
 	// -% print non-static initializers
 	// -+ indicate that the runtime is being compiled
+	print("  -D PATH interpret local imports relative to this import path\n");
 	print("  -I DIR search for packages in DIR\n");
 	print("  -L show full path in file:line prints\n");
 	print("  -N disable optimizations\n");
@@ -186,7 +187,7 @@ int
 main(int argc, char *argv[])
 {
 	int i, c;
-	NodeList *l;
+	NodeList *l, *batch;
 	char *p;
 
 #ifdef	SIGBUS	
@@ -238,14 +239,18 @@ main(int argc, char *argv[])
 		myimportpath = EARGF(usage());
 		break;
 
-	case 'I':
-		addidir(EARGF(usage()));
-		break;
-	
 	case 'u':
 		safemode = 1;
 		break;
 
+	case 'D':
+		localimport = EARGF(usage());
+		break;
+
+	case 'I':
+		addidir(EARGF(usage()));
+		break;
+	
 	case 'V':
 		p = expstring();
 		if(strcmp(p, "X:none") == 0)
@@ -390,7 +395,7 @@ main(int argc, char *argv[])
 
 	// Phase 5: escape analysis.
 	if(!debug['N'])
-		escapes();
+		escapes(xtop);
 
 	// Phase 6: Compile top level functions.
 	for(l=xtop; l; l=l->next)
@@ -401,14 +406,17 @@ main(int argc, char *argv[])
 		fninit(xtop);
 
 	// Phase 6b: Compile all closures.
+	// Can generate more closures, so run in batches.
 	while(closures) {
-		l = closures;
+		batch = closures;
 		closures = nil;
-		for(; l; l=l->next) {
-			if (debug['l'])
+		if(debug['l'])
+			for(l=batch; l; l=l->next)
 				inlcalls(l->n);
+		if(!debug['N'])
+			escapes(batch);
+		for(l=batch; l; l=l->next)
 			funccompile(l->n, 1);
-		}
 	}
 
 	// Phase 7: check external declarations.
@@ -513,7 +521,11 @@ islocalname(Strlit *name)
 	   	return 1;
 	if(name->len >= 2 && strncmp(name->s, "./", 2) == 0)
 		return 1;
+	if(name->len == 1 && strncmp(name->s, ".", 1) == 0)
+		return 1;
 	if(name->len >= 3 && strncmp(name->s, "../", 3) == 0)
+		return 1;
+	if(name->len == 2 && strncmp(name->s, "..", 2) == 0)
 		return 1;
 	return 0;
 }
@@ -570,6 +582,13 @@ findpkg(Strlit *name)
 	return 0;
 }
 
+static void
+fakeimport(void)
+{
+	importpkg = mkpkg(strlit("fake"));
+	cannedimports("fake.6", "$$\n");
+}
+
 void
 importfile(Val *f, int line)
 {
@@ -578,7 +597,7 @@ importfile(Val *f, int line)
 	int32 c;
 	int len;
 	Strlit *path;
-	char *cleanbuf;
+	char *cleanbuf, *prefix;
 
 	USED(line);
 
@@ -586,17 +605,19 @@ importfile(Val *f, int line)
 
 	if(f->ctype != CTSTR) {
 		yyerror("import statement not a string");
+		fakeimport();
 		return;
 	}
 
-	if(strlen(f->u.sval->s) != f->u.sval->len) {
-		yyerror("import path contains NUL");
-		errorexit();
+	if(f->u.sval->len == 0) {
+		yyerror("import path is empty");
+		fakeimport();
+		return;
 	}
-	
-	if(strchr(f->u.sval->s, '\\')) {
-		yyerror("import path contains backslash; use slash");
-		errorexit();
+
+	if(isbadimport(f->u.sval)) {
+		fakeimport();
+		return;
 	}
 
 	// The package name main is no longer reserved,
@@ -625,8 +646,16 @@ importfile(Val *f, int line)
 	
 	path = f->u.sval;
 	if(islocalname(path)) {
-		cleanbuf = mal(strlen(pathname) + strlen(path->s) + 2);
-		strcpy(cleanbuf, pathname);
+		if(path->s[0] == '/') {
+			yyerror("import path cannot be absolute path");
+			fakeimport();
+			return;
+		}
+		prefix = pathname;
+		if(localimport != nil)
+			prefix = localimport;
+		cleanbuf = mal(strlen(prefix) + strlen(path->s) + 2);
+		strcpy(cleanbuf, prefix);
 		strcat(cleanbuf, "/");
 		strcat(cleanbuf, path->s);
 		cleanname(cleanbuf);

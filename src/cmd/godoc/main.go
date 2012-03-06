@@ -7,7 +7,7 @@
 // Web server tree:
 //
 //	http://godoc/		main landing page
-//	http://godoc/doc/	serve from $GOROOT/doc - spec, mem, tutorial, etc.
+//	http://godoc/doc/	serve from $GOROOT/doc - spec, mem, etc.
 //	http://godoc/src/	serve files from $GOROOT/src; .go gets pretty-printed
 //	http://godoc/cmd/	serve documentation about commands
 //	http://godoc/pkg/	serve documentation about packages
@@ -99,7 +99,6 @@ func exec(rw http.ResponseWriter, args []string) (status int) {
 		log.Printf("os.StartProcess(%q): %v", bin, err)
 		return 2
 	}
-	defer p.Release()
 
 	var buf bytes.Buffer
 	io.Copy(&buf, r)
@@ -389,9 +388,9 @@ func main() {
 	}
 	relpath := path
 	abspath := path
-	if t, pkg, err := build.FindTree(path); err == nil {
-		relpath = pkg
-		abspath = filepath.Join(t.SrcDir(), pkg)
+	if bp, _ := build.Import(path, "", build.FindOnly); bp.Dir != "" && bp.ImportPath != "" {
+		relpath = bp.ImportPath
+		abspath = bp.Dir
 	} else if !filepath.IsAbs(path) {
 		abspath = absolutePath(path, pkgHandler.fsRoot)
 	} else {
