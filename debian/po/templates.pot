@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: golang-weekly@packages.debian.org\n"
-"POT-Creation-Date: 2012-01-30 16:28+0100\n"
+"POT-Creation-Date: 2012-03-09 09:25+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -19,13 +19,13 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-tools.templates:1001
+#: ../golang-weekly-go.templates:1001
 msgid "Report installation of public packages to Go Dashboard?"
 msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-tools.templates:1001
+#: ../golang-weekly-go.templates:1001
 msgid ""
 "goinstall reports the successful installation of the public packages to "
 "godashboard.appspot.com, which increments a count associated with the "
@@ -36,7 +36,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-tools.templates:1001
+#: ../golang-weekly-go.templates:1001
 msgid ""
 "If you choose to participate, the goinstall will report each successful "
 "installation to the Go Dashboard."
@@ -44,8 +44,8 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-tools.templates:1001
+#: ../golang-weekly-go.templates:1001
 msgid ""
 "This choice can be later modified by running \"dpkg-reconfigure golang-"
-"weekly-tools\"."
+"weekly-go\"."
 msgstr ""
