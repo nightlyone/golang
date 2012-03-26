@@ -646,12 +646,6 @@ walkexpr(Node **np, NodeList **init)
 		n->ninit = nil;
 		l = n->list->n;
 		r = n->list->next->n;
-		if(n->right != N) {
-			// TODO: Remove once two-element map assigment is gone.
-			l = safeexpr(l, init);
-			r = safeexpr(r, init);
-			safeexpr(n->right, init);  // cause side effects from n->right
-		}
 		t = l->type;
 		n = mkcall1(mapfndel("mapdelete", t), t->down, init, typename(t), l, r);
 		goto ret;
@@ -2364,6 +2358,12 @@ append(Node *n, NodeList **init)
 
 	walkexprlistsafe(n->list, init);
 
+	// walkexprlistsafe will leave OINDEX (s[n]) alone if both s
+	// and n are name or literal, but those may index the slice we're
+	// modifying here.  Fix explicitly.
+	for(l=n->list; l; l=l->next)
+		l->n = cheapexpr(l->n, init);
+
 	nsrc = n->list->n;
 	argc = count(n->list) - 1;
 	if (argc < 1) {
@@ -2520,6 +2520,7 @@ walkcompare(Node **np, NodeList **init)
 			expr = nodbool(n->op == OEQ);
 		typecheck(&expr, Erv);
 		walkexpr(&expr, init);
+		expr->type = n->type;
 		*np = expr;
 		return;
 	}
@@ -2540,6 +2541,7 @@ walkcompare(Node **np, NodeList **init)
 			expr = nodbool(n->op == OEQ);
 		typecheck(&expr, Erv);
 		walkexpr(&expr, init);
+		expr->type = n->type;
 		*np = expr;
 		return;
 	}

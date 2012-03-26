@@ -26,9 +26,7 @@ See also: go build.
 func init() {
 	cmdRun.Run = runRun // break init loop
 
-	cmdRun.Flag.BoolVar(&buildA, "a", false, "")
-	cmdRun.Flag.BoolVar(&buildN, "n", false, "")
-	cmdRun.Flag.BoolVar(&buildX, "x", false, "")
+	addBuildFlags(cmdRun)
 }
 
 func printStderr(args ...interface{}) (int, error) {
@@ -44,12 +42,15 @@ func runRun(cmd *Command, args []string) {
 		i++
 	}
 	files, cmdArgs := args[:i], args[i:]
+	if len(files) == 0 {
+		fatalf("go run: no go files listed")
+	}
 	p := goFilesPackage(files)
 	if p.Error != nil {
 		fatalf("%s", p.Error)
 	}
 	if p.Name != "main" {
-		fatalf("cannot run non-main package")
+		fatalf("go run: cannot run non-main package")
 	}
 	p.target = "" // must build - not up to date
 	a1 := b.action(modeBuild, modeBuild, p)

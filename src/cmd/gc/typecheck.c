@@ -190,6 +190,46 @@ typecheck(Node **np, int top)
 	return n;
 }
 
+/*
+ * does n contain a call or receive operation?
+ */
+static int callrecvlist(NodeList*);
+
+static int
+callrecv(Node *n)
+{
+	if(n == nil)
+		return 0;
+	
+	switch(n->op) {
+	case OCALL:
+	case OCALLMETH:
+	case OCALLINTER:
+	case OCALLFUNC:
+	case ORECV:
+		return 1;
+	}
+
+	return callrecv(n->left) ||
+		callrecv(n->right) ||
+		callrecv(n->ntest) ||
+		callrecv(n->nincr) ||
+		callrecvlist(n->ninit) ||
+		callrecvlist(n->nbody) ||
+		callrecvlist(n->nelse) ||
+		callrecvlist(n->list) ||
+		callrecvlist(n->rlist);
+}
+
+static int
+callrecvlist(NodeList *l)
+{
+	for(; l; l=l->next)
+		if(callrecv(l->n))
+			return 1;
+	return 0;
+}
+
 static void
 typecheck1(Node **np, int top)
 {
@@ -995,12 +1035,14 @@ reswitch:
 			}
 			break;
 		case TARRAY:
-			if(t->bound >= 0 && l->op == ONAME) {
-				r = nod(OXXX, N, N);
-				nodconst(r, types[TINT], t->bound);
-				r->orig = n;
-				n = r;
-			}
+			if(t->bound < 0) // slice
+				break;
+			if(callrecv(l)) // has call or receive
+				break;
+			r = nod(OXXX, N, N);
+			nodconst(r, types[TINT], t->bound);
+			r->orig = n;
+			n = r;
 			break;
 		}
 		n->type = types[TINT];
@@ -1664,11 +1706,11 @@ looktypedot(Node *n, Type *t, int dostrcmp)
 	if(t->sym == S && isptr[t->etype])
 		tt = t->type;
 
-	f2 = methtype(tt);
+	f2 = methtype(tt, 0);
 	if(f2 == T)
 		return 0;
 
-	expandmeth(f2->sym, f2);
+	expandmeth(f2);
 	f2 = lookdot1(n, s, f2, f2->xmethod, dostrcmp);
 	if(f2 == T)
 		return 0;
@@ -1712,7 +1754,7 @@ lookdot(Node *n, Type *t, int dostrcmp)
 
 	f2 = T;
 	if(n->left->type == t || n->left->type->sym == S) {
-		f2 = methtype(t);
+		f2 = methtype(t, 0);
 		if(f2 != T) {
 			// Use f2->method, not f2->xmethod: adddot has
 			// already inserted all the necessary embedded dots.
@@ -1964,7 +2006,7 @@ keydup(Node *n, Node *hash[], ulong nhash)
 		b = cmp.val.u.bval;
 		if(b) {
 			// too lazy to print the literal
-			yyerror("duplicate key in map literal");
+			yyerror("duplicate key %N in map literal", n);
 			return;
 		}
 	}

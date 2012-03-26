@@ -14,6 +14,7 @@ The commands are:
     build       compile packages and dependencies
     clean       remove object files
     doc         run godoc on package sources
+    env         print Go environment information
     fix         run go tool fix on packages
     fmt         run gofmt on package sources
     get         download and install packages and dependencies
@@ -76,6 +77,8 @@ The build flags are shared by the build, install, run, and test commands:
 	-x
 		print the commands.
 
+	-compiler name
+		name of compiler to use, as in runtime.Compiler (gccgo or gc)
 	-gccgoflags 'arg list'
 		arguments to pass on each gccgo compiler/linker invocation
 	-gcflags 'arg list'
@@ -153,6 +156,20 @@ To run godoc with specific options, run godoc itself.
 See also: go fix, go fmt, go vet.
 
 
+Print Go environment information
+
+Usage:
+
+	go env [var ...]
+
+Env prints Go environment information.
+
+By default env prints information as a shell script
+(on Windows, a batch file).  If one or more variable
+names is given as arguments,  env prints the value of
+each named variable on its own line.
+
+
 Run go tool fix on packages
 
 Usage:
@@ -196,7 +213,7 @@ Get downloads and installs the packages named by the import paths,
 along with their dependencies.
 
 The -a, -n, -v, -x, and -p flags have the same meaning as in 'go build'
-and 'go install'.  See 'go help install'.
+and 'go install'.  See 'go help build'.
 
 The -d flag instructs get to stop after downloading the packages; that is,
 it instructs get not to install the packages.
@@ -253,21 +270,28 @@ is equivalent to -f '{{.ImportPath}}'.  The struct
 being passed to the template is:
 
     type Package struct {
+        Dir        string // directory containing package sources
+        ImportPath string // import path of package in dir
         Name       string // package name
         Doc        string // package documentation string
-        ImportPath string // import path of package in dir
-        Dir        string // directory containing package sources
-        Version    string // version of installed package (TODO)
+        Target     string // install path
+        Goroot     bool   // is this package in the Go root?
+        Standard   bool   // is this package part of the standard Go library?
         Stale      bool   // would 'go install' do anything for this package?
+        Root       string // Go root or Go path dir containing this package
 
         // Source files
-        GoFiles      []string // .go source files (excluding CgoFiles, TestGoFiles, and XTestGoFiles)
-        TestGoFiles  []string // _test.go source files internal to the package they are testing
-        XTestGoFiles []string // _test.go source files external to the package they are testing
-        CFiles       []string // .c source files
-        HFiles       []string // .h source files
-        SFiles       []string // .s source files
-        CgoFiles     []string // .go sources files that import "C"
+        GoFiles  []string  // .go source files (excluding CgoFiles, TestGoFiles, XTestGoFiles)
+        CgoFiles []string  // .go sources files that import "C"
+        CFiles   []string  // .c source files
+        HFiles   []string  // .h source files
+        SFiles   []string  // .s source files
+        SysoFiles []string // .syso object files to add to archive
+
+        // Cgo directives
+        CgoCFLAGS    []string // cgo: flags for C compiler
+        CgoLDFLAGS   []string // cgo: flags for linker
+        CgoPkgConfig []string // cgo: pkg-config names
 
         // Dependency information
         Imports []string // import paths used by this package
@@ -275,8 +299,13 @@ being passed to the template is:
 
         // Error information
         Incomplete bool            // this package or a dependency has an error
-        Error *PackageError        // error loading package
+        Error      *PackageError   // error loading package
         DepsErrors []*PackageError // errors loading dependencies
+
+        TestGoFiles  []string // _test.go files in package
+        TestImports  []string // imports from TestGoFiles
+        XTestGoFiles []string // _test.go files outside package
+        XTestImports []string // imports from XTestGoFiles
     }
 
 The -json flag causes the package data to be printed in JSON format
@@ -479,9 +508,8 @@ An import path is a pattern if it includes one or more "..." wildcards,
 each of which can match any string, including the empty string and
 strings containing slashes.  Such a pattern expands to all package
 directories found in the GOPATH trees with names matching the
-patterns.  For example, encoding/... expands to all packages
-in subdirectories of the encoding tree, while net... expands to
-net and all its subdirectories.
+patterns.  As a special case, x/... matches x as well as x's subdirectories.
+For example, net/... expands to net and packages in its subdirectories.
 
 An import path can also name a package to be downloaded from
 a remote repository.  Run 'go help remote' for details.
@@ -535,7 +563,12 @@ A few common code hosting sites have special syntax:
 		import "launchpad.net/~user/project/branch"
 		import "launchpad.net/~user/project/branch/sub/directory"
 
-For code hosted on other servers, an import path of the form
+For code hosted on other servers, import paths may either be qualified
+with the version control type, or the go tool can dynamically fetch
+the import path over https/http and discover where the code resides
+from a <meta> tag in the HTML.
+
+To declare the code location, an import path of the form
 
 	repository.vcs/path
 
@@ -563,6 +596,42 @@ example.com/repo or repo.git.
 When a version control system supports multiple protocols,
 each is tried in turn when downloading.  For example, a Git
 download tries git://, then https://, then http://.
+
+If the import path is not a known code hosting site and also lacks a
+version control qualifier, the go tool attempts to fetch the import
+over https/http and looks for a <meta> tag in the document's HTML
+<head>.
+
+The meta tag has the form:
+
+	<meta name="go-import" content="import-prefix vcs repo-root">
+
+The import-prefix is the import path correponding to the repository
+root. It must be a prefix or an exact match of the package being
+fetched with "go get". If it's not an exact match, another http
+request is made at the prefix to verify the <meta> tags match.
+
+The vcs is one of "git", "hg", "svn", etc,
+
+The repo-root is the root of the version control system
+containing a scheme and not containing a .vcs qualifier.
+
+For example,
+
+	import "example.org/pkg/foo"
+
+will result in the following request(s):
+
+	https://example.org/pkg/foo?go-get=1 (preferred)
+	http://example.org/pkg/foo?go-get=1  (fallback)
+
+If that page contains the meta tag
+
+	<meta name="go-import" content="example.org git https://code.org/r/p/exproj">
+
+the go tool will verify that https://example.org/?go-get=1 contains the
+same meta tag and then git clone https://code.org/r/p/exproj into
+GOPATH/src/example.org.
 
 New downloaded packages are written to the first directory
 listed in the GOPATH environment variable (see 'go help gopath').

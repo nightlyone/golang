@@ -5,9 +5,10 @@
 <div class="left">
 
 <div id="learn">
+<img class="icon share" src="/doc/share.png" alt="View full screen" title="View full screen">
 <div class="rootHeading">Try Go</div>
 <div class="input">
-<textarea spellcheck="false" id="code">// You can edit this code!
+<textarea spellcheck="false" class="code">// You can edit this code!
 // Click here and start typing.
 package main
 
@@ -17,14 +18,26 @@ func main() {
 	fmt.Println("Hello, 世界")
 }</textarea>
 </div>
-<div class="output" id="output">
+<div class="output">
 <pre>
 Hello, 世界
 </pre>
 </div>
 <div class="buttons">
-<a id="run" href="#">Run</a>
-<a id="share" href="#">Share</a>
+<a class="run" href="#" title="Run this code [shift-enter]">Run</a>
+<a class="share" href="#" title="Share this code">Share</a>
+<a class="tour" href="http://tour.golang.org/" title="Learn Go from your browser">Tour</a>
+</div>
+<div class="toys">
+<select>
+	<option value="hello.go">Hello, World!</option>
+	<option value="fib.go">Fibonacci Closure</option>
+	<option value="peano.go">Peano Integers</option>
+	<option value="pi.go">Concurrent pi</option>
+	<option value="sieve.go">Concurrent Prime Sieve</option>
+	<option value="solitaire.go">Peg Solitaire Solver</option>
+	<option value="tree.go">Tree Comparison</option>
+</select>
 </div>
 </div>
 
@@ -39,7 +52,7 @@ simple, reliable, and efficient software.
 
 <div id="gopher"></div>
 
-<a href="/install/" id="start">
+<a href="/doc/install" id="start">
 <div class="big">Download Go</div>
 <div class="desc">
 Binary distributions available for<br>
@@ -71,8 +84,6 @@ Linux, Mac OS X, Windows, and more.
 </div>
 
 <div style="clear: both;"></div>
-
-<div id="plusoneRoot"><g:plusone annotation="none"></g:plusone></div>
 
 <script type="text/javascript" src="https://www.google.com/jsapi"></script>
 <script type="text/javascript" src="/doc/play/playground.js"></script>
@@ -114,11 +125,12 @@ function init() {
 	// Set up playground.
 	playground({
 		"simple":        true,
-		"codeEl":        "#code",
-		"outputEl":      "#output",
-		"runEl":         "#run",
-		"shareEl":       "#share",
-		"shareRedirect": "http://play.golang.org/p/"
+		"codeEl":        "#learn .code",
+		"outputEl":      "#learn .output",
+		"runEl":         "#learn .run",
+		"shareEl":       "#learn .share",
+		"shareRedirect": "http://play.golang.org/p/",
+		"toysEl":        "#learn .toys select"
 	});
 }
 

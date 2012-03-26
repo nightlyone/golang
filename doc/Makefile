@@ -2,18 +2,24 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
-HTML=\
-	articles/defer_panic_recover.html\
-	articles/error_handling.html\
-	articles/slices_usage_and_internals.html\
-	articles/laws_of_reflection.html\
-	effective_go.html\
-	go1.html\
+RAWHTML=\
+	articles/defer_panic_recover.rawhtml\
+	articles/error_handling.rawhtml\
+	articles/slices_usage_and_internals.rawhtml\
+	articles/laws_of_reflection.rawhtml\
+	articles/c_go_cgo.rawhtml\
+	articles/go_concurrency_patterns_timing_out_moving_on.rawhtml\
+	articles/godoc_documenting_go_code.rawhtml\
+	articles/gobs_of_data.rawhtml\
+	articles/json_and_go.rawhtml\
+	articles/image_draw.rawhtml\
+	effective_go.rawhtml\
+	go1.rawhtml\
 
-all: tmpltohtml $(HTML)
+all: $(RAWHTML)
 
-tmpltohtml: tmpltohtml.go
-	go build tmpltohtml.go
+%.rawhtml: %.html
+	godoc -url /doc/$< >$@
 
-%.html: %.tmpl tmpltohtml
-	./makehtml $*.tmpl
+clean:
+	rm -f $(RAWHTML)

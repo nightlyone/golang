@@ -5,9 +5,11 @@
 
 set -e
 
-eval $(go tool dist env)
+eval $(go env)
 
 unset CDPATH	# in case user has it set
+unset GOPATH    # we disallow local import for non-local packages, if $GOROOT happens
+                # to be under $GOPATH, then some tests below will fail
 
 # no core files, please
 ulimit -c 0
@@ -26,8 +28,8 @@ echo '# Testing packages.'
 time go test std -short -timeout=120s
 echo
 
-echo '# runtime -cpu=1,2,4'
-go test runtime -short -timeout=120s -cpu=1,2,4
+echo '# GOMAXPROCS=2 runtime -cpu=1,2,4'
+GOMAXPROCS=2 go test runtime -short -timeout=240s -cpu=1,2,4
 echo
 
 echo '# sync -cpu=10'
@@ -35,40 +37,30 @@ go test sync -short -timeout=120s -cpu=10
 
 xcd() {
 	echo
-	echo --- cd $1
+	echo '#' $1
 	builtin cd "$GOROOT"/src/$1
 }
 
-BROKEN=true
-
-$BROKEN ||
 [ "$CGO_ENABLED" != 1 ] ||
 [ "$GOHOSTOS" == windows ] ||
 (xcd ../misc/cgo/stdio
-"$GOMAKE" clean
 ./test.bash
 ) || exit $?
 
-$BROKEN ||
 [ "$CGO_ENABLED" != 1 ] ||
 (xcd ../misc/cgo/life
-"$GOMAKE" clean
 ./test.bash
 ) || exit $?
 
-$BROKEN ||
 [ "$CGO_ENABLED" != 1 ] ||
 (xcd ../misc/cgo/test
-"$GOMAKE" clean
-gotest
+go test
 ) || exit $?
 
-$BROKEN ||
 [ "$CGO_ENABLED" != 1 ] ||
 [ "$GOHOSTOS" == windows ] ||
 [ "$GOHOSTOS" == darwin ] ||
 (xcd ../misc/cgo/testso
-"$GOMAKE" clean
 ./test.bash
 ) || exit $?
 
@@ -76,37 +68,32 @@ $BROKEN ||
 time ./run
 ) || exit $?
 
-$BROKEN ||
 [ "$GOARCH" == arm ] ||  # uses network, fails under QEMU
-(xcd ../doc/codelab/wiki
-"$GOMAKE" clean
-"$GOMAKE"
-"$GOMAKE" test
+(xcd ../doc/articles/wiki
+make clean
+./test.bash
 ) || exit $?
 
-$BROKEN ||
-for i in ../misc/dashboard/builder ../misc/goplay
-do
-	(xcd $i
-	"$GOMAKE" clean
-	"$GOMAKE"
-	) || exit $?
-done
+echo
+echo '#' ../misc/dashboard/builder ../misc/goplay
+go build ../misc/dashboard/builder ../misc/goplay
 
-$BROKEN ||
 [ "$GOARCH" == arm ] ||
 (xcd ../test/bench/shootout
 ./timing.sh -test
 ) || exit $?
 
-$BROKEN ||
-(xcd ../test/bench/go1
-"$GOMAKE" test
-) || exit $?
+echo
+echo '#' ../test/bench/go1
+go test ../test/bench/go1
 
 (xcd ../test
-./run
+time go run run.go
 ) || exit $?
+
+echo
+echo '# Checking API compatibility.'
+go tool api -c $GOROOT/api/go1.txt
 
 echo
 echo ALL TESTS PASSED

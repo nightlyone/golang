@@ -5,6 +5,8 @@
 
 set -e
 
+goos=$(go env GOOS)
+
 defer_panic_recover="
 	defer
 	defer2
@@ -23,14 +25,48 @@ error_handling="
 	error4
 "
 
-all=$(echo $defer_panic_recover  $effective_go $error_handling slices go1)
+law_of_reflection="
+	interface
+	interface2
+"
+
+c_go_cgo="
+	cgo1
+	cgo2
+	cgo3
+	cgo4
+"
+# cgo1 and cgo2 don't run on freebsd, srandom has a different signature
+if [ "$goos" == "freebsd" ]; then
+	c_go_cgo="cgo3 cgo4"
+fi
+
+timeout="
+	timeout1
+	timeout2
+"
+
+gobs="
+	gobs1
+	gobs2
+"
+
+json="
+	json1
+	json2
+	json3
+	json4
+	json5
+"
+
+all=$(echo $defer_panic_recover $effective_go $error_handling $law_of_reflection $c_go_cgo $timeout $gobs $json slices go1)
 
 for i in $all; do
 	go build $i.go
 done
 
 # Write to temporary file to avoid mingw bash bug.
-TMPFILE="/tmp/gotest3.$USER"
+TMPFILE="${TMPDIR:-/tmp}/gotest3.$USER"
 
 function testit {
 	./$1 >"$TMPFILE" 2>&1 || true
@@ -49,5 +85,11 @@ testit eff_bytesize '^1.00YB 9.09TB$'
 testit eff_sequence '^\[-1 2 6 16 44\]$'
 
 testit go1 '^Christmas is a holiday: true Sleeping for 0.123s.*go1.go already exists$'
+
+testit interface2 "^type: float64$"
+testit json1 "^$"
+testit json2 "the reciprocal of i is"
+testit json3 "Age is int 6"
+testit json4 "^$"
 
 rm -f $all "$TMPFILE"

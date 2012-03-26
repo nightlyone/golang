@@ -76,20 +76,6 @@ The logo and mascot are covered by the
 license.
 </p>
 
-<h3 id="What_kind_of_a_name_is_6g">
-What kind of a name is 6g?</h3>
-
-<p>
-The <code>6g</code> (and <code>8g</code> and <code>5g</code>) compiler is named in the
-tradition of the Plan 9 C compilers, described in
-<a href="http://plan9.bell-labs.com/sys/doc/compiler.html">
-http://plan9.bell-labs.com/sys/doc/compiler.html</a>
-(see the table in section 2).
-
-<code>6</code> is the architecture letter for amd64 (or x86-64, if you prefer), while
-<code>g</code> stands for Go.
-</p>
-
 <h3 id="history">
 What is the history of the project?</h3>
 <p>
@@ -201,8 +187,8 @@ document server running in a production configuration on
 Do Go programs link with C/C++ programs?</h3>
 
 <p>
-There are two Go compiler implementations, <code>6g</code> and friends, 
-generically called <code>gc</code>, and <code>gccgo</code>.
+There are two Go compiler implementations, <code>gc</code>
+(the <code>6g</code> program and friends) and <code>gccgo</code>.
 <code>Gc</code> uses a different calling convention and linker and can
 therefore only be linked with C programs using the same convention.
 There is such a C compiler but no C++ compiler. 
@@ -320,10 +306,9 @@ exceptional.
 <p>
 Go takes a different approach.  For plain error handling, Go's multi-value
 returns make it easy to report an error without overloading the return value.
-<a href="http://blog.golang.org/2011/07/error-handling-and-go.html">A
-canonical error type, coupled
-with Go's other features</a>, makes error
-handling pleasant but quite different from that in other languages.
+<a href="/doc/articles/error_handling.html">A canonical error type, coupled
+with Go's other features</a>, makes error handling pleasant but quite different
+from that in other languages.
 </p>
 
 <p>
@@ -336,7 +321,7 @@ when used well, can result in clean error-handling code.
 </p>
 
 <p>
-See the <a href="http://blog.golang.org/2010/08/defer-panic-and-recover.html">Defer, Panic, and Recover</a> article for details.
+See the <a href="/doc/articles/defer_panic_recover.html">Defer, Panic, and Recover</a> article for details.
 </p>
 
 <h3 id="assertions">
@@ -1009,7 +994,7 @@ Why is <code>int</code> 32 bits on 64 bit machines?</h3>
 <p>
 The sizes of <code>int</code> and <code>uint</code> are implementation-specific
 but the same as each other on a given platform.
-The 64 bit Go compilers (both 6g and gccgo) use a 32 bit representation for
+The 64 bit Go compilers (both gc and gccgo) use a 32 bit representation for
 <code>int</code>.  Code that relies on a particular
 size of value should use an explicitly sized type, like <code>int64</code>.
 On the other hand, floating-point scalars and complex
@@ -1317,8 +1302,7 @@ table-driven, iterating over a list of inputs and outputs defined
 in a data structure (Go has excellent support for data structure literals).
 The work to write a good test and good error messages will then be amortized over many
 test cases. The standard Go library is full of illustrative examples, such as in
-<a href="http://golang.org/src/pkg/fmt/fmt_test.go">the formatting
-tests for the <code>fmt</code> package</a>.
+<a href="/src/pkg/fmt/fmt_test.go">the formatting tests for the <code>fmt</code> package</a>.
 </p>
 
 
@@ -1333,21 +1317,21 @@ standard GCC back end. <code>Gc</code> is written in C using
 <code>yacc</code>/<code>bison</code> for the parser.
 Although it's a new program, it fits in the Plan 9 C compiler suite
 (<a href="http://plan9.bell-labs.com/sys/doc/compiler.html">http://plan9.bell-labs.com/sys/doc/compiler.html</a>)
-and uses a variant of the Plan 9 loader to generate ELF binaries.
+and uses a variant of the Plan 9 loader to generate ELF/Mach-O/PE binaries.
 </p>
 
 <p>
-We considered writing <code>6g</code>, the original Go compiler, in Go itself but
+We considered writing <code>gc</code>, the original Go compiler, in Go itself but
 elected not to do so because of the difficulties of bootstrapping and
 especially of open source distribution&mdash;you'd need a Go compiler to
 set up a Go environment. <code>Gccgo</code>, which came later, makes it possible to
 consider writing a compiler in Go, which might well happen. (Go would be a
 fine language in which to implement a compiler; a native lexer and
-parser are already available in <a href="/pkg/go/"><code>/pkg/go</code></a>.)
+parser are already available in the <a href="/pkg/go/"><code>go</code></a> package.)
 </p>
 
 <p>
-We also considered using LLVM for <code>6g</code> but we felt it was too large and
+We also considered using LLVM for <code>gc</code> but we felt it was too large and
 slow to meet our performance goals.
 </p>
 
@@ -1377,9 +1361,11 @@ type checks, reflection, and even panic-time stack traces.
 </p>
 
 <p>
-A trivial C "hello, world" program compiled and linked statically using gcc
-on Linux is around 750 kB.  An equivalent Go program using <code>fmt.Printf</code>
-is around 1.3 MB, but
+A simple C "hello, world" program compiled and linked statically using gcc
+on Linux is around 750 kB,
+including an implementation of <code>printf</code>.
+An equivalent Go program using <code>fmt.Printf</code>
+is around 1.2 MB, but
 that includes more powerful run-time support.
 </p>
 
@@ -1538,7 +1524,7 @@ and <code>chan</code> keep things clear.
 
 <p>
 See the article about
-<a href="http://blog.golang.org/2010/07/gos-declaration-syntax.html">Go's Declaration Syntax</a>
+<a href="/doc/articles/gos_declaration_syntax.html">Go's Declaration Syntax</a>
 for more details.
 </p>
 
@@ -1588,7 +1574,7 @@ appear on a line by itself.
 Some have argued that the lexer should do lookahead to permit the
 brace to live on the next line.  We disagree.  Since Go code is meant
 to be formatted automatically by
-<a href="http://golang.org/cmd/gofmt/"><code>gofmt</code></a>,
+<a href="/cmd/gofmt/"><code>gofmt</code></a>,
 <i>some</i> style must be chosen.  That style may differ from what
 you've used in C or Java, but Go is a new language and
 <code>gofmt</code>'s style is as good as any other.  More
