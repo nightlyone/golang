@@ -1,3 +1,24 @@
+golang-weekly (2012.03.22-1) UNRELEASED; urgency=low
+
+  * Debconf templates and debian/control reviewed by the debian-l10n-
+    english team as part of the Smith review project. (Closes: #658415)
+  * [Debconf translation updates]
+  * Polish (Michał Kułach).  (Closes: #661896,#663205)
+  * Danish (Joe Hansen).  (Closes: #661951, #664232)
+  * Swedish (Martin Bagge / brother).  (Closes: #661966)
+  * Russian (Yuri Kozlov).  (Closes: #661981, #663489)
+  * German (Chris Leick).  (Closes: #662873)
+  * French (François LANKAR).  (Closes: #662912)
+  * Dutch; (Jeroen Schot).  (Closes: #663559)
+  * Italian (Beatrice Torracca).  (Closes: #664136)
+  * Portuguese (Pedro Ribeiro).  (Closes: #664273)
+  * Portuguese (Pedro Ribeiro).  (Closes: #664273)
+  * Czech (Michal Simunek).  (Closes: #664452)
+  * Install sources for cmd tree as well (Closes: #658421)
+  * Imported Upstream version 2012.03.22
+
+ -- Ondřej Surý <ondrej@debian.org>  Mon, 26 Mar 2012 16:51:57 +0200
+
 golang-weekly (2012.03.04-1) unstable; urgency=low
 
   * Imported Upstream version 2012.03.04
