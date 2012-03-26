@@ -1,26 +1,27 @@
-# German debconf translation of golang-weekly.
+# Italian description of golang-weekly debconf messages.
+# Copyright (C) 2012, golang-weekly package copyright holder.
 # This file is distributed under the same license as the golang-weekly package.
-# Copyright (C) 2009, 2010, The Go Authors.
-# Copyright (C) of this file 2012 Chris Leick <c.leick@vollbio.de>.
-#
+# Beatrice Torracca <beatricet@libero.it>, 2012.
 msgid ""
 msgstr ""
-"Project-Id-Version: golang-weekly 2012.01.27-3\n"
+"Project-Id-Version: golang-weekly\n"
 "Report-Msgid-Bugs-To: golang-weekly@packages.debian.org\n"
 "POT-Creation-Date: 2012-03-01 07:32+0100\n"
-"PO-Revision-Date: 2012-03-01 18:44+0100\n"
-"Last-Translator: Chris Leick <c.leick@vollbio.de>\n"
-"Language-Team: German <debian-l10n-german@lists.debian.org>\n"
-"Language: de\n"
+"PO-Revision-Date: 2012-03-15 20:28+0200\n"
+"Last-Translator: Beatrice Torracca <beatricet@libero.it>\n"
+"Language-Team: Italian <debian-l10n-italian@lists.debian.org>\n"
+"Language: it\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Generator: Virtaal 0.7.1\n"
 
 #. Type: boolean
 #. Description
 #: ../golang-weekly-tools.templates:2001
 msgid "Report installation of public packages to Go Dashboard?"
-msgstr "Installation öffentlicher Pakete an das Go Dashboard melden?"
+msgstr "Segnalare a Go Dashboard l'installazione di pacchetti pubblici?"
 
 #. Type: boolean
 #. Description
@@ -32,12 +33,12 @@ msgid ""
 "mechanism powers the package list at the Go Dashboard, allowing Go "
 "programmers to learn about popular packages that might be worth looking at."
 msgstr ""
-"Das Programm Goinstall meldet die erfolgreiche Installation der öffentlichen "
-"Go-Pakete an godashboard.appspot.com, das einen Zähler erhöht, der mit dem "
-"Paket verbunden ist sowie die Zeit der aktuellsten Installation. Dieser "
-"Mechanismus befeuert die Paketliste auf dem Go Dashboard, die es Go-"
-"Programmierern ermöglicht, etwas über populäre Pakete zu lernen, die es Wert "
-"sind, einen Blick darauf zu werfen."
+"Il programma goinstall segnala le installazioni dei pacchetti pubblici Go "
+"avvenute con successo a godashboard.appshot.com, che incrementa un contatore "
+"associato con il pacchetto e aggiorna l'orario della sua installazione più "
+"recente. Questo meccanismo è alla base dell'elenco dei pacchetti di Go "
+"Dashboard e permette ai programmatori Go di conoscere i pacchetti popolari "
+"che vale la pena tenere d'occhio."
 
 #. Type: boolean
 #. Description
@@ -46,8 +47,8 @@ msgid ""
 "If you choose to participate, each successful installation will be reported "
 "to the Go Dashboard."
 msgstr ""
-"Falls Sie auswählen teilzunehmen, wird jede erfolgreiche Installation an das "
-"Go Dashboard gemeldet."
+"Se si sceglie di partecipare, ogni installazione avvenuta con successo sarà "
+"segnalata a Go Dashboard."
 
 #. Type: boolean
 #. Description
@@ -56,5 +57,5 @@ msgid ""
 "This choice can be modified by running \"dpkg-reconfigure golang-weekly-tools"
 "\"."
 msgstr ""
-"Diese Auswahl kann durch Ausführen von »dpkg-reconfigure golang-weekly-"
-"tools« geändert werden."
+"Questa scelta può essere modificata eseguendo «dpkg-reconfigure golang-"
+"weekly-tools»."

@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: golang-weekly 2012.01.27-3\n"
 "Report-Msgid-Bugs-To: golang-weekly@packages.debian.org\n"
-"POT-Creation-Date: 2012-03-09 09:25+0100\n"
+"POT-Creation-Date: 2012-03-01 07:32+0100\n"
 "PO-Revision-Date: 2012-03-03 12:36+0400\n"
 "Last-Translator: Yuri Kozlov <yuray@komyakino.ru>\n"
 "Language-Team: Russian <debian-l10n-russian@lists.debian.org>\n"
@@ -20,27 +20,19 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-go.templates:1001
+#: ../golang-weekly-tools.templates:2001
 msgid "Report installation of public packages to Go Dashboard?"
 msgstr "Сообщать об установке общедоступных пакетов в Go Dashboard?"
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-go.templates:1001
-#, fuzzy
-#| msgid ""
-#| "The goinstall program reports the successful installation of the public "
-#| "Go packages to godashboard.appspot.com, which increments a count "
-#| "associated with the package and the time of its most recent installation. "
-#| "This mechanism powers the package list at the Go Dashboard, allowing Go "
-#| "programmers to learn about popular packages that might be worth looking "
-#| "at."
+#: ../golang-weekly-tools.templates:2001
 msgid ""
-"goinstall reports the successful installation of the public packages to "
-"godashboard.appspot.com, which increments a count associated with the "
-"package and the time of its most recent installation.  This mechanism powers "
-"the package list at the Go Dashboard, allowing Go programmers to learn about "
-"popular packages that might be worth looking at."
+"The goinstall program reports the successful installation of the public Go "
+"packages to godashboard.appspot.com, which increments a count associated "
+"with the package and the time of its most recent installation. This "
+"mechanism powers the package list at the Go Dashboard, allowing Go "
+"programmers to learn about popular packages that might be worth looking at."
 msgstr ""
 "Программа goinstall отправляет информацию об успешной установке "
 "общедоступных пакетов Go на сайт godashboard.appspot.com, что увеличивает "
@@ -51,28 +43,20 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-go.templates:1001
-#, fuzzy
-#| msgid ""
-#| "If you choose to participate, each successful installation will be "
-#| "reported to the Go Dashboard."
+#: ../golang-weekly-tools.templates:2001
 msgid ""
-"If you choose to participate, the goinstall will report each successful "
-"installation to the Go Dashboard."
+"If you choose to participate, each successful installation will be reported "
+"to the Go Dashboard."
 msgstr ""
 "Если вы ответите утвердительно, то о каждой успешной установке будет "
 "сообщено Go Dashboard."
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-go.templates:1001
-#, fuzzy
-#| msgid ""
-#| "This choice can be modified by running \"dpkg-reconfigure golang-weekly-go"
-#| "\"."
+#: ../golang-weekly-tools.templates:2001
 msgid ""
-"This choice can be later modified by running \"dpkg-reconfigure golang-"
-"weekly-go\"."
+"This choice can be modified by running \"dpkg-reconfigure golang-weekly-tools"
+"\"."
 msgstr ""
 "Данный ответ можно изменить с помощью команды «dpkg-reconfigure golang-"
-"weekly-go»."
+"weekly-tools»."

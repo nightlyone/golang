@@ -6,9 +6,9 @@
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: PACKAGE VERSION\n"
+"Project-Id-Version: golang-weekly\n"
 "Report-Msgid-Bugs-To: golang-weekly@packages.debian.org\n"
-"POT-Creation-Date: 2012-03-09 09:25+0100\n"
+"POT-Creation-Date: 2012-03-01 07:32+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -19,33 +19,33 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-go.templates:1001
+#: ../golang-weekly-tools.templates:2001
 msgid "Report installation of public packages to Go Dashboard?"
 msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-go.templates:1001
+#: ../golang-weekly-tools.templates:2001
 msgid ""
-"goinstall reports the successful installation of the public packages to "
-"godashboard.appspot.com, which increments a count associated with the "
-"package and the time of its most recent installation.  This mechanism powers "
-"the package list at the Go Dashboard, allowing Go programmers to learn about "
-"popular packages that might be worth looking at."
+"The goinstall program reports the successful installation of the public Go "
+"packages to godashboard.appspot.com, which increments a count associated "
+"with the package and the time of its most recent installation. This "
+"mechanism powers the package list at the Go Dashboard, allowing Go "
+"programmers to learn about popular packages that might be worth looking at."
 msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-go.templates:1001
+#: ../golang-weekly-tools.templates:2001
 msgid ""
-"If you choose to participate, the goinstall will report each successful "
-"installation to the Go Dashboard."
+"If you choose to participate, each successful installation will be reported "
+"to the Go Dashboard."
 msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../golang-weekly-go.templates:1001
+#: ../golang-weekly-tools.templates:2001
 msgid ""
-"This choice can be later modified by running \"dpkg-reconfigure golang-"
-"weekly-go\"."
+"This choice can be modified by running \"dpkg-reconfigure golang-weekly-tools"
+"\"."
 msgstr ""
