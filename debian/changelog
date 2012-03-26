@@ -1,5 +1,7 @@
-golang-weekly (2012.03.22-1) UNRELEASED; urgency=low
+golang-weekly (2012.03.22-1) unstable; urgency=low
 
+  * Install sources for cmd tree as well (Closes: #658421)
+  * Imported Upstream version 2012.03.22
   * Debconf templates and debian/control reviewed by the debian-l10n-
     english team as part of the Smith review project. (Closes: #658415)
   * [Debconf translation updates]
@@ -14,8 +16,6 @@ golang-weekly (2012.03.22-1) UNRELEASED; urgency=low
   * Portuguese (Pedro Ribeiro).  (Closes: #664273)
   * Portuguese (Pedro Ribeiro).  (Closes: #664273)
   * Czech (Michal Simunek).  (Closes: #664452)
-  * Install sources for cmd tree as well (Closes: #658421)
-  * Imported Upstream version 2012.03.22
 
  -- Ondřej Surý <ondrej@debian.org>  Mon, 26 Mar 2012 16:51:57 +0200
 
