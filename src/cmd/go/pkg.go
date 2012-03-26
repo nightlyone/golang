@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // A Package describes a single package found in a directory.
@@ -24,25 +25,23 @@ type Package struct {
 	// Note: These fields are part of the go command's public API.
 	// See list.go.  It is okay to add fields, but not to change or
 	// remove existing ones.  Keep in sync with list.go
-	Dir        string        `json:",omitempty"` // directory containing package sources
-	ImportPath string        `json:",omitempty"` // import path of package in dir
-	Name       string        `json:",omitempty"` // package name
-	Doc        string        `json:",omitempty"` // package documentation string
-	Target     string        `json:",omitempty"` // install path
-	Goroot     bool          `json:",omitempty"` // is this package found in the Go root?
-	Standard   bool          `json:",omitempty"` // is this package part of the standard Go library?
-	Stale      bool          `json:",omitempty"` // would 'go install' do anything for this package?
-	Incomplete bool          `json:",omitempty"` // was there an error loading this package or dependencies?
-	Error      *PackageError `json:",omitempty"` // error loading this package (not dependencies)
-
-	Root string `json:",omitempty"` // root dir of tree this package belongs to
+	Dir        string `json:",omitempty"` // directory containing package sources
+	ImportPath string `json:",omitempty"` // import path of package in dir
+	Name       string `json:",omitempty"` // package name
+	Doc        string `json:",omitempty"` // package documentation string
+	Target     string `json:",omitempty"` // install path
+	Goroot     bool   `json:",omitempty"` // is this package found in the Go root?
+	Standard   bool   `json:",omitempty"` // is this package part of the standard Go library?
+	Stale      bool   `json:",omitempty"` // would 'go install' do anything for this package?
+	Root       string `json:",omitempty"` // Go root or Go path dir containing this package
 
 	// Source files
-	GoFiles  []string `json:",omitempty"` // .go source files (excluding CgoFiles, TestGoFiles XTestGoFiles)
-	CgoFiles []string `json:",omitempty"` // .go sources files that import "C"
-	CFiles   []string `json:",omitempty"` // .c source files
-	HFiles   []string `json:",omitempty"` // .h source files
-	SFiles   []string `json:",omitempty"` // .s source files
+	GoFiles   []string `json:",omitempty"` // .go source files (excluding CgoFiles, TestGoFiles, XTestGoFiles)
+	CgoFiles  []string `json:",omitempty"` // .go sources files that import "C"
+	CFiles    []string `json:",omitempty"` // .c source files
+	HFiles    []string `json:",omitempty"` // .h source files
+	SFiles    []string `json:",omitempty"` // .s source files
+	SysoFiles []string `json:",omitempty"` // .syso system object files added to package
 
 	// Cgo directives
 	CgoCFLAGS    []string `json:",omitempty"` // cgo: flags for C compiler
@@ -50,8 +49,12 @@ type Package struct {
 	CgoPkgConfig []string `json:",omitempty"` // cgo: pkg-config names
 
 	// Dependency information
-	Imports    []string        `json:",omitempty"` // import paths used by this package
-	Deps       []string        `json:",omitempty"` // all (recursively) imported dependencies
+	Imports []string `json:",omitempty"` // import paths used by this package
+	Deps    []string `json:",omitempty"` // all (recursively) imported dependencies
+
+	// Error information
+	Incomplete bool            `json:",omitempty"` // was there an error loading this package or dependencies?
+	Error      *PackageError   `json:",omitempty"` // error loading this package (not dependencies)
 	DepsErrors []*PackageError `json:",omitempty"` // errors loading dependencies
 
 	// Test information
@@ -61,16 +64,17 @@ type Package struct {
 	XTestImports []string `json:",omitempty"` // imports from XTestGoFiles
 
 	// Unexported fields are not part of the public API.
-	build       *build.Package
-	pkgdir      string // overrides build.PkgDir
-	imports     []*Package
-	deps        []*Package
-	gofiles     []string // GoFiles+CgoFiles+TestGoFiles+XTestGoFiles files, absolute paths
-	target      string   // installed file for this package (may be executable)
-	fake        bool     // synthesized package
-	forceBuild  bool     // this package must be rebuilt
-	local       bool     // imported via local path (./ or ../)
-	localPrefix string   // interpret ./ and ../ imports relative to this prefix
+	build        *build.Package
+	pkgdir       string // overrides build.PkgDir
+	imports      []*Package
+	deps         []*Package
+	gofiles      []string // GoFiles+CgoFiles+TestGoFiles+XTestGoFiles files, absolute paths
+	target       string   // installed file for this package (may be executable)
+	fake         bool     // synthesized package
+	forceBuild   bool     // this package must be rebuilt
+	forceLibrary bool     // this package is a library (even if named "main")
+	local        bool     // imported via local path (./ or ../)
+	localPrefix  string   // interpret ./ and ../ imports relative to this prefix
 }
 
 func (p *Package) copyBuild(pp *build.Package) {
@@ -89,6 +93,7 @@ func (p *Package) copyBuild(pp *build.Package) {
 	p.CFiles = pp.CFiles
 	p.HFiles = pp.HFiles
 	p.SFiles = pp.SFiles
+	p.SysoFiles = pp.SysoFiles
 	p.CgoCFLAGS = pp.CgoCFLAGS
 	p.CgoLDFLAGS = pp.CgoLDFLAGS
 	p.CgoPkgConfig = pp.CgoPkgConfig
@@ -171,7 +176,16 @@ func reloadPackage(arg string, stk *importStack) *Package {
 // a special case, so that all the code to deal with ordinary imports works
 // automatically.
 func dirToImportPath(dir string) string {
-	return pathpkg.Join("_", strings.Replace(filepath.ToSlash(dir), ":", "_", -1))
+	return pathpkg.Join("_", strings.Map(makeImportValid, filepath.ToSlash(dir)))
+}
+
+func makeImportValid(r rune) rune {
+	// Should match Go spec, compilers, and ../../pkg/go/parser/parser.go:/isValidImport.
+	const illegalChars = `!"#$%&'()*,:;<=>?[\]^{|}` + "`\uFFFD"
+	if !unicode.IsGraphic(r) || unicode.IsSpace(r) || strings.ContainsRune(illegalChars, r) {
+		return '_'
+	}
+	return r
 }
 
 // loadImport scans the directory named by path, which must be an import path,
@@ -276,9 +290,8 @@ func (p *Package) load(stk *importStack, bp *build.Package, err error) *Package 
 	p.copyBuild(bp)
 
 	// The localPrefix is the path we interpret ./ imports relative to.
-	// Now that we've fixed the import path, it's just the import path.
 	// Synthesized main packages sometimes override this.
-	p.localPrefix = p.ImportPath
+	p.localPrefix = dirToImportPath(p.Dir)
 
 	if err != nil {
 		p.Incomplete = true
@@ -340,6 +353,16 @@ func (p *Package) load(stk *importStack, bp *build.Package, err error) *Package 
 		}
 		p1 := loadImport(path, p.Dir, stk, p.build.ImportPos[path])
 		if p1.local {
+			if !p.local && p.Error == nil {
+				p.Error = &PackageError{
+					ImportStack: stk.copy(),
+					Err:         fmt.Sprintf("local import %q in non-local package", path),
+				}
+				pos := p.build.ImportPos[path]
+				if len(pos) > 0 {
+					p.Error.Pos = pos[0].String()
+				}
+			}
 			path = p1.ImportPath
 			importPaths[i] = path
 		}
@@ -371,7 +394,7 @@ func (p *Package) load(stk *importStack, bp *build.Package, err error) *Package 
 	}
 
 	// unsafe is a fake package.
-	if p.Standard && p.ImportPath == "unsafe" {
+	if p.Standard && (p.ImportPath == "unsafe" || buildContext.Compiler == "gccgo") {
 		p.target = ""
 	}
 
@@ -416,7 +439,7 @@ func computeStale(pkgs ...*Package) {
 
 // isStale reports whether package p needs to be rebuilt.
 func isStale(p *Package, topRoot map[string]bool) bool {
-	if p.Standard && p.ImportPath == "unsafe" {
+	if p.Standard && (p.ImportPath == "unsafe" || buildContext.Compiler == "gccgo") {
 		// fake, builtin package
 		return false
 	}
@@ -486,7 +509,7 @@ func isStale(p *Package, topRoot map[string]bool) bool {
 		return false
 	}
 
-	srcs := stringList(p.GoFiles, p.CFiles, p.HFiles, p.SFiles, p.CgoFiles)
+	srcs := stringList(p.GoFiles, p.CFiles, p.HFiles, p.SFiles, p.CgoFiles, p.SysoFiles)
 	for _, src := range srcs {
 		if olderThan(filepath.Join(p.Dir, src)) {
 			return true

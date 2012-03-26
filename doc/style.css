@@ -18,11 +18,11 @@ pre .highlight,
 pre .highlight-comment,
 pre .selection-highlight,
 pre .selection-highlight-comment {
-    background: #FFFF00;
+	background: #FFFF00;
 }
 pre .selection,
 pre .selection-comment {
-    background: #FF9632;
+	background: #FF9632;
 }
 pre .ln {
 	color: #999;
@@ -30,9 +30,14 @@ pre .ln {
 body {
 	color: #222;
 }
-a {
+a,
+.exampleHeading .text {
 	color: #375EAB;
 	text-decoration: none;
+}
+a:hover,
+.exampleHeading .text:hover {
+	text-decoration: underline;
 }
 p,
 pre,
@@ -68,7 +73,7 @@ h2 {
 	padding: 2px 5px;
 }
 h3 {
-	font-size: 18px;
+	font-size: 20px;
 }
 h3,
 h4 {
@@ -80,13 +85,6 @@ h4 {
 .rootHeading {
 	font-size: 20px;
 	margin: 0;
-}
-
-h1 a,
-h2 a,
-h3 a,
-h4 a {
-	text-decoration: underline;
 }
 
 dl {
@@ -129,23 +127,26 @@ div#heading a {
 
 div#topbar {
 	background: #E0EBF5;
+	height: 64px;
 }
 
 body {
 	text-align: center;
 }
 div#page,
-div#topbar .container {
+div#topbar > .container {
 	clear: both;
 	text-align: left;
 	margin-left: auto;
 	margin-right: auto;
+	padding: 0 20px;
 	width: 900px;
 }
-div#plusone {
-	float: right;
+div#page.wide,
+div#topbar > .wide {
+	width: auto;
 }
-div#plusoneRoot {
+div#plusone {
 	float: right;
 }
 
@@ -185,6 +186,8 @@ div#blog .read a {
 }
 
 div#menu {
+	float: right;
+	min-width: 590px;
 	padding: 10px 0;
 	text-align: right;
 }
@@ -257,6 +260,10 @@ a#start .desc {
 	margin-top: 5px;
 }
 
+div#learn .icon {
+	float: right;
+	cursor: pointer;
+}
 div#learn pre,
 div#learn textarea {
 	padding: 0;
@@ -315,21 +322,21 @@ div#learn .output {
 	border: 1px solid #375EAB;
 }
 div#learn .buttons {
+	float: right;
 	padding: 20px 0 10px 0;
 	text-align: right;
 }
 div#learn .buttons a {
 	height: 16px;
 	margin-left: 5px;
-
 	padding: 10px;
 }
-div#learn .buttons .tour {
-	float: right;
+div#learn .toys {
+	margin-top: 8px;
 }
-div#learn .buttons .tour a {
-	margin-right: 0;
-	font-weight: bold;
+div#learn .toys select {
+	border: 1px solid #375EAB;
+	margin: 0;
 }
 
 div#blog,
@@ -346,8 +353,6 @@ div#video > h2 {
 }
 div#blog .title,
 div#video .title {
-	color: #222;
-	text-decoration: none;
 	display: block;
 	font-size: 20px;
 }
@@ -367,3 +372,20 @@ div#blog .read {
 
 table.codetable { margin-left: auto; margin-right: auto; border-style: none; }
 hr { border-style: none; border-top: 1px solid black; }
+
+img.gopher {
+	float: right;
+	margin-left: 10px;
+	margin-bottom: 10px;
+}
+.pkgGopher {
+	text-align: right;
+}
+.pkgGopher .gopher {
+	float: none;
+	position: relative;
+	top: -40px;
+	margin-bottom: -120px;
+}
+h2 { clear: right; }
+

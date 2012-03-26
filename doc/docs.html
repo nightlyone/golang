@@ -31,6 +31,8 @@ libraries.
 
 <h2 id="learning">Learning Go</h2>
 
+<img class="gopher" src="/doc/gopher/doc.png"/>
+
 <h3 id="go_tour"><a href="http://tour.golang.org/">A Tour of Go</a></h3>
 <p>
 An interactive introduction to Go in three sections.
@@ -68,13 +70,26 @@ Answers to common questions about Go.
 <h3 id="wiki"><a href="http://code.google.com/p/go-wiki/wiki">Go Language Community Wiki</a></h3>
 <p>A wiki maintained by the Go community.</p>
 
+<h2 id="go1">Go version 1</h2>
+
+<h3 id="go1notes"><a href="/doc/go1.html">Go 1 Release Notes</a></h3>
+<p>
+A guide for updating your code to work with Go 1.
+</p>
+
+<h3 id="go1compat"><a href="/doc/go1compat.html">Go 1 and the Future of Go Programs</a></h3>
+<p>
+What Go 1 defines and the backwards-compatibility guarantees one can expect as
+Go 1 matures.
+</p>
+
 <h2 id="articles">Go Articles</h2>
 
 <h3 id="blog"><a href="http://blog.golang.org/">The Go Blog</a></h3>
 <p>The official blog of the Go project, featuring news and in-depth articles by
 the Go team and guests.</p>
 
-<h3>Codewalks</h3>
+<h4>Codewalks</h4>
 <p>
 Guided tours of Go programs. 
 </p>
@@ -85,37 +100,37 @@ Guided tours of Go programs.
 <li><a href="/doc/articles/wiki/">Writing Web Applications</a> - building a simple web application.</li>
 </ul>
 
-<h3>Language</h3>
-
+<h4>Language</h4>
 <ul>
 <li><a href="http://blog.golang.org/2010/04/json-rpc-tale-of-interfaces.html">JSON-RPC: a tale of interfaces</a></li>
-<li><a href="http://blog.golang.org/2010/07/gos-declaration-syntax.html">Go's Declaration Syntax</a></li>
+<li><a href="/doc/articles/gos_declaration_syntax.html">Go's Declaration Syntax</a></li>
 <li><a href="/doc/articles/defer_panic_recover.html">Defer, Panic, and Recover</a></li>
-<li><a href="http://blog.golang.org/2010/09/go-concurrency-patterns-timing-out-and.html">Go Concurrency Patterns: Timing out, moving on</a></li>
+<li><a href="/doc/articles/concurrency_patterns.html">Go Concurrency Patterns: Timing out, moving on</a></li>
 <li><a href="/doc/articles/slices_usage_and_internals.html">Go Slices: usage and internals</a></li>
 <li><a href="http://blog.golang.org/2011/05/gif-decoder-exercise-in-go-interfaces.html">A GIF decoder: an exercise in Go interfaces</a></li>
 <li><a href="/doc/articles/error_handling.html">Error Handling and Go</a></li>
 </ul>
 
-<h3>Packages</h3>
-
+<h4>Packages</h4>
 <ul>
-<li><a href="http://blog.golang.org/2011/01/json-and-go.html">JSON and Go</a> - using the <a href="/pkg/encoding/json/">json</a> package.</li>
-<li><a href="http://blog.golang.org/2011/03/gobs-of-data.html">Gobs of data</a> - the design and use of the <a href="/pkg/encoding/gob/">gob</a> package.</li>
+<li><a href="/doc/articles/json_and_go.html">JSON and Go</a> - using the <a href="/pkg/encoding/json/">json</a> package.</li>
+<li><a href="/doc/articles/gobs_of_data.html">Gobs of data</a> - the design and use of the <a href="/pkg/encoding/gob/">gob</a> package.</li>
 <li><a href="/doc/articles/laws_of_reflection.html">The Laws of Reflection</a> - the fundamentals of the <a href="/pkg/reflect/">reflect</a> package.</li>
 <li><a href="http://blog.golang.org/2011/09/go-image-package.html">The Go image package</a> - the fundamentals of the <a href="/pkg/image/">image</a> package.</li>
-<li><a href="http://blog.golang.org/2011/09/go-imagedraw-package.html">The Go image/draw package</a> - the fundamentals of the <a href="/pkg/image/draw/">image/draw</a> package.</li>
+<li><a href="/doc/articles/image_draw.html">The Go image/draw package</a> - the fundamentals of the <a href="/pkg/image/draw/">image/draw</a> package.</li>
 </ul>
 
-<h3>Tools</h3>
-
+<h4>Tools</h4>
 <ul>
-<li><a href="http://blog.golang.org/2011/03/c-go-cgo.html">C? Go? Cgo!</a> - linking against C code with <a href="/cmd/cgo/">cgo</a>.</li>
-<li><a href="http://blog.golang.org/2011/03/godoc-documenting-go-code.html">Godoc: documenting Go code</a> - writing good documentation for <a href="/cmd/godoc/">godoc</a>.</li>
+<li><a href="/doc/articles/go_command.html">About the Go command</a> - why we wrote it, what it is, what it's not, and how to use it.</li>
+<li><a href="/doc/articles/c_go_cgo.html">C? Go? Cgo!</a> - linking against C code with <a href="/cmd/cgo/">cgo</a>.</li>
+<li><a href="/doc/articles/godoc_documenting_go_code.html">Godoc: documenting Go code</a> - writing good documentation for <a href="/cmd/godoc/">godoc</a>.</li>
 <li><a href="http://blog.golang.org/2011/06/profiling-go-programs.html">Profiling Go Programs</a></li>
 </ul>
 
 <h2 id="talks">Talks</h2>
+
+<img class="gopher" src="/doc/gopher/talks.png"/>
 
 <p>
 The talks marked with a red asterisk (<font color="red">*</font>) were written
@@ -162,7 +177,7 @@ the simple example of an URL shortening service.
 See the <a href="http://wh3rd.net/practical-go/">presentation slides</a>.
 </p>
 
-<h3 id="talks_more">More</h3>
+<h4 id="talks_more">More</h4>
 <p>
 See the <a href="http://code.google.com/p/go-wiki/wiki/GoTalks">GoTalks
 page</a> at the <a href="http://code.google.com/p/go-wiki/wiki">Go Wiki</a> for
@@ -178,6 +193,8 @@ documentation.
 </p>
 
 <h2 id="community">The Go Community</h2>
+
+<img class="gopher" src="/doc/gopher/project.png"/>
 
 <h3 id="mailinglist"><a href="http://groups.google.com/group/golang-nuts">Go Nuts Mailing List</a></h3>
 <p>The <a href="http://groups.google.com/group/golang-nuts">golang-nuts</a> 

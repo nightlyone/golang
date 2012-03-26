@@ -52,6 +52,12 @@ var contexts = []*build.Context{
 	{GOOS: "windows", GOARCH: "386"},
 }
 
+func init() {
+	for _, c := range contexts {
+		c.Compiler = build.Default.Compiler
+	}
+}
+
 func contextName(c *build.Context) string {
 	s := c.GOOS + "-" + c.GOARCH
 	if c.CgoEnabled {
@@ -125,7 +131,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("Error reading file %s: %v", *checkFile, err)
 		}
-		v1 := strings.Split(string(bs), "\n")
+		v1 := strings.Split(strings.TrimSpace(string(bs)), "\n")
 		sort.Strings(v1)
 		v2 := features
 		take := func(sl *[]string) string {
@@ -133,16 +139,23 @@ func main() {
 			*sl = (*sl)[1:]
 			return s
 		}
+		changes := false
 		for len(v1) > 0 || len(v2) > 0 {
 			switch {
 			case len(v2) == 0 || v1[0] < v2[0]:
 				fmt.Fprintf(bw, "-%s\n", take(&v1))
+				changes = true
 			case len(v1) == 0 || v1[0] > v2[0]:
 				fmt.Fprintf(bw, "+%s\n", take(&v2))
+				changes = true
 			default:
 				take(&v1)
 				take(&v2)
 			}
+		}
+		if changes {
+			bw.Flush()
+			os.Exit(1)
 		}
 	} else {
 		for _, f := range features {
@@ -278,7 +291,9 @@ func (w *Walker) WalkPackage(name string) {
 		}
 	}
 
-	log.Printf("package %s", name)
+	if *verbose {
+		log.Printf("package %s", name)
+	}
 	pop := w.pushScope("pkg " + name)
 	defer pop()
 
@@ -573,7 +588,14 @@ func (w *Walker) varValueType(vi interface{}) (string, error) {
 			}
 		}
 		// maybe a function call; maybe a conversion.  Need to lookup type.
-		return "", fmt.Errorf("not a known function %q", w.nodeString(v.Fun))
+		// TODO(bradfitz): this is a hack, but arguably most of this tool is,
+		// until the Go AST has type information.
+		nodeStr := w.nodeString(v.Fun)
+		switch nodeStr {
+		case "string", "[]byte":
+			return nodeStr, nil
+		}
+		return "", fmt.Errorf("not a known function %q", nodeStr)
 	default:
 		return "", fmt.Errorf("unknown const value type %T", vi)
 	}

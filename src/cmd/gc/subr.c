@@ -944,7 +944,7 @@ isideal(Type *t)
  * return type to hang methods off (r).
  */
 Type*
-methtype(Type *t)
+methtype(Type *t, int mustname)
 {
 	if(t == T)
 		return T;
@@ -959,7 +959,7 @@ methtype(Type *t)
 	}
 
 	// need a type name
-	if(t->sym == S)
+	if(t->sym == S && (mustname || t->etype != TSTRUCT))
 		return T;
 
 	// check types
@@ -2101,7 +2101,7 @@ lookdot0(Sym *s, Type *t, Type **save, int ignorecase)
 				c++;
 			}
 	}
-	u = methtype(t);
+	u = methtype(t, 0);
 	if(u != T) {
 		for(f=u->method; f!=T; f=f->down)
 			if(f->embedded == 0 && (f->sym == s || (ignorecase && ucistrcmp(f->sym->name, s->name) == 0))) {
@@ -2251,7 +2251,7 @@ expand0(Type *t, int followptr)
 		return;
 	}
 
-	u = methtype(t);
+	u = methtype(t, 0);
 	if(u != T) {
 		for(f=u->method; f!=T; f=f->down) {
 			if(f->sym->flags & SymUniq)
@@ -2301,14 +2301,12 @@ out:
 }
 
 void
-expandmeth(Sym *s, Type *t)
+expandmeth(Type *t)
 {
 	Symlink *sl;
 	Type *f;
 	int c, d;
 
-	if(s == S)
-		return;
 	if(t == T || t->xmethod != nil)
 		return;
 
@@ -3021,9 +3019,9 @@ implements(Type *t, Type *iface, Type **m, Type **samename, int *ptr)
 		return 1;
 	}
 
-	t = methtype(t);
+	t = methtype(t, 0);
 	if(t != T)
-		expandmeth(t->sym, t);
+		expandmeth(t);
 	for(im=iface->type; im; im=im->down) {
 		imtype = methodfunc(im->type, 0);
 		tm = ifacelookdot(im->sym, t, &followptr, 0);
@@ -3626,23 +3624,23 @@ isbadimport(Strlit *path)
 	while(*s) {
 		s += chartorune(&r, s);
 		if(r == Runeerror) {
-			yyerror("import path contains invalid UTF-8 sequence");
+			yyerror("import path contains invalid UTF-8 sequence: \"%Z\"", path);
 			return 1;
 		}
 		if(r < 0x20 || r == 0x7f) {
-			yyerror("import path contains control character");
+			yyerror("import path contains control character: \"%Z\"", path);
 			return 1;
 		}
 		if(r == '\\') {
-			yyerror("import path contains backslash; use slash");
+			yyerror("import path contains backslash; use slash: \"%Z\"", path);
 			return 1;
 		}
 		if(isspacerune(r)) {
-			yyerror("import path contains space character");
+			yyerror("import path contains space character: \"%Z\"", path);
 			return 1;
 		}
-		if(utfrune("!\"#$%&'()*,:;<=>?[]^`{|}~", r)) {
-			yyerror("import path contains invalid character '%C'", r);
+		if(utfrune("!\"#$%&'()*,:;<=>?[]^`{|}", r)) {
+			yyerror("import path contains invalid character '%C': \"%Z\"", r, path);
 			return 1;
 		}
 	}

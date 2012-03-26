@@ -36,9 +36,8 @@ An import path is a pattern if it includes one or more "..." wildcards,
 each of which can match any string, including the empty string and
 strings containing slashes.  Such a pattern expands to all package
 directories found in the GOPATH trees with names matching the
-patterns.  For example, encoding/... expands to all packages
-in subdirectories of the encoding tree, while net... expands to
-net and all its subdirectories.
+patterns.  As a special case, x/... matches x as well as x's subdirectories.
+For example, net/... expands to net and packages in its subdirectories.
 
 An import path can also name a package to be downloaded from
 a remote repository.  Run 'go help remote' for details.
@@ -96,7 +95,12 @@ A few common code hosting sites have special syntax:
 		import "launchpad.net/~user/project/branch"
 		import "launchpad.net/~user/project/branch/sub/directory"
 
-For code hosted on other servers, an import path of the form
+For code hosted on other servers, import paths may either be qualified
+with the version control type, or the go tool can dynamically fetch
+the import path over https/http and discover where the code resides
+from a <meta> tag in the HTML.
+
+To declare the code location, an import path of the form
 
 	repository.vcs/path
 
@@ -124,6 +128,42 @@ example.com/repo or repo.git.
 When a version control system supports multiple protocols,
 each is tried in turn when downloading.  For example, a Git
 download tries git://, then https://, then http://.
+
+If the import path is not a known code hosting site and also lacks a
+version control qualifier, the go tool attempts to fetch the import
+over https/http and looks for a <meta> tag in the document's HTML
+<head>.
+
+The meta tag has the form:
+
+	<meta name="go-import" content="import-prefix vcs repo-root">
+
+The import-prefix is the import path correponding to the repository
+root. It must be a prefix or an exact match of the package being
+fetched with "go get". If it's not an exact match, another http
+request is made at the prefix to verify the <meta> tags match.
+
+The vcs is one of "git", "hg", "svn", etc,
+
+The repo-root is the root of the version control system
+containing a scheme and not containing a .vcs qualifier.
+
+For example,
+
+	import "example.org/pkg/foo"
+
+will result in the following request(s):
+
+	https://example.org/pkg/foo?go-get=1 (preferred)
+	http://example.org/pkg/foo?go-get=1  (fallback)
+
+If that page contains the meta tag
+
+	<meta name="go-import" content="example.org git https://code.org/r/p/exproj">
+
+the go tool will verify that https://example.org/?go-get=1 contains the
+same meta tag and then git clone https://code.org/r/p/exproj into
+GOPATH/src/example.org.
 
 New downloaded packages are written to the first directory
 listed in the GOPATH environment variable (see 'go help gopath').

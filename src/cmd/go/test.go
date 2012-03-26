@@ -192,8 +192,6 @@ See the documentation of the testing package for more information.
 var (
 	testC            bool     // -c flag
 	testI            bool     // -i flag
-	testP            int      // -p flag
-	testX            bool     // -x flag
 	testV            bool     // -v flag
 	testFiles        []string // -file flag(s)  TODO: not respected
 	testTimeout      string   // -timeout flag
@@ -241,11 +239,6 @@ func runTest(cmd *Command, args []string) {
 	testStreamOutput = len(pkgArgs) == 0 || testBench ||
 		(len(pkgs) <= 1 && testShowPass)
 
-	buildX = testX
-	if testP > 0 {
-		buildP = testP
-	}
-
 	var b builder
 	b.init()
 
@@ -263,6 +256,9 @@ func runTest(cmd *Command, args []string) {
 				deps[path] = true
 			}
 			for _, path := range p.TestImports {
+				deps[path] = true
+			}
+			for _, path := range p.XTestImports {
 				deps[path] = true
 			}
 		}
@@ -450,6 +446,7 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 		ptest.imports = append(append([]*Package{}, p.imports...), imports...)
 		ptest.pkgdir = testDir
 		ptest.fake = true
+		ptest.forceLibrary = true
 		ptest.Stale = true
 		ptest.build = new(build.Package)
 		*ptest.build = *p.build
@@ -461,12 +458,6 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 			m[k] = append(m[k], v...)
 		}
 		ptest.build.ImportPos = m
-		computeStale(ptest)
-		a := b.action(modeBuild, modeBuild, ptest)
-		a.objdir = testDir + string(filepath.Separator)
-		a.objpkg = ptestObj
-		a.target = ptestObj
-		a.link = false
 	} else {
 		ptest = p
 	}
@@ -477,6 +468,7 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 			Name:        p.Name + "_test",
 			ImportPath:  p.ImportPath + "_test",
 			localPrefix: p.localPrefix,
+			Root:        p.Root,
 			Dir:         p.Dir,
 			GoFiles:     p.XTestGoFiles,
 			Imports:     p.XTestImports,
@@ -488,11 +480,6 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 			fake:    true,
 			Stale:   true,
 		}
-		computeStale(pxtest)
-		a := b.action(modeBuild, modeBuild, pxtest)
-		a.objdir = testDir + string(filepath.Separator)
-		a.objpkg = buildToolchain.pkgpath(testDir, pxtest)
-		a.target = a.objpkg
 	}
 
 	// Action for building pkg.test.
@@ -501,8 +488,9 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 		Dir:        testDir,
 		GoFiles:    []string{"_testmain.go"},
 		ImportPath: "testmain",
+		Root:       p.Root,
 		imports:    []*Package{ptest},
-		build:      &build.Package{},
+		build:      &build.Package{Name: "main"},
 		fake:       true,
 		Stale:      true,
 	}
@@ -522,6 +510,21 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 	}
 	pmain.imports = append(pmain.imports, ptesting, pregexp)
 	computeStale(pmain)
+
+	if ptest != p {
+		a := b.action(modeBuild, modeBuild, ptest)
+		a.objdir = testDir + string(filepath.Separator)
+		a.objpkg = ptestObj
+		a.target = ptestObj
+		a.link = false
+	}
+
+	if pxtest != nil {
+		a := b.action(modeBuild, modeBuild, pxtest)
+		a.objdir = testDir + string(filepath.Separator)
+		a.objpkg = buildToolchain.pkgpath(testDir, pxtest)
+		a.target = a.objpkg
+	}
 
 	a := b.action(modeBuild, modeBuild, pmain)
 	a.objdir = testDir + string(filepath.Separator)
@@ -639,6 +642,9 @@ func (b *builder) runTest(a *action) error {
 
 // cleanTest is the action for cleaning up after a test.
 func (b *builder) cleanTest(a *action) error {
+	if buildWork {
+		return nil
+	}
 	run := a.deps[0]
 	testDir := filepath.Join(b.work, filepath.FromSlash(run.p.ImportPath+"/_test"))
 	os.RemoveAll(testDir)
