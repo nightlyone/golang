@@ -74,6 +74,14 @@ make clean
 ./test.bash
 ) || exit $?
 
+(xcd ../doc/codewalk
+# TODO: test these too.
+set -e
+go build pig.go
+go build urlpoll.go
+rm -f pig urlpoll
+) || exit $?
+
 echo
 echo '#' ../misc/dashboard/builder ../misc/goplay
 go build ../misc/dashboard/builder ../misc/goplay

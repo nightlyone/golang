@@ -91,6 +91,8 @@ The build flags are shared by the build, install, run, and test commands:
 		more information about build tags.
 
 For more about specifying packages, see 'go help packages'.
+For more about where packages and binaries are installed,
+see 'go help gopath'.
 
 See also: go install, go get, go clean.
 
@@ -225,7 +227,15 @@ The -u flag instructs get to use the network to update the named packages
 and their dependencies.  By default, get uses the network to check out
 missing packages but does not use it to look for updates to existing packages.
 
-TODO: Explain versions better.
+When checking out or updating a package, get looks for a branch or
+tag that matches the locally installed version of Go. If the local
+version "is release.rNN", it searches for "go.rNN". (For an
+installation using Go version "weekly.YYYY-MM-DD", it searches for a
+package version labeled "go.YYYY-MM-DD".)  If the desired version
+cannot be found but others exist with labels in the correct format,
+get retrieves the most recent version before the desired label.
+Finally, if all else fails it retrieves the most recent version of
+the package.
 
 For more about specifying packages, see 'go help packages'.
 
@@ -453,7 +463,9 @@ the final element, not the entire path.  That is, the
 command with source in DIR/src/foo/quux is installed into
 DIR/bin/quux, not DIR/bin/foo/quux.  The foo/ is stripped
 so that you can add DIR/bin to your PATH to get at the
-installed commands.
+installed commands.  If the GOBIN environment variable is
+set, commands are installed to the directory it names instead
+of DIR/bin.
 
 Here's an example directory layout:
 
