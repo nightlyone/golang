@@ -37,6 +37,37 @@ static int	rexflag;
 static int	asmode;
 static vlong	vaddr(Adr*, Reloc*);
 
+// single-instruction no-ops of various lengths.
+// constructed by hand and disassembled with gdb to verify.
+// see http://www.agner.org/optimize/optimizing_assembly.pdf for discussion.
+static uchar nop[][16] = {
+	{0x90},
+	{0x66, 0x90},
+	{0x0F, 0x1F, 0x00},
+	{0x0F, 0x1F, 0x40, 0x00},
+	{0x0F, 0x1F, 0x44, 0x00, 0x00},
+	{0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00},
+	{0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00},
+	{0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00},
+	{0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00},
+	{0x66, 0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00},
+};
+
+static void
+fillnop(uchar *p, int n)
+{
+	int m;
+
+	while(n > 0) {
+		m = n;
+		if(m > nelem(nop))
+			m = nelem(nop);
+		memmove(p, nop[m-1], m);
+		p += m;
+		n -= m;
+	}
+}
+
 void
 span1(Sym *s)
 {
@@ -52,8 +83,10 @@ span1(Sym *s)
 
 	for(p = s->text; p != P; p = p->link) {
 		p->back = 2;	// use short branches first time through
-		if((q = p->pcond) != P && (q->back & 2))
+		if((q = p->pcond) != P && (q->back & 2)) {
 			p->back |= 1;	// backward jump
+			q->back |= 4;   // loop head
+		}
 
 		if(p->as == AADJSP) {
 			p->to.type = D_SP;
@@ -78,6 +111,16 @@ span1(Sym *s)
 		s->np = 0;
 		c = 0;
 		for(p = s->text; p != P; p = p->link) {
+			if((p->back & 4) && (c&(LoopAlign-1)) != 0) {
+				// pad with NOPs
+				v = -c&(LoopAlign-1);
+				if(v <= MaxLoopPad) {
+					symgrow(s, c+v);
+					fillnop(s->p+c, v);
+					c += v;
+				}
+			}
+
 			p->pc = c;
 
 			// process forward jumps to p
@@ -88,13 +131,16 @@ span1(Sym *s)
 						loop++;
 						q->back ^= 2;
 					}
-					s->p[q->pc+1] = v;
+					if(q->as == AJCXZL)
+						s->p[q->pc+2] = v;
+					else
+						s->p[q->pc+1] = v;
 				} else {
 					bp = s->p + q->pc + q->mark - 4;
 					*bp++ = v;
 					*bp++ = v>>8;
 					*bp++ = v>>16;
-					*bp++ = v>>24;
+					*bp = v>>24;
 				}	
 			}
 			p->comefrom = P;
@@ -263,10 +309,6 @@ instinit(void)
 	ycover[Ym*Ymax + Ymm] = 1;
 	ycover[Ymr*Ymax + Ymm] = 1;
 
-	ycover[Yax*Ymax + Yxm] = 1;
-	ycover[Ycx*Ymax + Yxm] = 1;
-	ycover[Yrx*Ymax + Yxm] = 1;
-	ycover[Yrl*Ymax + Yxm] = 1;
 	ycover[Ym*Ymax + Yxm] = 1;
 	ycover[Yxr*Ymax + Yxm] = 1;
 
@@ -330,7 +372,10 @@ oclass(Adr *a)
 				switch(a->index) {
 				case D_EXTERN:
 				case D_STATIC:
-					return Yi32;	/* TO DO: Yi64 */
+					if(flag_shared)
+						return Yiauto;
+					else
+						return Yi32;	/* TO DO: Yi64 */
 				case D_AUTO:
 				case D_PARAM:
 					return Yiauto;
@@ -689,7 +734,10 @@ vaddr(Adr *a, Reloc *r)
 			diag("need reloc for %D", a);
 			errorexit();
 		}
-		r->type = D_ADDR;
+		if(flag_shared)
+			r->type = D_PCREL;
+		else
+			r->type = D_ADDR;
 		r->siz = 4;	// TODO: 8 for external symbols
 		r->off = -1;	// caller must fill in
 		r->sym = s;
@@ -706,6 +754,7 @@ asmandsz(Adr *a, int r, int rex, int m64)
 	int t, scale;
 	Reloc rel;
 
+	USED(m64);
 	rex &= (0x40 | Rxr);
 	v = a->offset;
 	t = a->type;
@@ -717,6 +766,8 @@ asmandsz(Adr *a, int r, int rex, int m64)
 				goto bad;
 			case D_STATIC:
 			case D_EXTERN:
+				if(flag_shared)
+					goto bad;
 				t = D_NONE;
 				v = vaddr(a, &rel);
 				break;
@@ -732,7 +783,6 @@ asmandsz(Adr *a, int r, int rex, int m64)
 			*andptr++ = (0 << 6) | (4 << 0) | (r << 3);
 			asmidx(a->scale, a->index, t);
 			goto putrelv;
-			return;
 		}
 		if(v == 0 && rel.siz == 0 && t != D_BP && t != D_R13) {
 			*andptr++ = (0 << 6) | (4 << 0) | (r << 3);
@@ -778,7 +828,7 @@ asmandsz(Adr *a, int r, int rex, int m64)
 
 	rexflag |= (regrex[t] & Rxb) | rex;
 	if(t == D_NONE || (D_CS <= t && t <= D_GS)) {
-		if(asmode != 64){
+		if(flag_shared && t == D_NONE && (a->type == D_STATIC || a->type == D_EXTERN) || asmode != 64) {
 			*andptr++ = (0 << 6) | (5 << 0) | (r << 3);
 			goto putrelv;
 		}
@@ -1166,6 +1216,12 @@ found:
 			*andptr++ = op;
 		break;
 
+	case Zlitm_r:
+		for(; op = o->op[z]; z++)
+			*andptr++ = op;
+		asmand(&p->from, &p->to);
+		break;
+
 	case Zmb_r:
 		bytereg(&p->from, &p->ft);
 		/* fall through */
@@ -1199,7 +1255,8 @@ found:
 		break;
 
 	case Zibm_r:
-		*andptr++ = op;
+		while ((op = o->op[z++]) != 0)
+			*andptr++ = op;
 		asmand(&p->from, &p->to);
 		*andptr++ = p->to.offset;
 		break;
@@ -1433,10 +1490,11 @@ found:
 
 	case Zbr:
 	case Zjmp:
+	case Zloop:
 		// TODO: jump across functions needs reloc
 		q = p->pcond;
 		if(q == nil) {
-			diag("jmp/branch without target");
+			diag("jmp/branch/loop without target");
 			errorexit();
 		}
 		if(q->as == ATEXT) {
@@ -1460,8 +1518,12 @@ found:
 		if(p->back & 1) {
 			v = q->pc - (p->pc + 2);
 			if(v >= -128) {
+				if(p->as == AJCXZL)
+					*andptr++ = 0x67;
 				*andptr++ = op;
 				*andptr++ = v;
+			} else if(t[2] == Zloop) {
+				diag("loop too far: %P", p);
 			} else {
 				v -= 5-2;
 				if(t[2] == Zbr) {
@@ -1481,8 +1543,12 @@ found:
 		p->forwd = q->comefrom;
 		q->comefrom = p;
 		if(p->back & 2)	{ // short
+			if(p->as == AJCXZL)
+				*andptr++ = 0x67;
 			*andptr++ = op;
 			*andptr++ = 0;
+		} else if(t[2] == Zloop) {
+			diag("loop too far: %P", p);
 		} else {
 			if(t[2] == Zbr)
 				*andptr++ = 0x0f;
@@ -1512,19 +1578,6 @@ found:
 			*andptr++ = v>>24;
 		}
 */
-		break;
-
-	case Zloop:
-		q = p->pcond;
-		if(q == nil) {
-			diag("loop without target");
-			errorexit();
-		}
-		v = q->pc - p->pc - 2;
-		if(v < -128 && v > 127)
-			diag("loop too far: %P", p);
-		*andptr++ = op;
-		*andptr++ = v;
 		break;
 
 	case Zbyte:
@@ -1573,7 +1626,9 @@ bad:
 		pp = *p;
 		z = p->from.type;
 		if(z >= D_BP && z <= D_DI) {
-			if(isax(&p->to)) {
+			if(isax(&p->to) || p->to.type == D_NONE) {
+				// We certainly don't want to exchange
+				// with AX if the op is MUL or DIV.
 				*andptr++ = 0x87;			/* xchg lhs,bx */
 				asmando(&p->from, reg[D_BX]);
 				subreg(&pp, z, D_BX);
@@ -1729,13 +1784,17 @@ asmins(Prog *p)
 			if(c != 0xf2 && c != 0xf3 && (c < 0x64 || c > 0x67) && c != 0x2e && c != 0x3e && c != 0x26)
 				break;
 		}
-		for(r=cursym->r+cursym->nr; r-- > cursym->r; ) {
-			if(r->off < p->pc)
-				break;
-			r->off++;
-		}
 		memmove(and+np+1, and+np, n-np);
 		and[np] = 0x40 | rexflag;
 		andptr++;
+	}
+	n = andptr - and;
+	for(r=cursym->r+cursym->nr; r-- > cursym->r; ) {
+		if(r->off < p->pc)
+			break;
+		if(rexflag)
+			r->off++;
+		if(r->type == D_PCREL)
+			r->add -= p->pc + n - (r->off + r->siz);
 	}
 }

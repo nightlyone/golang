@@ -32,22 +32,9 @@
 
 #include	"l.h"
 #include	"../ld/lib.h"
+#include "../../pkg/runtime/stack.h"
 
 static void xfol(Prog*, Prog**);
-
-// see ../../pkg/runtime/proc.c:/StackGuard
-enum
-{
-#ifdef __WINDOWS__
-	// use larger stacks to compensate for larger stack guard,
-	// needed for exception handling.
-	StackSmall = 256,
-	StackBig = 8192,
-#else
-	StackSmall = 128,
-	StackBig = 4096,
-#endif
-};
 
 Prog*
 brchain(Prog *p)
@@ -88,6 +75,7 @@ nofollow(int a)
 	case ARET:
 	case AIRETL:
 	case AIRETW:
+	case AUNDEF:
 		return 1;
 	}
 	return 0;
@@ -197,20 +185,34 @@ loop:
 		 * recurse to follow one path.
 		 * continue loop on the other.
 		 */
-		q = brchain(p->link);
-		if(q != P && q->mark)
-		if(a != ALOOP) {
-			p->as = relinv(a);
-			p->link = p->pcond;
+		if((q = brchain(p->pcond)) != P)
 			p->pcond = q;
+		if((q = brchain(p->link)) != P)
+			p->link = q;
+		if(p->from.type == D_CONST) {
+			if(p->from.offset == 1) {
+				/*
+				 * expect conditional jump to be taken.
+				 * rewrite so that's the fall-through case.
+				 */
+				p->as = relinv(a);
+				q = p->link;
+				p->link = p->pcond;
+				p->pcond = q;
+			}
+		} else {
+			q = p->link;
+			if(q->mark)
+			if(a != ALOOP) {
+				p->as = relinv(a);
+				p->link = p->pcond;
+				p->pcond = q;
+			}
 		}
 		xfol(p->link, last);
-		q = brchain(p->pcond);
-		if(q->mark) {
-			p->pcond = q;
+		if(p->pcond->mark)
 			return;
-		}
-		p = q;
+		p = p->pcond;
 		goto loop;
 	}
 	p = p->link;
@@ -262,16 +264,17 @@ patch(void)
 	s = lookup("exit", 0);
 	vexit = s->value;
 	
-	if(HEADTYPE == 2)
+	plan9_tos = S;
+	if(HEADTYPE == Hplan9x32)
 		plan9_tos = lookup("_tos", 0);
 	
 	for(cursym = textp; cursym != nil; cursym = cursym->next) {
 		for(p = cursym->text; p != P; p = p->link) {
-			if(HEADTYPE == 10) {	// Windows
+			if(HEADTYPE == Hwindows) {
 				// Convert
 				//   op	  n(GS), reg
 				// to
-				//   MOVL 0x2C(FS), reg
+				//   MOVL 0x14(FS), reg
 				//   op	  n(reg), reg
 				// The purpose of this patch is to fix some accesses
 				// to extern register variables (TLS) on Windows, as
@@ -285,10 +288,10 @@ patch(void)
 					q->as = p->as;
 					p->as = AMOVL;
 					p->from.type = D_INDIR+D_FS;
-					p->from.offset = 0x2C;
+					p->from.offset = 0x14;
 				}
 			}
-			if(HEADTYPE == 7) {	// Linux
+			if(HEADTYPE == Hlinux) {
 				// Running binaries under Xen requires using
 				//	MOVL 0(GS), reg
 				// and then off(reg) instead of saying off(GS) directly
@@ -305,7 +308,7 @@ patch(void)
 					p->from.offset = 0;
 				}
 			}
-			if(HEADTYPE == 2) {	// Plan 9
+			if(HEADTYPE == Hplan9x32) {
 				if(p->from.type == D_INDIR+D_GS
 				&& p->to.type >= D_AX && p->to.type <= D_DI) {
 					q = appendp(p);
@@ -319,12 +322,15 @@ patch(void)
 					p->from.offset = 0;
 				}
 			}
-			if(p->as == ACALL || (p->as == AJMP && p->to.type != D_BRANCH)) {
+			if((p->as == ACALL && p->to.type != D_BRANCH) || (p->as == AJMP && p->to.type != D_BRANCH)) {
 				s = p->to.sym;
-				if(s) {
+				if(p->to.type == D_INDIR+D_ADDR) {
+					 /* skip check if this is an indirect call (CALL *symbol(SB)) */
+					 continue;
+				} else if(s) {
 					if(debug['c'])
 						Bprint(&bso, "%s calls %s\n", TNAME, s->name);
-					if((s->type&~SSUB) != STEXT) {
+					if((s->type&SMASK) != STEXT) {
 						/* diag prints TNAME first */
 						diag("undefined: %s", s->name);
 						s->type = STEXT;
@@ -412,7 +418,8 @@ dostkoff(void)
 		symmorestack->text->from.scale |= NOSPLIT;
 	}
 	
-	if(HEADTYPE == 2)	
+	plan9_tos = S;
+	if(HEADTYPE == Hplan9x32)
 		plan9_tos = lookup("_tos", 0);
 
 	for(cursym = textp; cursym != nil; cursym = cursym->next) {
@@ -425,15 +432,14 @@ dostkoff(void)
 			autoffset = 0;
 
 		q = P;
-		q1 = P;
 		if(pmorestack != P)
 		if(!(p->from.scale & NOSPLIT)) {
 			p = appendp(p);	// load g into CX
 			switch(HEADTYPE) {
-			case 10:	// Windows
+			case Hwindows:
 				p->as = AMOVL;
 				p->from.type = D_INDIR+D_FS;
-				p->from.offset = 0x2c;
+				p->from.offset = 0x14;
 				p->to.type = D_CX;
 
 				p = appendp(p);
@@ -443,7 +449,7 @@ dostkoff(void)
 				p->to.type = D_CX;
 				break;
 			
-			case 7:	// Linux
+			case Hlinux:
 				p->as = AMOVL;
 				p->from.type = D_INDIR+D_GS;
 				p->from.offset = 0;
@@ -456,7 +462,7 @@ dostkoff(void)
 				p->to.type = D_CX;
 				break;
 			
-			case 2:	// Plan 9
+			case Hplan9x32:
 				p->as = AMOVL;
 				p->from.type = D_EXTERN;
 				p->from.sym = plan9_tos;
@@ -533,13 +539,21 @@ dostkoff(void)
 				q = p;
 			}
 
-			p = appendp(p);	// save frame size in DX
+			p = appendp(p);	// save frame size in DI
 			p->as = AMOVL;
-			p->to.type = D_DX;
-			/* 160 comes from 3 calls (3*8) 4 safes (4*8) and 104 guard */
+			p->to.type = D_DI;
 			p->from.type = D_CONST;
-			if(autoffset+160+cursym->text->to.offset2 > 4096)
-				p->from.offset = (autoffset+160) & ~7LL;
+
+			// If we ask for more stack, we'll get a minimum of StackMin bytes.
+			// We need a stack frame large enough to hold the top-of-stack data,
+			// the function arguments+results, our caller's PC, our frame,
+			// a word for the return PC of the next call, and then the StackLimit bytes
+			// that must be available on entry to any function called from a function
+			// that did a stack check.  If StackMin is enough, don't ask for a specific
+			// amount: then we can use the custom functions and save a few
+			// instructions.
+			if(StackTop + cursym->text->to.offset2 + PtrSize + autoffset + PtrSize + StackLimit >= StackMin)
+				p->from.offset = (autoffset+7) & ~7LL;
 
 			p = appendp(p);	// save arg size in AX
 			p->as = AMOVL;
@@ -566,8 +580,46 @@ dostkoff(void)
 			p->spadj = autoffset;
 			if(q != P)
 				q->pcond = p;
+		} else {
+			// zero-byte stack adjustment.
+			// Insert a fake non-zero adjustment so that stkcheck can
+			// recognize the end of the stack-splitting prolog.
+			p = appendp(p);
+			p->as = ANOP;
+			p->spadj = -PtrSize;
+			p = appendp(p);
+			p->as = ANOP;
+			p->spadj = PtrSize;
 		}
 		deltasp = autoffset;
+		
+		if(debug['Z'] && autoffset && !(cursym->text->from.scale&NOSPLIT)) {
+			// 8l -Z means zero the stack frame on entry.
+			// This slows down function calls but can help avoid
+			// false positives in garbage collection.
+			p = appendp(p);
+			p->as = AMOVL;
+			p->from.type = D_SP;
+			p->to.type = D_DI;
+			
+			p = appendp(p);
+			p->as = AMOVL;
+			p->from.type = D_CONST;
+			p->from.offset = autoffset/4;
+			p->to.type = D_CX;
+			
+			p = appendp(p);
+			p->as = AMOVL;
+			p->from.type = D_CONST;
+			p->from.offset = 0;
+			p->to.type = D_AX;
+			
+			p = appendp(p);
+			p->as = AREP;
+			
+			p = appendp(p);
+			p->as = ASTOSL;
+		}
 		
 		for(; p != P; p = p->link) {
 			a = p->from.type;
@@ -612,14 +664,17 @@ dostkoff(void)
 				diag("unbalanced PUSH/POP");
 	
 			if(autoffset) {
-				q = p;
+				p->as = AADJSP;
+				p->from.type = D_CONST;
+				p->from.offset = -autoffset;
+				p->spadj = -autoffset;
 				p = appendp(p);
 				p->as = ARET;
-	
-				q->as = AADJSP;
-				q->from.type = D_CONST;
-				q->from.offset = -autoffset;
-				p->spadj = -autoffset;
+				// If there are instructions following
+				// this ARET, they come from a branch
+				// with the same stackframe, so undo
+				// the cleanup.
+				p->spadj = +autoffset;
 			}
 		}
 	}
@@ -663,16 +718,4 @@ atolwhex(char *s)
 	if(f)
 		n = -n;
 	return n;
-}
-
-void
-undef(void)
-{
-	int i;
-	Sym *s;
-
-	for(i=0; i<NHASH; i++)
-	for(s = hash[i]; s != S; s = s->hash)
-		if(s->type == SXREF)
-			diag("%s(%d): not defined", s->name, s->version);
 }

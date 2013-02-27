@@ -28,11 +28,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
-#undef	EXTERN
-#define	EXTERN
 #include "opt.h"
 
+#define	NREGVAR	32	/* 16 general + 16 floating */
+#define	REGBITS	((uint32)0xffffffff)
 #define	P2R(p)	(Reg*)(p->reg)
 
 static	int	first	= 1;
@@ -87,8 +89,8 @@ setoutvar(void)
 			ovar.b[z] |= bit.b[z];
 		t = structnext(&save);
 	}
-//if(bany(b))
-//print("ovars = %Q\n", &ovar);
+//if(bany(&ovar))
+//print("ovars = %Q\n", ovar);
 }
 
 static void
@@ -96,23 +98,62 @@ setaddrs(Bits bit)
 {
 	int i, n;
 	Var *v;
-	Sym *s;
+	Node *node;
 
 	while(bany(&bit)) {
 		// convert each bit to a variable
 		i = bnum(bit);
-		s = var[i].sym;
+		node = var[i].node;
 		n = var[i].name;
 		bit.b[i/32] &= ~(1L<<(i%32));
 
 		// disable all pieces of that variable
 		for(i=0; i<nvar; i++) {
 			v = var+i;
-			if(v->sym == s && v->name == n)
+			if(v->node == node && v->name == n)
 				v->addr = 2;
 		}
 	}
 }
+
+static char* regname[] = {
+	".AX",
+	".CX",
+	".DX",
+	".BX",
+	".SP",
+	".BP",
+	".SI",
+	".DI",
+	".R8",
+	".R9",
+	".R10",
+	".R11",
+	".R12",
+	".R13",
+	".R14",
+	".R15",
+	".X0",
+	".X1",
+	".X2",
+	".X3",
+	".X4",
+	".X5",
+	".X6",
+	".X7",
+	".X8",
+	".X9",
+	".X10",
+	".X11",
+	".X12",
+	".X13",
+	".X14",
+	".X15",
+};
+
+static Node* regnodes[NREGVAR];
+
+static void fixjmp(Prog*);
 
 void
 regopt(Prog *firstp)
@@ -125,9 +166,11 @@ regopt(Prog *firstp)
 
 	if(first) {
 		fmtinstall('Q', Qconv);
-		exregoffset = D_R13;	// R14,R15 are external
+		exregoffset = D_R15;
 		first = 0;
 	}
+
+	fixjmp(firstp);
 
 	// count instructions
 	nr = 0;
@@ -142,7 +185,20 @@ regopt(Prog *firstp)
 	r1 = R;
 	firstr = R;
 	lastr = R;
-	nvar = 0;
+
+	/*
+	 * control flow is more complicated in generated go code
+	 * than in generated c code.  define pseudo-variables for
+	 * registers, so we have complete register usage information.
+	 */
+	nvar = NREGVAR;
+	memset(var, 0, NREGVAR*sizeof var[0]);
+	for(i=0; i<NREGVAR; i++) {
+		if(regnodes[i] == N)
+			regnodes[i] = newname(lookup(regname[i]));
+		var[i].node = regnodes[i];
+	}
+
 	regbits = RtoB(D_SP);
 	for(z=0; z<BITS; z++) {
 		externs.b[z] = 0;
@@ -168,6 +224,8 @@ regopt(Prog *firstp)
 		case AGLOBL:
 		case ANAME:
 		case ASIGNAME:
+		case ALOCALS:
+		case ATYPE:
 			continue;
 		}
 		r = rega();
@@ -195,6 +253,20 @@ regopt(Prog *firstp)
 				r1->s1 = R;
 			}
 		}
+
+		// Avoid making variables for direct-called functions.
+		if(p->as == ACALL && p->to.type == D_EXTERN)
+			continue;
+
+		// Addressing makes some registers used.
+		if(p->from.type >= D_INDIR)
+			r->use1.b[0] |= RtoB(p->from.type-D_INDIR);
+		if(p->from.index != D_NONE)
+			r->use1.b[0] |= RtoB(p->from.index);
+		if(p->to.type >= D_INDIR)
+			r->use2.b[0] |= RtoB(p->to.type-D_INDIR);
+		if(p->to.index != D_NONE)
+			r->use2.b[0] |= RtoB(p->to.index);
 
 		bit = mkvar(r, &p->from);
 		if(bany(&bit))
@@ -247,6 +319,9 @@ regopt(Prog *firstp)
 		case ACOMISD:
 		case AUCOMISS:
 		case AUCOMISD:
+		case ATESTB:
+		case ATESTL:
+		case ATESTQ:
 			for(z=0; z<BITS; z++)
 				r->use2.b[z] |= bit.b[z];
 			break;
@@ -254,6 +329,7 @@ regopt(Prog *firstp)
 		/*
 		 * right side write
 		 */
+		case ALEAQ:
 		case ANOP:
 		case AMOVL:
 		case AMOVQ:
@@ -261,6 +337,8 @@ regopt(Prog *firstp)
 		case AMOVW:
 		case AMOVBLSX:
 		case AMOVBLZX:
+		case AMOVBWSX:
+		case AMOVBWZX:
 		case AMOVBQSX:
 		case AMOVBQZX:
 		case AMOVLQSX:
@@ -269,6 +347,8 @@ regopt(Prog *firstp)
 		case AMOVWLZX:
 		case AMOVWQSX:
 		case AMOVWQZX:
+		case AMOVQL:
+		case APOPQ:
 
 		case AMOVSS:
 		case AMOVSD:
@@ -357,6 +437,8 @@ regopt(Prog *firstp)
 		case AIMULL:
 		case AIMULQ:
 		case AIMULW:
+		case ANEGB:
+		case ANEGW:
 		case ANEGL:
 		case ANEGQ:
 		case ANOTL:
@@ -365,6 +447,23 @@ regopt(Prog *firstp)
 		case AADCQ:
 		case ASBBL:
 		case ASBBQ:
+
+		case ASETCC:
+		case ASETCS:
+		case ASETEQ:
+		case ASETGE:
+		case ASETGT:
+		case ASETHI:
+		case ASETLE:
+		case ASETLS:
+		case ASETLT:
+		case ASETMI:
+		case ASETNE:
+		case ASETOC:
+		case ASETOS:
+		case ASETPC:
+		case ASETPL:
+		case ASETPS:
 
 		case AXCHGB:
 		case AXCHGW:
@@ -411,32 +510,44 @@ regopt(Prog *firstp)
 			if(p->to.type != D_NONE)
 				break;
 
-		case AIDIVB:
 		case AIDIVL:
-		case AIDIVQ:
 		case AIDIVW:
+		case AIDIVQ:
+		case ADIVL:
+		case ADIVW:
+		case ADIVQ:
+		case AMULL:
+		case AMULW:
+		case AMULQ:
+			r->set.b[0] |= RtoB(D_AX) | RtoB(D_DX);
+			r->use1.b[0] |= RtoB(D_AX) | RtoB(D_DX);
+			break;
+
+		case AIDIVB:
 		case AIMULB:
 		case ADIVB:
-		case ADIVL:
-		case ADIVQ:
-		case ADIVW:
-		case AMULB:
-		case AMULL:
-		case AMULQ:
-		case AMULW:
+ 		case AMULB:
+			r->set.b[0] |= RtoB(D_AX);
+			r->use1.b[0] |= RtoB(D_AX);
+			break;
 
 		case ACWD:
-		case ACDQ:
-		case ACQO:
-			r->regu |= RtoB(D_AX) | RtoB(D_DX);
+			r->set.b[0] |= RtoB(D_AX) | RtoB(D_DX);
+			r->use1.b[0] |= RtoB(D_AX);
 			break;
+
+		case ACDQ:
+			r->set.b[0] |= RtoB(D_DX);
+			r->use1.b[0] |= RtoB(D_AX);
+ 			break;
 
 		case AREP:
 		case AREPN:
 		case ALOOP:
 		case ALOOPEQ:
 		case ALOOPNE:
-			r->regu |= RtoB(D_CX);
+			r->set.b[0] |= RtoB(D_CX);
+			r->use1.b[0] |= RtoB(D_CX);
 			break;
 
 		case AMOVSB:
@@ -447,7 +558,8 @@ regopt(Prog *firstp)
 		case ACMPSL:
 		case ACMPSQ:
 		case ACMPSW:
-			r->regu |= RtoB(D_SI) | RtoB(D_DI);
+			r->set.b[0] |= RtoB(D_SI) | RtoB(D_DI);
+			r->use1.b[0] |= RtoB(D_SI) | RtoB(D_DI);
 			break;
 
 		case ASTOSB:
@@ -458,16 +570,22 @@ regopt(Prog *firstp)
 		case ASCASL:
 		case ASCASQ:
 		case ASCASW:
-			r->regu |= RtoB(D_AX) | RtoB(D_DI);
+			r->set.b[0] |= RtoB(D_DI);
+			r->use1.b[0] |= RtoB(D_AX) | RtoB(D_DI);
 			break;
 
 		case AINSB:
 		case AINSL:
 		case AINSW:
+			r->set.b[0] |= RtoB(D_DX) | RtoB(D_DI);
+			r->use1.b[0] |= RtoB(D_DI);
+			break;
+
 		case AOUTSB:
 		case AOUTSL:
 		case AOUTSW:
-			r->regu |= RtoB(D_DI) | RtoB(D_DX);
+			r->set.b[0] |= RtoB(D_DI);
+			r->use1.b[0] |= RtoB(D_DX) | RtoB(D_DI);
 			break;
 		}
 	}
@@ -482,8 +600,9 @@ regopt(Prog *firstp)
 				addrs.b[z] |= bit.b[z];
 		}
 
-//		print("bit=%2d addr=%d et=%-6E w=%-2d s=%S + %lld\n",
-//			i, v->addr, v->etype, v->width, v->sym, v->offset);
+		if(debug['R'] && debug['v'])
+			print("bit=%2d addr=%d et=%-6E w=%-2d s=%N + %lld\n",
+				i, v->addr, v->etype, v->width, v->node, v->offset);
 	}
 
 	if(debug['R'] && debug['v'])
@@ -497,9 +616,9 @@ regopt(Prog *firstp)
 	for(r=firstr; r!=R; r=r->link) {
 		p = r->prog;
 		if(p->to.type == D_BRANCH) {
-			if(p->to.branch == P)
+			if(p->to.u.branch == P)
 				fatal("pnil %P", p);
-			r1 = p->to.branch->reg;
+			r1 = p->to.u.branch->reg;
 			if(r1 == R)
 				fatal("rnil %P", p);
 			if(r1 == r) {
@@ -574,6 +693,24 @@ loop2:
 		dumpit("pass4", firstr);
 
 	/*
+	 * pass 4.5
+	 * move register pseudo-variables into regu.
+	 */
+	for(r = firstr; r != R; r = r->link) {
+		r->regu = (r->refbehind.b[0] | r->set.b[0]) & REGBITS;
+
+		r->set.b[0] &= ~REGBITS;
+		r->use1.b[0] &= ~REGBITS;
+		r->use2.b[0] &= ~REGBITS;
+		r->refbehind.b[0] &= ~REGBITS;
+		r->refahead.b[0] &= ~REGBITS;
+		r->calbehind.b[0] &= ~REGBITS;
+		r->calahead.b[0] &= ~REGBITS;
+		r->regdiff.b[0] &= ~REGBITS;
+		r->act.b[0] &= ~REGBITS;
+	}
+
+	/*
 	 * pass 5
 	 * isolate regions
 	 * calculate costs (paint1)
@@ -628,6 +765,9 @@ loop2:
 brk:
 	qsort(region, nregion, sizeof(region[0]), rcmp);
 
+	if(debug['R'] && debug['v'])
+		dumpit("pass5", firstr);
+
 	/*
 	 * pass 6
 	 * determine used registers (paint2)
@@ -638,8 +778,16 @@ brk:
 		bit = blsh(rgp->varno);
 		vreg = paint2(rgp->enter, rgp->varno);
 		vreg = allreg(vreg, rgp);
-		if(rgp->regno != 0)
+		if(rgp->regno != 0) {
+			if(debug['R'] && debug['v']) {
+				Var *v;
+
+				v = var + rgp->varno;
+				print("registerize %N+%d (bit=%2d et=%2E) in %R\n",
+						v->node, v->offset, rgp->varno, v->etype, rgp->regno);
+			}
 			paint3(rgp->enter, rgp->varno, vreg, rgp->regno);
+		}
 		rgp++;
 	}
 
@@ -662,12 +810,12 @@ brk:
 		while(p->link != P && p->link->as == ANOP)
 			p->link = p->link->link;
 		if(p->to.type == D_BRANCH)
-			while(p->to.branch != P && p->to.branch->as == ANOP)
-				p->to.branch = p->to.branch->link;
+			while(p->to.u.branch != P && p->to.u.branch->as == ANOP)
+				p->to.u.branch = p->to.u.branch->link;
 	}
 
-	if(r1 != R) {
-		r1->link = freer;
+	if(lastr != R) {
+		lastr->link = freer;
 		freer = firstr;
 	}
 
@@ -690,9 +838,9 @@ brk:
 		if(ostats.ndelmov)
 			print("	%4d delmov\n", ostats.ndelmov);
 		if(ostats.nvar)
-			print("	%4d delmov\n", ostats.nvar);
+			print("	%4d var\n", ostats.nvar);
 		if(ostats.naddr)
-			print("	%4d delmov\n", ostats.naddr);
+			print("	%4d addr\n", ostats.naddr);
 
 		memset(&ostats, 0, sizeof(ostats));
 	}
@@ -721,18 +869,18 @@ addmove(Reg *r, int bn, int rn, int f)
 	v = var + bn;
 
 	a = &p1->to;
-	a->sym = v->sym;
 	a->offset = v->offset;
 	a->etype = v->etype;
 	a->type = v->name;
-	a->gotype = v->gotype;
+	a->node = v->node;
+	a->sym = v->node->sym;
 
 	// need to clean this up with wptr and
 	// some of the defaults
 	p1->as = AMOVL;
 	switch(v->etype) {
 	default:
-		fatal("unknown type\n");
+		fatal("unknown type %E", v->etype);
 	case TINT8:
 	case TUINT8:
 	case TBOOL:
@@ -817,10 +965,12 @@ Bits
 mkvar(Reg *r, Adr *a)
 {
 	Var *v;
-	int i, t, n, et, z, w, flag;
+	int i, t, n, et, z, flag;
+	int64 w;
+	uint32 regu;
 	int32 o;
 	Bits bit;
-	Sym *s;
+	Node *node;
 
 	/*
 	 * mark registers used
@@ -829,14 +979,17 @@ mkvar(Reg *r, Adr *a)
 	if(t == D_NONE)
 		goto none;
 
-	if(r != R) {
-		r->regu |= doregbits(t);
-		r->regu |= doregbits(a->index);
-	}
+	if(r != R)
+		r->use1.b[0] |= doregbits(a->index);
 
 	switch(t) {
 	default:
-		goto none;
+		regu = doregbits(t);
+		if(regu == 0)
+			goto none;
+		bit = zbits;
+		bit.b[0] = regu;
+		return bit;
 
 	case D_ADDR:
 		a->type = a->index;
@@ -853,19 +1006,25 @@ mkvar(Reg *r, Adr *a)
 		n = t;
 		break;
 	}
-	s = a->sym;
-	if(s == S)
+
+	node = a->node;
+	if(node == N || node->op != ONAME || node->orig == N)
 		goto none;
-	if(s->name[0] == '.')
+	node = node->orig;
+	if(node->orig != node)
+		fatal("%D: bad node", a);
+	if(node->sym == S || node->sym->name[0] == '.')
 		goto none;
 	et = a->etype;
 	o = a->offset;
 	w = a->width;
+	if(w < 0)
+		fatal("bad width %lld for %D", w, a);
 
 	flag = 0;
 	for(i=0; i<nvar; i++) {
 		v = var+i;
-		if(v->sym == s && v->name == n) {
+		if(v->node == node && v->name == n) {
 			if(v->offset == o)
 			if(v->etype == et)
 			if(v->width == w)
@@ -873,14 +1032,12 @@ mkvar(Reg *r, Adr *a)
 
 			// if they overlaps, disable both
 			if(overlap(v->offset, v->width, o, w)) {
+//				print("disable overlap %s %d %d %d %d, %E != %E\n", s->name, v->offset, v->width, o, w, v->etype, et);
 				v->addr = 1;
 				flag = 1;
 			}
 		}
 	}
-	if(a->pun)
-		flag = 1;
-
 	switch(et) {
 	case 0:
 	case TFUNC:
@@ -888,24 +1045,24 @@ mkvar(Reg *r, Adr *a)
 	}
 
 	if(nvar >= NVAR) {
-		if(debug['w'] > 1 && s)
-			fatal("variable not optimized: %D", a);
+		if(debug['w'] > 1 && node != N)
+			fatal("variable not optimized: %#N", node);
 		goto none;
 	}
 
 	i = nvar;
 	nvar++;
 	v = var+i;
-	v->sym = s;
 	v->offset = o;
 	v->name = n;
-	v->gotype = a->gotype;
 	v->etype = et;
 	v->width = w;
 	v->addr = flag;		// funny punning
+	v->node = node;
 
 	if(debug['R'])
-		print("bit=%2d et=%2d w=%d %S %D\n", i, et, w, s, a);
+		print("bit=%2d et=%2E w=%d+%d %#N %D flag=%d\n", i, et, o, w, node, a, v->addr);
+
 	ostats.nvar++;
 
 	bit = blsh(i);
@@ -962,6 +1119,17 @@ prop(Reg *r, Bits ref, Bits cal)
 			for(z=0; z<BITS; z++) {
 				cal.b[z] = externs.b[z] | ovar.b[z];
 				ref.b[z] = 0;
+			}
+			break;
+
+		default:
+			// Work around for issue 1304:
+			// flush modified globals before each instruction.
+			for(z=0; z<BITS; z++) {
+				cal.b[z] |= externs.b[z];
+				// issue 4066: flush modified return variables in case of panic
+				if(hasdefer)
+					cal.b[z] |= ovar.b[z];
 			}
 			break;
 		}
@@ -1100,10 +1268,12 @@ loopit(Reg *r, int32 nr)
 		r1 = rpo2r[i];
 		me = r1->rpo;
 		d = -1;
-		if(r1->p1 != R && r1->p1->rpo < me)
+		// rpo2r[r->rpo] == r protects against considering dead code,
+		// which has r->rpo == 0.
+		if(r1->p1 != R && rpo2r[r1->p1->rpo] == r1->p1 && r1->p1->rpo < me)
 			d = r1->p1->rpo;
 		for(r1 = r1->p2; r1 != nil; r1 = r1->p2link)
-			if(r1->rpo < me)
+			if(rpo2r[r1->rpo] == r1 && r1->rpo < me)
 				d = rpolca(idom, d, r1->rpo);
 		idom[i] = d;
 	}
@@ -1193,7 +1363,6 @@ void
 paint1(Reg *r, int bn)
 {
 	Reg *r1;
-	Prog *p;
 	int z;
 	uint32 bb;
 
@@ -1219,7 +1388,6 @@ paint1(Reg *r, int bn)
 	}
 	for(;;) {
 		r->act.b[z] |= bb;
-		p = r->prog;
 
 		if(r->use1.b[z] & bb) {
 			change += CREF * r->loop;
@@ -1448,7 +1616,7 @@ RtoB(int r)
 int
 BtoR(int32 b)
 {
-	b &= 0x3fffL;		// no R14 or R15
+	b &= 0xffffL;
 	if(b == 0)
 		return 0;
 	return bitno(b) + D_AX;
@@ -1456,26 +1624,26 @@ BtoR(int32 b)
 
 /*
  *	bit	reg
- *	16	X5 (FREGMIN)
+ *	16	X0
  *	...
- *	26	X15 (FREGEXT)
+ *	31	X15
  */
 int32
 FtoB(int f)
 {
-	if(f < FREGMIN || f > FREGEXT)
+	if(f < D_X0 || f > D_X15)
 		return 0;
-	return 1L << (f - FREGMIN + 16);
+	return 1L << (f - D_X0 + 16);
 }
 
 int
 BtoF(int32 b)
 {
 
-	b &= 0xFF0000L;
+	b &= 0xFFFF0000L;
 	if(b == 0)
 		return 0;
-	return bitno(b) - 16 + FREGMIN;
+	return bitno(b) - 16 + D_X0;
 }
 
 void
@@ -1510,7 +1678,7 @@ dumpone(Reg *r)
 		if(bany(&r->refahead))
 			print(" ra:%Q ", r->refahead);
 		if(bany(&r->calbehind))
-			print("cb:%Q ", r->calbehind);
+			print(" cb:%Q ", r->calbehind);
 		if(bany(&r->calahead))
 			print(" ca:%Q ", r->calahead);
 		if(bany(&r->regdiff))
@@ -1559,6 +1727,7 @@ noreturn(Prog *p)
 		symlist[1] = pkglookup("panicslice", runtimepkg);
 		symlist[2] = pkglookup("throwinit", runtimepkg);
 		symlist[3] = pkglookup("panic", runtimepkg);
+		symlist[4] = pkglookup("panicwrap", runtimepkg);
 	}
 
 	s = p->to.sym;
@@ -1568,4 +1737,124 @@ noreturn(Prog *p)
 		if(s == symlist[i])
 			return 1;
 	return 0;
+}
+
+/*
+ * the code generator depends on being able to write out JMP
+ * instructions that it can jump to now but fill in later.
+ * the linker will resolve them nicely, but they make the code
+ * longer and more difficult to follow during debugging.
+ * remove them.
+ */
+
+/* what instruction does a JMP to p eventually land on? */
+static Prog*
+chasejmp(Prog *p, int *jmploop)
+{
+	int n;
+
+	n = 0;
+	while(p != P && p->as == AJMP && p->to.type == D_BRANCH) {
+		if(++n > 10) {
+			*jmploop = 1;
+			break;
+		}
+		p = p->to.u.branch;
+	}
+	return p;
+}
+
+/*
+ * reuse reg pointer for mark/sweep state.
+ * leave reg==nil at end because alive==nil.
+ */
+#define alive ((void*)0)
+#define dead ((void*)1)
+
+/* mark all code reachable from firstp as alive */
+static void
+mark(Prog *firstp)
+{
+	Prog *p;
+	
+	for(p=firstp; p; p=p->link) {
+		if(p->reg != dead)
+			break;
+		p->reg = alive;
+		if(p->as != ACALL && p->to.type == D_BRANCH && p->to.u.branch)
+			mark(p->to.u.branch);
+		if(p->as == AJMP || p->as == ARET || p->as == AUNDEF)
+			break;
+	}
+}
+
+static void
+fixjmp(Prog *firstp)
+{
+	int jmploop;
+	Prog *p, *last;
+	
+	if(debug['R'] && debug['v'])
+		print("\nfixjmp\n");
+
+	// pass 1: resolve jump to AJMP, mark all code as dead.
+	jmploop = 0;
+	for(p=firstp; p; p=p->link) {
+		if(debug['R'] && debug['v'])
+			print("%P\n", p);
+		if(p->as != ACALL && p->to.type == D_BRANCH && p->to.u.branch && p->to.u.branch->as == AJMP) {
+			p->to.u.branch = chasejmp(p->to.u.branch, &jmploop);
+			if(debug['R'] && debug['v'])
+				print("->%P\n", p);
+		}
+		p->reg = dead;
+	}
+	if(debug['R'] && debug['v'])
+		print("\n");
+
+	// pass 2: mark all reachable code alive
+	mark(firstp);
+	
+	// pass 3: delete dead code (mostly JMPs).
+	last = nil;
+	for(p=firstp; p; p=p->link) {
+		if(p->reg == dead) {
+			if(p->link == P && p->as == ARET && last && last->as != ARET) {
+				// This is the final ARET, and the code so far doesn't have one.
+				// Let it stay.
+			} else {
+				if(debug['R'] && debug['v'])
+					print("del %P\n", p);
+				continue;
+			}
+		}
+		if(last)
+			last->link = p;
+		last = p;
+	}
+	last->link = P;
+	
+	// pass 4: elide JMP to next instruction.
+	// only safe if there are no jumps to JMPs anymore.
+	if(!jmploop) {
+		last = nil;
+		for(p=firstp; p; p=p->link) {
+			if(p->as == AJMP && p->to.type == D_BRANCH && p->to.u.branch == p->link) {
+				if(debug['R'] && debug['v'])
+					print("del %P\n", p);
+				continue;
+			}
+			if(last)
+				last->link = p;
+			last = p;
+		}
+		last->link = P;
+	}
+	
+	if(debug['R'] && debug['v']) {
+		print("\n");
+		for(p=firstp; p; p=p->link)
+			print("%P\n", p);
+		print("\n");
+	}
 }

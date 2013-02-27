@@ -29,7 +29,9 @@
 // THE SOFTWARE.
 
 %{
+#include <u.h>
 #include <stdio.h>	/* if we don't, bison will, and a.h re-#defines getc */
+#include <libc.h>
 #include "a.h"
 %}
 %union	{
@@ -173,6 +175,11 @@ nonrel:
 	{
 		$$.from = nullgen;
 		$$.to = $1;
+	}
+|	imm ',' rel
+	{
+		$$.from = $1;
+		$$.to = $3;
 	}
 
 spec1:	/* DATA */
@@ -426,6 +433,12 @@ imm:
 		$$ = nullgen;
 		$$.type = D_FCONST;
 		$$.dval = $3;
+	}
+|	'$' '(' '-' LFCONST ')'
+	{
+		$$ = nullgen;
+		$$.type = D_FCONST;
+		$$.dval = -$4;
 	}
 |	'$' '-' LFCONST
 	{

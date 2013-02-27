@@ -1,4 +1,4 @@
-// $G $D/$F.go && $L $F.$A && ./$A.out
+// run
 
 // Copyright 2010 The Go Authors.  All rights reserved.
 // Use of this source code is governed by a BSD-style
@@ -8,15 +8,21 @@
 
 package main
 
-import "runtime"
+import (
+	"os"
+	"runtime"
+)
 
 func main() {
 	test1()
 	test1WithClosures()
 	test2()
 	test3()
-	test4()
-	test5()
+	// exp/ssa/interp still has some bugs in recover().
+	if os.Getenv("GOSSAINTERP") == "" {
+		test4()
+		test5()
+	}
 	test6()
 	test6WithClosures()
 	test7()
@@ -241,6 +247,33 @@ func test7() {
 	}()
 	if !ok {
 		println("did not run ok func")
+		die()
+	}
+}
+
+func varargs(s *int, a ...int) {
+	*s = 0
+	for _, v := range a {
+		*s += v
+	}
+	if recover() != nil {
+		*s += 100
+	}
+}
+
+func test8a() (r int) {
+	defer varargs(&r, 1, 2, 3)
+	panic(0)
+}
+
+func test8b() (r int) {
+	defer varargs(&r, 4, 5, 6)
+	return
+}
+
+func test8() {
+	if test8a() != 106 || test8b() != 15 {
+		println("wrong value")
 		die()
 	}
 }

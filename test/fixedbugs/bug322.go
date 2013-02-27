@@ -1,20 +1,8 @@
-// errchk $G $D/$F.go
+// rundir
 
-// Copyright 2011 The Go Authors.  All rights reserved.
+// Copyright 2011 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
-
-type T struct{}
-type P *T
-
-func (t *T) Meth() {}
-func (t T) Meth2() {}
-
-func main() {
-	t := &T{}
-	p := P(t)
-	p.Meth()  // ERROR "undefined \(type P"
-	p.Meth2() // ERROR "undefined \(type P"
-}
+// Test case for issue 1402.
+package ignored

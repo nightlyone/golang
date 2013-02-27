@@ -31,7 +31,7 @@
 #include	<u.h>
 #include	<libc.h>
 #include	<bio.h>
-#include	"../8l/8.out.h"
+#include	"8.out.h"
 
 #ifndef	EXTERN
 #define	EXTERN	extern
@@ -39,16 +39,15 @@
 
 enum
 {
-	PtrSize = 4
+	thechar = '8',
+	PtrSize = 4,
+	IntSize = 4,
+	FuncAlign = 16
 };
 
 #define	P		((Prog*)0)
 #define	S		((Sym*)0)
 #define	TNAME		(cursym?cursym->name:noname)
-#define	cput(c)\
-	{ *cbp++ = c;\
-	if(--cbc <= 0)\
-		cflush(); }
 
 typedef	struct	Adr	Adr;
 typedef	struct	Prog	Prog;
@@ -110,6 +109,7 @@ struct	Prog
 };
 #define	datasize	from.scale
 #define	textflag	from.scale
+#define	iscall(p)	((p)->as == ACALL)
 
 struct	Auto
 {
@@ -128,20 +128,31 @@ struct	Sym
 	uchar	reachable;
 	uchar	dynexport;
 	uchar	special;
+	uchar	stkcheck;
+	uchar	hide;
 	int32	value;
 	int32	size;
 	int32	sig;
 	int32	dynid;
 	int32	plt;
 	int32	got;
+	int32	align;	// if non-zero, required alignment in bytes
+	int32	elfsym;
+	int32	locals;	// size of stack frame locals area
+	int32	args;	// size of stack frame incoming arguments area
 	Sym*	hash;	// in hash table
+	Sym*	allsym;	// in all symbol list
 	Sym*	next;	// in text or data list
 	Sym*	sub;	// in sub list
 	Sym*	outer;	// container of sub
 	Sym*	gotype;
+	Sym*	reachparent;
+	Sym*	queue;
 	char*	file;
 	char*	dynimpname;
 	char*	dynimplib;
+	char*	dynimpvers;
+	struct Section*	sect;
 	
 	// STEXT
 	Auto*	autom;
@@ -154,6 +165,7 @@ struct	Sym
 	Reloc*	r;
 	int32	nr;
 	int32	maxr;
+	int 	rel_ro;
 };
 struct	Optab
 {
@@ -165,31 +177,6 @@ struct	Optab
 
 enum
 {
-	Sxxx,
-	
-	/* order here is order in output file */
-	STEXT,
-	SELFDATA,
-	SMACHOPLT,
-	SRODATA,
-	SDATA,
-	SMACHO,	/* Mach-O __nl_symbol_ptr */
-	SMACHOGOT,
-	SWINDOWS,
-	SBSS,
-
-	SXREF,
-	SMACHODYNSTR,
-	SMACHODYNSYM,
-	SMACHOINDIRECTPLT,
-	SMACHOINDIRECTGOT,
-	SFILE,
-	SCONST,
-	SDYNIMPORT,
-
-	SSUB = 1<<8,	/* sub-symbol, linked from parent via ->sub list */
-
-	NHASH		= 10007,
 	MINSIZ		= 4,
 	STRINGSZ	= 200,
 	MINLC		= 1,
@@ -223,6 +210,8 @@ enum
 	Ycr0,	Ycr1,	Ycr2,	Ycr3,	Ycr4,	Ycr5,	Ycr6,	Ycr7,
 	Ydr0,	Ydr1,	Ydr2,	Ydr3,	Ydr4,	Ydr5,	Ydr6,	Ydr7,
 	Ytr0,	Ytr1,	Ytr2,	Ytr3,	Ytr4,	Ytr5,	Ytr6,	Ytr7,
+	Ymr, Ymm,
+	Yxr, Yxm,
 	Ymax,
 
 	Zxxx		= 0,
@@ -232,6 +221,7 @@ enum
 	Zbr,
 	Zcall,
 	Zcallcon,
+	Zcallind,
 	Zib_,
 	Zib_rp,
 	Zibo_m,
@@ -243,10 +233,14 @@ enum
 	Zloop,
 	Zm_o,
 	Zm_r,
+	Zm_r_xm,
+	Zm_r_i_xm,
 	Zaut_r,
 	Zo_m,
 	Zpseudo,
 	Zr_m,
+	Zr_m_xm,
+	Zr_m_i_xm,
 	Zrp_,
 	Z_ib,
 	Z_il,
@@ -264,26 +258,19 @@ enum
 	Pm		= 0x0f,	/* 2byte opcode escape */
 	Pq		= 0xff,	/* both escape */
 	Pb		= 0xfe,	/* byte operands */
+	Pf2		= 0xf2,	/* xmm escape 1 */
+	Pf3		= 0xf3,	/* xmm escape 2 */
 };
 
-EXTERN union
-{
-	struct
-	{
-		char	obuf[MAXIO];			/* output buffer */
-		uchar	ibuf[MAXIO];			/* input buffer */
-	} u;
-	char	dbuf[1];
-} buf;
-
-#define	cbuf	u.obuf
-#define	xbuf	u.ibuf
-
-#pragma	varargck	type	"A"	uint
+#pragma	varargck	type	"A"	int
 #pragma	varargck	type	"D"	Adr*
+#pragma	varargck	type	"I"	uchar*
 #pragma	varargck	type	"P"	Prog*
 #pragma	varargck	type	"R"	int
 #pragma	varargck	type	"S"	char*
+#pragma	varargck	type	"Y"	Sym*
+#pragma	varargck	type	"Z"	char*
+#pragma	varargck	type	"i"	char*
 
 EXTERN	int32	HEADR;
 EXTERN	int32	HEADTYPE;
@@ -291,10 +278,8 @@ EXTERN	int32	INITRND;
 EXTERN	int32	INITTEXT;
 EXTERN	int32	INITDAT;
 EXTERN	char*	INITENTRY;		/* entry point */
-EXTERN	Biobuf	bso;
+EXTERN	char*	LIBINITENTRY;		/* shared library entry point */
 EXTERN	int32	casepc;
-EXTERN	int	cbc;
-EXTERN	char*	cbp;
 EXTERN	char*	pcstr;
 EXTERN	Auto*	curauto;
 EXTERN	Auto*	curhist;
@@ -302,7 +287,7 @@ EXTERN	Prog*	curp;
 EXTERN	Sym*	cursym;
 EXTERN	Sym*	datap;
 EXTERN	int32	elfdatsize;
-EXTERN	char	debug[128];
+EXTERN	int	debug[128];
 EXTERN	char	literal[32];
 EXTERN	Sym*	etextp;
 EXTERN	Prog*	firstp;
@@ -315,7 +300,6 @@ EXTERN	int	maxop;
 EXTERN	int	nerrors;
 EXTERN	char*	noname;
 EXTERN	int32	pc;
-EXTERN	char*	interpreter;
 EXTERN	char*	rpath;
 EXTERN	int32	spsize;
 EXTERN	Sym*	symlist;
@@ -401,11 +385,6 @@ void	deadcode(void);
 #define	LPUT(a)	lputl(a)
 #define	WPUT(a)	wputl(a)
 #define	VPUT(a)	vputl(a)
-
-#pragma	varargck	type	"D"	Adr*
-#pragma	varargck	type	"P"	Prog*
-#pragma	varargck	type	"R"	int
-#pragma	varargck	type	"A"	int
 
 /* Used by ../ld/dwarf.c */
 enum

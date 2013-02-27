@@ -2,11 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 
 int	thechar	= '6';
 char*	thestring	= "amd64";
 
+vlong MAXWIDTH = 1LL<<50;
 
 /*
  * go declares several platform-specific type aliases:
@@ -14,8 +17,8 @@ char*	thestring	= "amd64";
  */
 Typedef	typedefs[] =
 {
-	"int",		TINT,		TINT32,
-	"uint",		TUINT,		TUINT32,
+	"int",		TINT,		TINT64,
+	"uint",		TUINT,		TUINT64,
 	"uintptr",	TUINTPTR,	TUINT64,
 	0
 };
@@ -24,6 +27,7 @@ void
 betypeinit(void)
 {
 	widthptr = 8;
+	widthint = 8;
 
 	zprog.link = P;
 	zprog.as = AGOK;

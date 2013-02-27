@@ -28,6 +28,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include	<u.h>
 #include	"cc.h"
 #include	"y.tab.h"
 
@@ -85,10 +86,37 @@ pathchar(void)
  */
 
 void
+usage(void)
+{
+	print("usage: %cc [options] file.c...\n", thechar);
+	flagprint(1);
+	errorexit();
+}
+
+void
+dospim(void)
+{
+	thechar = '0';
+	thestring = "spim";
+}
+
+char **defs;
+int ndef;
+
+void
+dodef(char *p)
+{
+	if(ndef%8 == 0)
+		defs = allocn(defs, ndef*sizeof(char *),
+			8*sizeof(char *));
+	defs[ndef++] = p;
+	dodefine(p);
+}
+
+void
 main(int argc, char *argv[])
 {
-	char **defs, *p;
-	int nproc, nout, i, c, ndef;
+	int c;
 
 	ensuresymb(NSYMB);
 	memset(debug, 0, sizeof(debug));
@@ -102,90 +130,61 @@ main(int argc, char *argv[])
 	defs = nil;
 	outfile = 0;
 	setinclude(".");
-	ARGBEGIN {
-	default:
-		c = ARGC();
-		if(c >= 0 && c < sizeof(debug))
-			debug[c]++;
-		break;
 
-	case 'l':			/* for little-endian mips */
-		if(thechar != 'v'){
-			print("can only use -l with vc");
-			errorexit();
-		}
-		thechar = '0';
-		thestring = "spim";
-		break;
+	flagcount("+", "pass -+ to preprocessor", &debug['+']);	
+	flagcount(".", "pass -. to preprocessor", &debug['.']);	
+	flagcount("<", "debug shift", &debug['<']);
+	flagcount("A", "debug alignment", &debug['A']);
+	flagcount("B", "allow pre-ANSI code", &debug['B']);
+	if(thechar == '5')
+		flagcount("C", "debug constant propagation", &debug['C']);
+	flagfn1("D", "name[=value]: add #define", dodef);
+	flagcount("F", "enable print format checks", &debug['F']);
+	if(thechar == '5')
+		flagcount("H", "debug shift propagation", &debug['H']);
+	flagfn1("I", "dir: add dir to include path", setinclude);
+	flagcount("L", "debug lexer", &debug['L']);
+	flagcount("M", "debug move generation", &debug['M']);
+	flagcount("N", "disable optimizations", &debug['N']);
+	flagcount("P", "debug peephole optimizer", &debug['P']);
+	flagcount("Q", "print exported Go definitions", &debug['Q']);
+	flagcount("R", "debug register optimizer", &debug['R']);
+	flagcount("S", "print assembly", &debug['S']);
+	flagcount("T", "enable type signatures", &debug['T']);
+	flagcount("V", "enable pointer type checks", &debug['V']);
+	flagcount("W", "debug switch generation", &debug['W']);
+	flagcount("X", "abort on error", &debug['X']);
+	flagcount("Y", "debug index generation", &debug['Y']);
+	flagcount("Z", "skip code generation", &debug['Z']);
+	flagcount("a", "print acid definitions", &debug['a']);
+	flagcount("c", "debug constant evaluation", &debug['c']);
+	flagcount("d", "debug declarations", &debug['d']);
+	flagcount("e", "debug macro expansion", &debug['e']);
+	flagcount("f", "debug pragmas", &debug['f']);
+	flagcount("g", "debug code generation", &debug['g']);
+	flagcount("i", "debug initialization", &debug['i']);
+	if(thechar == 'v')
+		flagfn0("l", "little-endian mips mode", dospim);
+	flagcount("m", "debug multiplication", &debug['m']);
+	flagcount("n", "print acid/Go to file, not stdout", &debug['n']);
+	flagstr("o", "file: set output file", &outfile);
+	flagcount("p", "invoke C preprocessor", &debug['p']);	
+	flagcount("q", "print Go definitions", &debug['q']);
+	flagcount("s", "print #define assembly offsets", &debug['s']);
+	flagcount("t", "debug code generation", &debug['t']);
+	flagcount("w", "enable warnings", &debug['w']);
+	flagcount("v", "increase debug verbosity", &debug['v']);	
+	if(thechar == '6')
+		flagcount("largemodel", "generate code that assumes a large memory model", &flag_largemodel);
+	
+	flagparse(&argc, &argv, usage);
 
-	case 'o':
-		outfile = ARGF();
-		break;
+	if(argc < 1 && outfile == 0)
+		usage();
 
-	case 'D':
-		p = ARGF();
-		if(p) {
-			if(ndef%8 == 0)
-				defs = allocn(defs, ndef*sizeof(char *),
-					8*sizeof(char *));
-			defs[ndef++] = p;
-			dodefine(p);
-		}
-		break;
-
-	case 'I':
-		p = ARGF();
-		setinclude(p);
-		break;
-	} ARGEND
-	if(argc < 1 && outfile == 0) {
-		print("usage: %cc [-options] files\n", thechar);
+	if(argc > 1){
+		print("can't compile multiple files\n");
 		errorexit();
-	}
-	if(argc > 1 && systemtype(Windows)){
-		print("can't compile multiple files on windows\n");
-		errorexit();
-	}
-	if(argc > 1 && !systemtype(Windows)) {
-		nproc = 1;
-		/*
-		 * if we're writing acid to standard output, don't compile
-		 * concurrently, to avoid interleaving output.
-		 */
-		if(((!debug['a'] && !debug['q'] && !debug['Q']) || debug['n']) &&
-		    (p = getenv("NPROC")) != nil)
-			nproc = atol(p);	/* */
-		c = 0;
-		nout = 0;
-		for(;;) {
-			Waitmsg *w;
-
-			while(nout < nproc && argc > 0) {
-				i = fork();
-				if(i < 0) {
-					print("cannot create a process\n");
-					errorexit();
-				}
-				if(i == 0) {
-					fprint(2, "%s:\n", *argv);
-					if (compile(*argv, defs, ndef))
-						errorexit();
-					exits(0);
-				}
-				nout++;
-				argc--;
-				argv++;
-			}
-			w = wait();
-			if(w == nil) {
-				if(c)
-					errorexit();
-				exits(0);
-			}
-			if(w->msg[0])
-				c++;
-			nout--;
-		}
 	}
 
 	if(argc == 0)
@@ -201,7 +200,7 @@ main(int argc, char *argv[])
 int
 compile(char *file, char **defs, int ndef)
 {
-	char *ofile, incfile[20];
+	char *ofile;
 	char *p, **av, opt[256];
 	int i, c, fd[2];
 	static int first = 1;
@@ -236,15 +235,6 @@ compile(char *file, char **defs, int ndef)
 			outfile = "/dev/null";
 	}
 
-	if(p = getenv("INCLUDE")) {
-		setinclude(p);
-	} else {
-		if(systemtype(Plan9)) {
-			sprint(incfile, "/%s/include", thestring);
-			setinclude(strdup(incfile));
-			setinclude("/sys/include");
-		}
-	}
 	if (first)
 		Binit(&diagbuf, 1, OWRITE);
 	/*
@@ -426,15 +416,20 @@ lookup(void)
 		symb[1] = '"';
 	}
 
-	// turn · into .
 	for(r=w=symb; *r; r++) {
+		// turn · (U+00B7) into .
+		// turn ∕ (U+2215) into /
 		if((uchar)*r == 0xc2 && (uchar)*(r+1) == 0xb7) {
 			*w++ = '.';
+			r++;
+		}else if((uchar)*r == 0xe2 && (uchar)*(r+1) == 0x88 && (uchar)*(r+2) == 0x95) {
+			*w++ = '/';
+			r++;
 			r++;
 		}else
 			*w++ = *r;
 	}
-	*w++ = '\0';
+	*w = '\0';
 
 	h = 0;
 	for(p=symb; *p;) {
@@ -1223,6 +1218,7 @@ struct
 	"inline",	LINLINE,	0,
 	"int",		LINT,		TINT,
 	"long",		LLONG,		TLONG,
+	"PREFETCH",	LPREFETCH,	0,
 	"register",	LREGISTER,	0,
 	"restrict",	LRESTRICT,	0,
 	"return",	LRETURN,	0,
@@ -1574,7 +1570,7 @@ alloc(int32 n)
 	p = malloc(n);
 	if(p == nil) {
 		print("alloc out of mem\n");
-		exit(1);
+		exits("alloc: out of mem");
 	}
 	memset(p, 0, n);
 	return p;
@@ -1588,7 +1584,7 @@ allocn(void *p, int32 n, int32 d)
 	p = realloc(p, n+d);
 	if(p == nil) {
 		print("allocn out of mem\n");
-		exit(1);
+		exits("allocn: out of mem");
 	}
 	if(d > 0)
 		memset((char*)p+n, 0, d);

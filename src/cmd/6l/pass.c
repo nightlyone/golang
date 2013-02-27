@@ -32,15 +32,9 @@
 
 #include	"l.h"
 #include	"../ld/lib.h"
+#include "../../pkg/runtime/stack.h"
 
 static void xfol(Prog*, Prog**);
-
-// see ../../runtime/proc.c:/StackGuard
-enum
-{
-	StackSmall = 128,
-	StackBig = 4096,
-};
 
 Prog*
 brchain(Prog *p)
@@ -85,6 +79,7 @@ nofollow(int a)
 	case ARETFL:
 	case ARETFQ:
 	case ARETFW:
+	case AUNDEF:
 		return 1;
 	}
 	return 0;
@@ -198,20 +193,34 @@ loop:
 		 * recurse to follow one path.
 		 * continue loop on the other.
 		 */
-		q = brchain(p->link);
-		if(q != P && q->mark)
-		if(a != ALOOP) {
-			p->as = relinv(a);
-			p->link = p->pcond;
+		if((q = brchain(p->pcond)) != P)
 			p->pcond = q;
+		if((q = brchain(p->link)) != P)
+			p->link = q;
+		if(p->from.type == D_CONST) {
+			if(p->from.offset == 1) {
+				/*
+				 * expect conditional jump to be taken.
+				 * rewrite so that's the fall-through case.
+				 */
+				p->as = relinv(a);
+				q = p->link;
+				p->link = p->pcond;
+				p->pcond = q;
+			}
+		} else {			
+			q = p->link;
+			if(q->mark)
+			if(a != ALOOP) {
+				p->as = relinv(a);
+				p->link = p->pcond;
+				p->pcond = q;
+			}
 		}
 		xfol(p->link, last);
-		q = brchain(p->pcond);
-		if(q->mark) {
-			p->pcond = q;
+		if(p->pcond->mark)
 			return;
-		}
-		p = q;
+		p = p->pcond;
 		goto loop;
 	}
 	p = p->link;
@@ -277,19 +286,19 @@ patch(void)
 	vexit = s->value;
 	for(cursym = textp; cursym != nil; cursym = cursym->next)
 	for(p = cursym->text; p != P; p = p->link) {
-		if(HEADTYPE == 10) { 
+		if(HEADTYPE == Hwindows) { 
 			// Windows
 			// Convert
-			//   op   n(GS), reg
+			//   op	  n(GS), reg
 			// to
-			//   MOVL 0x58(GS), reg
-			//   op   n(reg), reg
+			//   MOVL 0x28(GS), reg
+			//   op	  n(reg), reg
 			// The purpose of this patch is to fix some accesses
 			// to extern register variables (TLS) on Windows, as
 			// a different method is used to access them.
 			if(p->from.type == D_INDIR+D_GS
 			&& p->to.type >= D_AX && p->to.type <= D_DI 
-			&& p->from.offset != 0x58) {
+			&& p->from.offset <= 8) {
 				q = appendp(p);
 				q->from = p->from;
 				q->from.type = D_INDIR + p->to.type;
@@ -297,10 +306,12 @@ patch(void)
 				q->as = p->as;
 				p->as = AMOVQ;
 				p->from.type = D_INDIR+D_GS;
-				p->from.offset = 0x58;
+				p->from.offset = 0x28;
 			}
 		}
-		if(HEADTYPE == 7 || HEADTYPE == 9) {
+		if(HEADTYPE == Hlinux || HEADTYPE == Hfreebsd
+		|| HEADTYPE == Hopenbsd || HEADTYPE == Hnetbsd
+		|| HEADTYPE == Hplan9x64) {
 			// ELF uses FS instead of GS.
 			if(p->from.type == D_INDIR+D_GS)
 				p->from.type = D_INDIR+D_FS;
@@ -312,7 +323,7 @@ patch(void)
 			if(s) {
 				if(debug['c'])
 					Bprint(&bso, "%s calls %s\n", TNAME, s->name);
-				if((s->type&~SSUB) != STEXT) {
+				if((s->type&SMASK) != STEXT) {
 					/* diag prints TNAME first */
 					diag("undefined: %s", s->name);
 					s->type = STEXT;
@@ -408,11 +419,9 @@ dostkoff(void)
 		pmorestack[i] = symmorestack[i]->text;
 	}
 
-	autoffset = 0;
-	deltasp = 0;
 	for(cursym = textp; cursym != nil; cursym = cursym->next) {
 		if(cursym->text == nil || cursym->text->link == nil)
-			continue;
+			continue;				
 
 		p = cursym->text;
 		parsetextconst(p->to.offset);
@@ -420,26 +429,35 @@ dostkoff(void)
 		if(autoffset < 0)
 			autoffset = 0;
 
+		if(autoffset < StackSmall && !(p->from.scale & NOSPLIT)) {
+			for(q = p; q != P; q = q->link)
+				if(q->as == ACALL)
+					goto noleaf;
+			p->from.scale |= NOSPLIT;
+		noleaf:;
+		}
+
 		q = P;
-		q1 = P;
 		if((p->from.scale & NOSPLIT) && autoffset >= StackSmall)
 			diag("nosplit func likely to overflow stack");
 
 		if(!(p->from.scale & NOSPLIT)) {
 			p = appendp(p);	// load g into CX
 			p->as = AMOVQ;
-			if(HEADTYPE == 7 || HEADTYPE == 9)	// ELF uses FS
+			if(HEADTYPE == Hlinux || HEADTYPE == Hfreebsd
+			|| HEADTYPE == Hopenbsd || HEADTYPE == Hnetbsd
+			|| HEADTYPE == Hplan9x64)	// ELF uses FS
 				p->from.type = D_INDIR+D_FS;
 			else
 				p->from.type = D_INDIR+D_GS;
 			p->from.offset = tlsoffset+0;
 			p->to.type = D_CX;
-			if(HEADTYPE == 10) { // Windows
-				// movq %gs:0x58, %rcx
+			if(HEADTYPE == Hwindows) {
+				// movq %gs:0x28, %rcx
 				// movq (%rcx), %rcx
 				p->as = AMOVQ;
 				p->from.type = D_INDIR+D_GS;
-				p->from.offset = 0x58;
+				p->from.offset = 0x28;
 				p->to.type = D_CX;
 
 			
@@ -477,7 +495,6 @@ dostkoff(void)
 				p = appendp(p);
 				p->as = ANOP;
 				q1->pcond = p;
-				q1 = P;
 			}
 
 			if(autoffset < StackBig) {  // do we need to call morestack?
@@ -509,10 +526,17 @@ dostkoff(void)
 				q = p;
 			}
 
-			/* 160 comes from 3 calls (3*8) 4 safes (4*8) and 104 guard */
+			// If we ask for more stack, we'll get a minimum of StackMin bytes.
+			// We need a stack frame large enough to hold the top-of-stack data,
+			// the function arguments+results, our caller's PC, our frame,
+			// a word for the return PC of the next call, and then the StackLimit bytes
+			// that must be available on entry to any function called from a function
+			// that did a stack check.  If StackMin is enough, don't ask for a specific
+			// amount: then we can use the custom functions and save a few
+			// instructions.
 			moreconst1 = 0;
-			if(autoffset+160+textarg > 4096)
-				moreconst1 = (autoffset+160) & ~7LL;
+			if(StackTop + textarg + PtrSize + autoffset + PtrSize + StackLimit >= StackMin)
+				moreconst1 = autoffset;
 			moreconst2 = textarg;
 
 			// 4 varieties varieties (const1==0 cross const2==0)
@@ -580,6 +604,16 @@ dostkoff(void)
 			p->spadj = autoffset;
 			if(q != P)
 				q->pcond = p;
+		} else {
+			// zero-byte stack adjustment.
+			// Insert a fake non-zero adjustment so that stkcheck can
+			// recognize the end of the stack-splitting prolog.
+			p = appendp(p);
+			p->as = ANOP;
+			p->spadj = -PtrSize;
+			p = appendp(p);
+			p->as = ANOP;
+			p->spadj = PtrSize;
 		}
 		deltasp = autoffset;
 
@@ -617,7 +651,34 @@ dostkoff(void)
 			p = appendp(p);
 			p->as = ANOP;
 			q1->pcond = p;
-			q1 = P;
+		}
+		
+		if(debug['Z'] && autoffset && !(cursym->text->from.scale&NOSPLIT)) {
+			// 6l -Z means zero the stack frame on entry.
+			// This slows down function calls but can help avoid
+			// false positives in garbage collection.
+			p = appendp(p);
+			p->as = AMOVQ;
+			p->from.type = D_SP;
+			p->to.type = D_DI;
+			
+			p = appendp(p);
+			p->as = AMOVQ;
+			p->from.type = D_CONST;
+			p->from.offset = autoffset/8;
+			p->to.type = D_CX;
+			
+			p = appendp(p);
+			p->as = AMOVQ;
+			p->from.type = D_CONST;
+			p->from.offset = 0;
+			p->to.type = D_AX;
+			
+			p = appendp(p);
+			p->as = AREP;
+			
+			p = appendp(p);
+			p->as = ASTOSQ;
 		}
 		
 		for(; p != P; p = p->link) {
@@ -680,6 +741,11 @@ dostkoff(void)
 				p->spadj = -autoffset;
 				p = appendp(p);
 				p->as = ARET;
+				// If there are instructions following
+				// this ARET, they come from a branch
+				// with the same stackframe, so undo
+				// the cleanup.
+				p->spadj = +autoffset;
 			}
 		}
 	}
@@ -723,16 +789,4 @@ atolwhex(char *s)
 	if(f)
 		n = -n;
 	return n;
-}
-
-void
-undef(void)
-{
-	int i;
-	Sym *s;
-
-	for(i=0; i<NHASH; i++)
-	for(s = hash[i]; s != S; s = s->hash)
-		if(s->type == SXREF)
-			diag("%s: not defined", s->name);
 }

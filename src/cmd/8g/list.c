@@ -28,6 +28,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 
 static	int	sconsize;
@@ -105,7 +107,7 @@ Dconv(Fmt *fp)
 		break;
 
 	case D_BRANCH:
-		snprint(str, sizeof(str), "%d", a->branch->loc);
+		snprint(str, sizeof(str), "%d", a->u.branch->loc);
 		break;
 
 	case D_EXTERN:
@@ -128,18 +130,18 @@ Dconv(Fmt *fp)
 		if(fp->flags & FmtLong) {
 			d1 = a->offset;
 			d2 = a->offset2;
-			snprint(str, sizeof(str), "$%ud-%ud", (ulong)d1, (ulong)d2);
+			snprint(str, sizeof(str), "$%lud-%lud", (ulong)d1, (ulong)d2);
 			break;
 		}
 		snprint(str, sizeof(str), "$%d", a->offset);
 		break;
 
 	case D_FCONST:
-		snprint(str, sizeof(str), "$(%.17e)", a->dval);
+		snprint(str, sizeof(str), "$(%.17e)", a->u.dval);
 		break;
 
 	case D_SCONST:
-		snprint(str, sizeof(str), "$\"%Y\"", a->sval);
+		snprint(str, sizeof(str), "$\"%Y\"", a->u.sval);
 		break;
 
 	case D_ADDR:
@@ -156,7 +158,10 @@ brk:
 		strcat(str, s);
 	}
 conv:
-	return fmtstrcpy(fp, str);
+	fmtstrcpy(fp, str);
+	if(a->gotype)
+		fmtprint(fp, "{%s}", a->gotype->name);
+	return 0;
 }
 
 static	char*	regstr[] =
@@ -228,6 +233,15 @@ static	char*	regstr[] =
 	"TR5",
 	"TR6",
 	"TR7",
+
+	"X0",		/* [D_X0] */
+	"X1",
+	"X2",
+	"X3",
+	"X4",
+	"X5",
+	"X6",
+	"X7",
 
 	"NONE",		/* [D_NONE] */
 };

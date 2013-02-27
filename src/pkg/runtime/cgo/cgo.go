@@ -9,6 +9,20 @@ for details on using cgo.
 */
 package cgo
 
+/*
+
+#cgo darwin LDFLAGS: -lpthread
+#cgo freebsd LDFLAGS: -lpthread
+#cgo linux LDFLAGS: -lpthread
+#cgo netbsd LDFLAGS: -lpthread
+#cgo openbsd LDFLAGS: -lpthread
+#cgo windows LDFLAGS: -lm -mthreads
+
+#cgo CFLAGS: -Wall -Werror
+
+*/
+import "C"
+
 // Supports _cgo_panic by converting a string constant to an empty
 // interface.
 

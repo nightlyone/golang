@@ -7,17 +7,11 @@
 package main
 
 import (
-	"io"
-	"io/ioutil"
-	"os"
-	pathutil "path"
-	"sort"
-	"strings"
+	pathpkg "path"
 	"sync"
 	"time"
-	"utf8"
+	"unicode/utf8"
 )
-
 
 // An RWValue wraps a value and permits mutually exclusive
 // access to it and records the time the value was last set.
@@ -25,91 +19,21 @@ import (
 type RWValue struct {
 	mutex     sync.RWMutex
 	value     interface{}
-	timestamp int64 // time of last set(), in seconds since epoch
+	timestamp time.Time // time of last set()
 }
-
 
 func (v *RWValue) set(value interface{}) {
 	v.mutex.Lock()
 	v.value = value
-	v.timestamp = time.Seconds()
+	v.timestamp = time.Now()
 	v.mutex.Unlock()
 }
 
-
-func (v *RWValue) get() (interface{}, int64) {
+func (v *RWValue) get() (interface{}, time.Time) {
 	v.mutex.RLock()
 	defer v.mutex.RUnlock()
 	return v.value, v.timestamp
 }
-
-
-var cwd, _ = os.Getwd() // ignore errors
-
-// canonicalizePaths takes a list of (directory/file) paths and returns
-// the list of corresponding absolute paths in sorted (increasing) order.
-// Relative paths are assumed to be relative to the current directory,
-// empty and duplicate paths as well as paths for which filter(path) is
-// false are discarded. filter may be nil in which case it is not used.
-//
-func canonicalizePaths(list []string, filter func(path string) bool) []string {
-	i := 0
-	for _, path := range list {
-		path = strings.TrimSpace(path)
-		if len(path) == 0 {
-			continue // ignore empty paths (don't assume ".")
-		}
-		// len(path) > 0: normalize path
-		if pathutil.IsAbs(path) {
-			path = pathutil.Clean(path)
-		} else {
-			path = pathutil.Join(cwd, path)
-		}
-		// we have a non-empty absolute path
-		if filter != nil && !filter(path) {
-			continue
-		}
-		// keep the path
-		list[i] = path
-		i++
-	}
-	list = list[0:i]
-
-	// sort the list and remove duplicate entries
-	sort.SortStrings(list)
-	i = 0
-	prev := ""
-	for _, path := range list {
-		if path != prev {
-			list[i] = path
-			i++
-			prev = path
-		}
-	}
-
-	return list[0:i]
-}
-
-
-// writeFileAtomically writes data to a temporary file and then
-// atomically renames that file to the file named by filename.
-//
-func writeFileAtomically(filename string, data []byte) os.Error {
-	f, err := ioutil.TempFile(cwd, filename)
-	if err != nil {
-		return err
-	}
-	n, err := f.Write(data)
-	f.Close()
-	if err != nil {
-		return err
-	}
-	if n < len(data) {
-		return io.ErrShortWrite
-	}
-	return os.Rename(f.Name(), filename)
-}
-
 
 // isText returns true if a significant prefix of s looks like correct UTF-8;
 // that is, if it is likely that s is human-readable text.
@@ -124,14 +48,13 @@ func isText(s []byte) bool {
 			// last char may be incomplete - ignore
 			break
 		}
-		if c == 0xFFFD || c < ' ' && c != '\n' && c != '\t' {
+		if c == 0xFFFD || c < ' ' && c != '\n' && c != '\t' && c != '\f' {
 			// decoding error or control character - not a text file
 			return false
 		}
 	}
 	return true
 }
-
 
 // TODO(gri): Should have a mapping from extension to handler, eventually.
 
@@ -141,7 +64,6 @@ var textExt = map[string]bool{
 	".js":  false, // must be served raw
 }
 
-
 // isTextFile returns true if the file has a known extension indicating
 // a text file, or if a significant chunk of the specified file looks like
 // correct UTF-8; that is, if it is likely that the file contains human-
@@ -149,13 +71,13 @@ var textExt = map[string]bool{
 //
 func isTextFile(filename string) bool {
 	// if the extension is known, use it for decision making
-	if isText, found := textExt[pathutil.Ext(filename)]; found {
+	if isText, found := textExt[pathpkg.Ext(filename)]; found {
 		return isText
 	}
 
 	// the extension is not known; read an initial chunk
 	// of the file and check if it looks like text
-	f, err := os.Open(filename, os.O_RDONLY, 0)
+	f, err := fs.Open(filename)
 	if err != nil {
 		return false
 	}

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build ignore
+
 /*
 
 Prof is a rudimentary real-time profiler.
@@ -16,8 +18,8 @@ the program's state even when it is not running, such as when it is
 asleep or waiting for I/O.  Each thread contributes equally to the
 statistics.
 
-
-Usage: prof -p pid [-t total_secs] [-d delta_msec] [6.out args ...]
+Usage:
+	go tool prof -p pid [-t total_secs] [-d delta_msec] [6.out args ...]
 
 The output modes (default -h) are:
 
@@ -41,8 +43,7 @@ Flag -t sets the maximum real time to sample, in seconds, and -d
 sets the sampling interval in milliseconds.  The default is to sample
 every 100ms until the program completes.
 
-For reasons of disambiguation it is installed as 6prof although it also serves
-as an 8prof and a 5prof.
+It is installed as go tool prof and is architecture-independent.
 
 */
-package documentation
+package main

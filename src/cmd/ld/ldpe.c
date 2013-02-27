@@ -73,6 +73,24 @@
 #define IMAGE_REL_I386_SECREL7	0x000D
 #define IMAGE_REL_I386_REL32	0x0014
 
+#define IMAGE_REL_AMD64_ABSOLUTE 0x0000
+#define IMAGE_REL_AMD64_ADDR64 0x0001 // R_X86_64_64
+#define IMAGE_REL_AMD64_ADDR32 0x0002 // R_X86_64_PC32
+#define IMAGE_REL_AMD64_ADDR32NB 0x0003
+#define IMAGE_REL_AMD64_REL32 0x0004 
+#define IMAGE_REL_AMD64_REL32_1 0x0005
+#define IMAGE_REL_AMD64_REL32_2 0x0006
+#define IMAGE_REL_AMD64_REL32_3 0x0007
+#define IMAGE_REL_AMD64_REL32_4 0x0008
+#define IMAGE_REL_AMD64_REL32_5 0x0009
+#define IMAGE_REL_AMD64_SECTION 0x000A
+#define IMAGE_REL_AMD64_SECREL 0x000B
+#define IMAGE_REL_AMD64_SECREL7 0x000C
+#define IMAGE_REL_AMD64_TOKEN 0x000D
+#define IMAGE_REL_AMD64_SREL32 0x000E
+#define IMAGE_REL_AMD64_PAIR 0x000F
+#define IMAGE_REL_AMD64_SSPAN32 0x0010
+
 typedef struct PeSym PeSym;
 typedef struct PeSect PeSect;
 typedef struct PeObj PeObj;
@@ -125,10 +143,12 @@ ldpe(Biobuf *f, char *pkg, int64 len, char *pn)
 	Sym *s;
 	Reloc *r, *rp;
 	PeSym *sym;
-	
+
+	USED(len);
 	if(debug['v'])
 		Bprint(&bso, "%5.2f ldpe %s\n", cputime(), pn);
 	
+	sect = nil;
 	version++;
 	base = Boffset(f);
 	
@@ -147,7 +167,7 @@ ldpe(Biobuf *f, char *pkg, int64 len, char *pn)
 			goto bad;
 		obj->sect[i].size = obj->sect[i].sh.SizeOfRawData;
 		obj->sect[i].name = (char*)obj->sect[i].sh.Name;
-		// TODO return error if found .cormeta .rsrc
+		// TODO return error if found .cormeta
 	}
 	// load string table
 	Bseek(f, base+obj->fh.PointerToSymbolTable+18*obj->fh.NumberOfSymbols, 0);
@@ -192,7 +212,7 @@ ldpe(Biobuf *f, char *pkg, int64 len, char *pn)
 		if(map(obj, sect) < 0)
 			goto bad;
 		
-		name = smprint("%s(%s)", pn, sect->name);
+		name = smprint("%s(%s)", pkg, sect->name);
 		s = lookup(name, version);
 		free(name);
 		switch(sect->sh.Characteristics&(IMAGE_SCN_CNT_UNINITIALIZED_DATA|IMAGE_SCN_CNT_INITIALIZED_DATA|
@@ -201,6 +221,8 @@ ldpe(Biobuf *f, char *pkg, int64 len, char *pn)
 				s->type = SRODATA;
 				break;
 			case IMAGE_SCN_CNT_UNINITIALIZED_DATA|IMAGE_SCN_MEM_READ|IMAGE_SCN_MEM_WRITE: //.bss
+				s->type = SBSS;
+				break;
 			case IMAGE_SCN_CNT_INITIALIZED_DATA|IMAGE_SCN_MEM_READ|IMAGE_SCN_MEM_WRITE: //.data
 				s->type = SDATA;
 				break;
@@ -222,6 +244,8 @@ ldpe(Biobuf *f, char *pkg, int64 len, char *pn)
 			etextp = s;
 		}
 		sect->sym = s;
+		if(strcmp(sect->name, ".rsrc") == 0)
+			setpersrc(sect->sym);
 	}
 	
 	// load relocations
@@ -256,15 +280,30 @@ ldpe(Biobuf *f, char *pkg, int64 len, char *pn)
 				default:
 					diag("%s: unknown relocation type %d;", pn, type);
 				case IMAGE_REL_I386_REL32:
+				case IMAGE_REL_AMD64_REL32:
+				case IMAGE_REL_AMD64_ADDR32: // R_X86_64_PC32
+				case IMAGE_REL_AMD64_ADDR32NB:
 					rp->type = D_PCREL;
-					rp->add = 0;
+					rp->add = le32(rsect->base+rp->off);
 					break;
+				case IMAGE_REL_I386_DIR32NB:
 				case IMAGE_REL_I386_DIR32:
 					rp->type = D_ADDR;
 					// load addend from image
 					rp->add = le32(rsect->base+rp->off);
 					break;
+				case IMAGE_REL_AMD64_ADDR64: // R_X86_64_64
+					rp->siz = 8;
+					rp->type = D_ADDR;
+					// load addend from image
+					rp->add = le64(rsect->base+rp->off);
+					break;
 			}
+			// ld -r could generate multiple section symbols for the
+			// same section but with different values, we have to take
+			// that into account
+			if (obj->pesym[symindex].name[0] == '.')
+					rp->add += obj->pesym[symindex].value;
 		}
 		qsort(r, rsect->sh.NumberOfRelocations, sizeof r[0], rbyoff);
 		
@@ -274,8 +313,7 @@ ldpe(Biobuf *f, char *pkg, int64 len, char *pn)
 	}
 	
 	// enter sub-symbols into symbol table.
-	// frist 2 entry is file name.
-	for(i=2; i<obj->npesym; i++) {
+	for(i=0; i<obj->npesym; i++) {
 		if(obj->pesym[i].name == 0)
 			continue;
 		if(obj->pesym[i].name[0] == '.') //skip section
@@ -292,15 +330,21 @@ ldpe(Biobuf *f, char *pkg, int64 len, char *pn)
 		if(sym->sectnum == 0) {// extern
 			if(s->type == SDYNIMPORT)
 				s->plt = -2; // flag for dynimport in PE object files.
+			if (s->type == SXREF && sym->value > 0) {// global data
+				s->type = SDATA; 
+				s->size = sym->value;
+			}
 			continue;
 		} else if (sym->sectnum > 0) {
 			sect = &obj->sect[sym->sectnum-1];
 			if(sect->sym == 0)
 				diag("%s: %s sym == 0!", pn, s->name);
 		} else {
-			diag("%s: %s sectnum <0!", pn, s->name, sym->sectnum);
+			diag("%s: %s sectnum < 0!", pn, s->name);
 		}
 
+		if(sect == nil) 
+			return;
 		s->sub = sect->sym->sub;
 		sect->sym->sub = s;
 		s->type = sect->sym->type | SSUB;
@@ -341,6 +385,8 @@ map(PeObj *obj, PeSect *sect)
 		return 0;
 
 	sect->base = mal(sect->sh.SizeOfRawData);
+	if(sect->sh.PointerToRawData == 0) // .bss doesn't have data in object file
+		return 0;
 	werrstr("short read");
 	if(Bseek(obj->f, obj->base+sect->sh.PointerToRawData, 0) < 0 || 
 			Bread(obj->f, sect->base, sect->sh.SizeOfRawData) != sect->sh.SizeOfRawData)
@@ -363,15 +409,16 @@ readsym(PeObj *obj, int i, PeSym **y)
 
 	sym = &obj->pesym[i];
 	*y = sym;
-	s = nil;
 	
-	name = sym->name;
-	if(sym->sclass == IMAGE_SYM_CLASS_STATIC && sym->value == 0) // section
+	if(sym->name[0] == '.') // .section
 		name = obj->sect[sym->sectnum-1].sym->name;
-	if(strncmp(sym->name, "__imp__", 6) == 0)
-		name = &sym->name[7]; // __imp__Name => Name
-	else if(sym->name[0] == '_') 
-		name = &sym->name[1]; // _Name => Name
+	else {
+		name = sym->name;
+		if(strncmp(name, "__imp_", 6) == 0)
+			name = &name[6]; // __imp_Name => Name
+		if(thechar == '8' && name[0] == '_')
+			name = &name[1]; // _Name => Name
+	}
 	// remove last @XXX
 	p = strchr(name, '@');
 	if(p)
@@ -400,6 +447,8 @@ readsym(PeObj *obj, int i, PeSym **y)
 
 	if(s != nil && s->type == 0 && !(sym->sclass == IMAGE_SYM_CLASS_STATIC && sym->value == 0))
 		s->type = SXREF;
+	if(strncmp(sym->name, "__imp_", 6) == 0)
+		s->got = -2; // flag for __imp_
 	sym->sym = s;
 
 	return 0;

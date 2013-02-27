@@ -28,6 +28,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 
 // TODO(kaib): make 5g/list.c congruent with 5l/list.c
@@ -57,7 +59,7 @@ Pconv(Fmt *fp)
 	switch(p->as) {
 	default:
 		snprint(str1, sizeof(str1), "%A%C", p->as, p->scond);
-		if(p->reg == NREG)
+		if(p->reg == NREG && p->as != AGLOBL)
 			snprint(str, sizeof(str), "%.4d (%L) %-7s	%D,%D", 
 				p->loc, p->lineno, str1, &p->from, &p->to);
 		else
@@ -81,7 +83,7 @@ int
 Dconv(Fmt *fp)
 {
 	char str[STRINGSZ];
-	char *op;
+	const char *op;
 	Addr *a;
 	int i;
 	int32 v;
@@ -117,7 +119,7 @@ Dconv(Fmt *fp)
 
 	case D_SHIFT:
 		v = a->offset;
-		op = "<<>>->@>" + (((v>>5) & 3) << 1);
+		op = &"<<>>->@>"[(((v>>5) & 3) << 1)];
 		if(v & (1<<4))
 			sprint(str, "R%d%c%cR%d", v&15, op[0], op[1], (v>>8)&15);
 		else
@@ -151,6 +153,12 @@ Dconv(Fmt *fp)
 			sprint(str, "%M(R%d)(REG)", a, a->reg);
 		break;
 
+	case D_REGREG2:
+		sprint(str, "R%d,R%d", a->reg, (int)a->offset);
+		if(a->name != D_NONE || a->sym != S)
+			sprint(str, "%M(R%d)(REG)", a, a->reg);
+		break;
+
 	case D_FREG:
 		sprint(str, "F%d", a->reg);
 		if(a->name != D_NONE || a->sym != S)
@@ -158,24 +166,24 @@ Dconv(Fmt *fp)
 		break;
 
 	case D_BRANCH:
-		if(a->branch == P || a->branch->loc == 0) {
+		if(a->u.branch == P || a->u.branch->loc == 0) {
 			if(a->sym != S)
 				sprint(str, "%s+%d(APC)", a->sym->name, a->offset);
 			else
 				sprint(str, "%d(APC)", a->offset);
 		} else
 			if(a->sym != S)
-				sprint(str, "%s+%d(APC)", a->sym->name, a->branch->loc);
+				sprint(str, "%s+%d(APC)", a->sym->name, a->u.branch->loc);
 			else
-				sprint(str, "%d(APC)", a->branch->loc);
+				sprint(str, "%d(APC)", a->u.branch->loc);
 		break;
 
 	case D_FCONST:
-		snprint(str, sizeof(str), "$(%.17e)", a->dval);
+		snprint(str, sizeof(str), "$(%.17e)", a->u.dval);
 		break;
 
 	case D_SCONST:
-		snprint(str, sizeof(str), "$\"%Y\"", a->sval);
+		snprint(str, sizeof(str), "$\"%Y\"", a->u.sval);
 		break;
 
 		// TODO(kaib): Add back
@@ -188,7 +196,10 @@ Dconv(Fmt *fp)
 //		goto conv;
 	}
 conv:
-	return fmtstrcpy(fp, str);
+	fmtstrcpy(fp, str);
+	if(a->gotype)
+		fmtprint(fp, "{%s}", a->gotype->name);
+	return 0;
 }
 
 int

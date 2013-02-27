@@ -176,7 +176,7 @@ Dconv(Fmt *fp)
 	}
 brk:
 	if(a->index != D_NONE) {
-		sprint(s, "(%R*%d)", a->index, a->scale);
+		sprint(s, "(%R*%d)", (int)a->index, a->scale);
 		strcat(str, s);
 	}
 conv:
@@ -254,6 +254,15 @@ char*	regstr[] =
 	"TR5",
 	"TR6",
 	"TR7",
+	
+	"X0",
+	"X1",
+	"X2",
+	"X3",
+	"X4",
+	"X5",
+	"X6",
+	"X7",
 
 	"NONE",		/* [D_NONE] */
 };

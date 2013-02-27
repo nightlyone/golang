@@ -31,26 +31,40 @@
 
 #include	"l.h"
 #include	"lib.h"
+#include	"../../pkg/runtime/stack.h"
+
 #include	<ar.h>
 
 int iconv(Fmt*);
 
 char	symname[]	= SYMDEF;
 char	pkgname[]	= "__.PKGDEF";
-char*	libdir[16];
+char**	libdir;
 int	nlibdir = 0;
-int	cout = -1;
+static int	maxlibdir = 0;
+static int	cout = -1;
 
 char*	goroot;
 char*	goarch;
 char*	goos;
+char*	theline;
 
 void
 Lflag(char *arg)
 {
-	if(nlibdir >= nelem(libdir)-1) {
-		print("too many -L's: %d\n", nlibdir);
-		usage();
+	char **p;
+
+	if(nlibdir >= maxlibdir) {
+		if (maxlibdir == 0)
+			maxlibdir = 8;
+		else
+			maxlibdir *= 2;
+		p = realloc(libdir, maxlibdir * sizeof(*p));
+		if (p == nil) {
+			print("too many -L's: %d\n", nlibdir);
+			usage();
+		}
+		libdir = p;
 	}
 	libdir[nlibdir++] = arg;
 }
@@ -58,15 +72,27 @@ Lflag(char *arg)
 void
 libinit(void)
 {
+	char *race;
+
 	fmtinstall('i', iconv);
+	fmtinstall('Y', Yconv);
+	fmtinstall('Z', Zconv);
 	mywhatsys();	// get goroot, goarch, goos
 	if(strcmp(goarch, thestring) != 0)
 		print("goarch is not known: %s\n", goarch);
 
 	// add goroot to the end of the libdir list.
-	libdir[nlibdir++] = smprint("%s/pkg/%s_%s", goroot, goos, goarch);
+	race = "";
+	if(flag_race)
+		race = "_race";
+	Lflag(smprint("%s/pkg/%s_%s%s", goroot, goos, goarch, race));
 
-	unlink(outfile);
+	// Unix doesn't like it when we write to a running (or, sometimes,
+	// recently run) binary, so remove the output file before writing it.
+	// On Windows 7, remove() can force the following create() to fail.
+#ifndef _WIN32
+	remove(outfile);
+#endif
 	cout = create(outfile, 1, 0775);
 	if(cout < 0) {
 		diag("cannot create %s", outfile);
@@ -78,6 +104,13 @@ libinit(void)
 		sprint(INITENTRY, "_rt0_%s_%s", goarch, goos);
 	}
 	lookup(INITENTRY, 0)->type = SXREF;
+	if(flag_shared) {
+		if(LIBINITENTRY == nil) {
+			LIBINITENTRY = mal(strlen(goarch)+strlen(goos)+20);
+			sprint(LIBINITENTRY, "_rt0_%s_%s_lib", goarch, goos);
+		}
+		lookup(LIBINITENTRY, 0)->type = SXREF;
+	}
 }
 
 void
@@ -105,7 +138,7 @@ addlib(char *src, char *obj)
 		sprint(name, "");
 		i = 1;
 	} else
-	if(isalpha(histfrog[0]->name[1]) && histfrog[0]->name[2] == ':') {
+	if(isalpha((uchar)histfrog[0]->name[1]) && histfrog[0]->name[2] == ':') {
 		strcpy(name, histfrog[0]->name+1);
 		i = 1;
 	} else
@@ -232,30 +265,58 @@ addlibpath(char *srcref, char *objref, char *file, char *pkg)
 }
 
 void
-loadlib(void)
+loadinternal(char *name)
 {
 	char pname[1024];
 	int i, found;
 
 	found = 0;
 	for(i=0; i<nlibdir; i++) {
-		snprint(pname, sizeof pname, "%s/runtime.a", libdir[i]);
+		snprint(pname, sizeof pname, "%s/%s.a", libdir[i], name);
 		if(debug['v'])
-			Bprint(&bso, "searching for runtime.a in %s\n", pname);
+			Bprint(&bso, "searching for %s.a in %s\n", name, pname);
 		if(access(pname, AEXIST) >= 0) {
-			addlibpath("internal", "internal", pname, "runtime");
+			addlibpath("internal", "internal", pname, name);
 			found = 1;
 			break;
 		}
 	}
 	if(!found)
-		Bprint(&bso, "warning: unable to find runtime.a\n");
+		Bprint(&bso, "warning: unable to find %s.a\n", name);
+}
+
+void
+loadlib(void)
+{
+	int i;
+
+	loadinternal("runtime");
+	if(thechar == '5')
+		loadinternal("math");
+	if(flag_race)
+		loadinternal("runtime/race");
 
 	for(i=0; i<libraryp; i++) {
 		if(debug['v'])
 			Bprint(&bso, "%5.2f autolib: %s (from %s)\n", cputime(), library[i].file, library[i].objref);
+		iscgo |= strcmp(library[i].pkg, "runtime/cgo") == 0;
 		objfile(library[i].file, library[i].pkg);
 	}
+	
+	// We've loaded all the code now.
+	// If there are no dynamic libraries needed, gcc disables dynamic linking.
+	// Because of this, glibc's dynamic ELF loader occasionally (like in version 2.13)
+	// assumes that a dynamic binary always refers to at least one dynamic library.
+	// Rather than be a source of test cases for glibc, disable dynamic linking
+	// the same way that gcc would.
+	//
+	// Exception: on OS X, programs such as Shark only work with dynamic
+	// binaries, so leave it enabled on OS X (Mach-O) binaries.
+	if(!flag_shared && !havedynamic && HEADTYPE != Hdarwin)
+		debug['d'] = 1;
+	
+	importcycles();
+	sortdynexp();
 }
 
 /*
@@ -267,19 +328,27 @@ nextar(Biobuf *bp, int off, struct ar_hdr *a)
 {
 	int r;
 	int32 arsize;
+	char *buf;
 
 	if (off&01)
 		off++;
 	Bseek(bp, off, 0);
-	r = Bread(bp, a, SAR_HDR);
+	buf = Brdline(bp, '\n');
+	r = Blinelen(bp);
+	if(buf == nil) {
+		if(r == 0)
+			return 0;
+		return -1;
+	}
 	if(r != SAR_HDR)
-		return 0;
-	if(strncmp(a->fmag, ARFMAG, sizeof(a->fmag)))
+		return -1;
+	memmove(a, buf, SAR_HDR);
+	if(strncmp(a->fmag, ARFMAG, sizeof a->fmag))
 		return -1;
 	arsize = strtol(a->size, 0, 0);
 	if (arsize&1)
 		arsize++;
-	return arsize + SAR_HDR;
+	return arsize + r;
 }
 
 void
@@ -308,10 +377,11 @@ objfile(char *file, char *pkg)
 		Bseek(f, 0L, 0);
 		ldobj(f, pkg, l, file, FileObj);
 		Bterm(f);
+		free(pkg);
 		return;
 	}
 	
-	/* skip over __.SYMDEF */
+	/* skip over __.GOSYMDEF */
 	off = Boffset(f);
 	if((l = nextar(f, off, &arhdr)) <= 0) {
 		diag("%s: short read on archive file symbol header", file);
@@ -347,7 +417,7 @@ objfile(char *file, char *pkg)
 	 * the individual symbols that are unused.
 	 *
 	 * loading every object will also make it possible to
-	 * load foreign objects not referenced by __.SYMDEF.
+	 * load foreign objects not referenced by __.GOSYMDEF.
 	 */
 	for(;;) {
 		l = nextar(f, off, &arhdr);
@@ -369,6 +439,7 @@ objfile(char *file, char *pkg)
 
 out:
 	Bterm(f);
+	free(pkg);
 }
 
 void
@@ -383,9 +454,6 @@ ldobj(Biobuf *f, char *pkg, int64 len, char *pn, int whence)
 	eof = Boffset(f) + len;
 
 	pn = strdup(pn);
-	
-	USED(c4);
-	USED(magic);
 
 	c1 = Bgetc(f);
 	c2 = Bgetc(f);
@@ -395,18 +463,21 @@ ldobj(Biobuf *f, char *pkg, int64 len, char *pn, int whence)
 	Bungetc(f);
 	Bungetc(f);
 	Bungetc(f);
-	
+
 	magic = c1<<24 | c2<<16 | c3<<8 | c4;
 	if(magic == 0x7f454c46) {	// \x7F E L F
 		ldelf(f, pkg, len, pn);
+		free(pn);
 		return;
 	}
 	if((magic&~1) == 0xfeedface || (magic&~0x01000000) == 0xcefaedfe) {
 		ldmacho(f, pkg, len, pn);
+		free(pn);
 		return;
 	}
 	if(c1 == 0x4c && c2 == 0x01 || c1 == 0x64 && c2 == 0x86) {
 		ldpe(f, pkg, len, pn);
+		free(pn);
 		return;
 	}
 
@@ -432,13 +503,35 @@ ldobj(Biobuf *f, char *pkg, int64 len, char *pn, int whence)
 			return;
 		}
 		diag("%s: not an object file", pn);
+		free(pn);
 		return;
 	}
-	t = smprint("%s %s %s", getgoos(), thestring, getgoversion());
-	if(strcmp(line+10, t) != 0) {
+	
+	// First, check that the basic goos, string, and version match.
+	t = smprint("%s %s %s ", goos, thestring, getgoversion());
+	line[n] = ' ';
+	if(strncmp(line+10, t, strlen(t)) != 0 && !debug['f']) {
+		line[n] = '\0';
 		diag("%s: object is [%s] expected [%s]", pn, line+10, t);
 		free(t);
+		free(pn);
 		return;
+	}
+	
+	// Second, check that longer lines match each other exactly,
+	// so that the Go compiler and write additional information
+	// that must be the same from run to run.
+	line[n] = '\0';
+	if(n-10 > strlen(t)) {
+		if(theline == nil)
+			theline = strdup(line+10);
+		else if(strcmp(theline, line+10) != 0) {
+			line[n] = '\0';
+			diag("%s: object is [%s] expected [%s]", pn, line+10, theline);
+			free(t);
+			free(pn);
+			return;
+		}
 	}
 	free(t);
 	line[n] = '\n';
@@ -462,14 +555,46 @@ ldobj(Biobuf *f, char *pkg, int64 len, char *pn, int whence)
 	Bseek(f, import1, 0);
 
 	ldobj1(f, pkg, eof - Boffset(f), pn);
+	free(pn);
 	return;
 
 eof:
 	diag("truncated object file: %s", pn);
+	free(pn);
 }
 
 Sym*
-lookup(char *symb, int v)
+newsym(char *symb, int v)
+{
+	Sym *s;
+	int l;
+
+	l = strlen(symb) + 1;
+	s = mal(sizeof(*s));
+	if(debug['v'] > 1)
+		Bprint(&bso, "newsym %s\n", symb);
+
+	s->dynid = -1;
+	s->plt = -1;
+	s->got = -1;
+	s->name = mal(l + 1);
+	memmove(s->name, symb, l);
+
+	s->type = 0;
+	s->version = v;
+	s->value = 0;
+	s->sig = 0;
+	s->size = 0;
+	nsymbol++;
+
+	s->allsym = allsym;
+	allsym = s;
+
+	return s;
+}
+
+static Sym*
+_lookup(char *symb, int v, int creat)
 {
 	Sym *s;
 	char *p;
@@ -484,29 +609,29 @@ lookup(char *symb, int v)
 	h &= 0xffffff;
 	h %= NHASH;
 	for(s = hash[h]; s != S; s = s->hash)
-		if(s->version == v)
 		if(memcmp(s->name, symb, l) == 0)
 			return s;
+	if(!creat)
+		return nil;
 
-	s = mal(sizeof(*s));
-	if(debug['v'] > 1)
-		Bprint(&bso, "lookup %s\n", symb);
-
-	s->dynid = -1;
-	s->plt = -1;
-	s->got = -1;
-	s->name = mal(l + 1);
-	memmove(s->name, symb, l);
-
+	s = newsym(symb, v);
 	s->hash = hash[h];
-	s->type = 0;
-	s->version = v;
-	s->value = 0;
-	s->sig = 0;
-	s->size = 0;
 	hash[h] = s;
-	nsymbol++;
+
 	return s;
+}
+
+Sym*
+lookup(char *name, int v)
+{
+	return _lookup(name, v, 1);
+}
+
+// read-only lookup
+Sym*
+rlookup(char *name, int v)
+{
+	return _lookup(name, v, 0);
 }
 
 void
@@ -517,7 +642,6 @@ copyhistfrog(char *buf, int nbuf)
 
 	p = buf;
 	ep = buf + nbuf;
-	i = 0;
 	for(i=0; i<histfrogp; i++) {
 		p = seprint(p, ep, "%s", histfrog[i]->name+1);
 		if(i+1<histfrogp && (p == buf || p[-1] != '/'))
@@ -827,20 +951,28 @@ unmal(void *v, uint32 n)
 // Copied from ../gc/subr.c:/^pathtoprefix; must stay in sync.
 /*
  * Convert raw string to the prefix that will be used in the symbol table.
- * Invalid bytes turn into %xx.  Right now the only bytes that need
+ * Invalid bytes turn into %xx.	 Right now the only bytes that need
  * escaping are %, ., and ", but we escape all control characters too.
+ *
+ * Must be same as ../gc/subr.c:/^pathtoprefix.
  */
 static char*
 pathtoprefix(char *s)
 {
 	static char hex[] = "0123456789abcdef";
-	char *p, *r, *w;
+	char *p, *r, *w, *l;
 	int n;
+
+	// find first character past the last slash, if any.
+	l = s;
+	for(r=s; *r; r++)
+		if(*r == '/')
+			l = r+1;
 
 	// check for chars that need escaping
 	n = 0;
 	for(r=s; *r; r++)
-		if(*r <= ' ' || *r == '.' || *r == '%' || *r == '"')
+		if(*r <= ' ' || (*r == '.' && r >= l) || *r == '%' || *r == '"' || *r >= 0x7f)
 			n++;
 
 	// quick exit
@@ -850,7 +982,7 @@ pathtoprefix(char *s)
 	// escape
 	p = mal((r-s)+1+2*n);
 	for(r=s, w=p; *r; r++) {
-		if(*r <= ' ' || *r == '.' || *r == '%' || *r == '"') {
+		if(*r <= ' ' || (*r == '.' && r >= l) || *r == '%' || *r == '"' || *r >= 0x7f) {
 			*w++ = '%';
 			*w++ = hex[(*r>>4)&0xF];
 			*w++ = hex[*r&0xF];
@@ -900,15 +1032,6 @@ addsection(Segment *seg, char *name, int rwx)
 }
 
 void
-ewrite(int fd, void *buf, int n)
-{
-	if(write(fd, buf, n) < 0) {
-		diag("write error: %r");
-		errorexit();
-	}
-}
-
-void
 pclntab(void)
 {
 	vlong oldpc;
@@ -918,7 +1041,7 @@ pclntab(void)
 	uchar *bp;
 	
 	sym = lookup("pclntab", 0);
-	sym->type = SRODATA;
+	sym->type = SPCLNTAB;
 	sym->reachable = 1;
 	if(debug['s'])
 		return;
@@ -1012,7 +1135,7 @@ mkfwd(void)
 	Prog *p;
 	int i;
 	int32 dwn[LOG], cnt[LOG];
-	Prog *lst[LOG], *last;
+	Prog *lst[LOG];
 
 	for(i=0; i<LOG; i++) {
 		if(i == 0)
@@ -1023,7 +1146,6 @@ mkfwd(void)
 		lst[i] = P;
 	}
 	i = 0;
-	last = nil;
 	for(cursym = textp; cursym != nil; cursym = cursym->next) {
 		for(p = cursym->text; p != P; p = p->link) {
 			if(p->link == P) {
@@ -1084,3 +1206,461 @@ be64(uchar *b)
 
 Endian be = { be16, be32, be64 };
 Endian le = { le16, le32, le64 };
+
+typedef struct Chain Chain;
+struct Chain
+{
+	Sym *sym;
+	Chain *up;
+	int limit;  // limit on entry to sym
+};
+
+static int stkcheck(Chain*, int);
+static void stkprint(Chain*, int);
+static void stkbroke(Chain*, int);
+static Sym *morestack;
+static Sym *newstack;
+
+enum
+{
+	HasLinkRegister = (thechar == '5'),
+	CallSize = (!HasLinkRegister)*PtrSize,	// bytes of stack required for a call
+};
+
+void
+dostkcheck(void)
+{
+	Chain ch;
+	Sym *s;
+	
+	morestack = lookup("runtime.morestack", 0);
+	newstack = lookup("runtime.newstack", 0);
+
+	// First the nosplits on their own.
+	for(s = textp; s != nil; s = s->next) {
+		if(s->text == nil || s->text->link == nil || (s->text->textflag & NOSPLIT) == 0)
+			continue;
+		cursym = s;
+		ch.up = nil;
+		ch.sym = s;
+		ch.limit = StackLimit - CallSize;
+		stkcheck(&ch, 0);
+		s->stkcheck = 1;
+	}
+	
+	// Check calling contexts.
+	// Some nosplits get called a little further down,
+	// like newproc and deferproc.	We could hard-code
+	// that knowledge but it's more robust to look at
+	// the actual call sites.
+	for(s = textp; s != nil; s = s->next) {
+		if(s->text == nil || s->text->link == nil || (s->text->textflag & NOSPLIT) != 0)
+			continue;
+		cursym = s;
+		ch.up = nil;
+		ch.sym = s;
+		ch.limit = StackLimit - CallSize;
+		stkcheck(&ch, 0);
+	}
+}
+
+static int
+stkcheck(Chain *up, int depth)
+{
+	Chain ch, ch1;
+	Prog *p;
+	Sym *s;
+	int limit, prolog;
+	
+	limit = up->limit;
+	s = up->sym;
+	p = s->text;
+	
+	// Small optimization: don't repeat work at top.
+	if(s->stkcheck && limit == StackLimit-CallSize)
+		return 0;
+	
+	if(depth > 100) {
+		diag("nosplit stack check too deep");
+		stkbroke(up, 0);
+		return -1;
+	}
+
+	if(p == nil || p->link == nil) {
+		// external function.
+		// should never be called directly.
+		// only diagnose the direct caller.
+		if(depth == 1)
+			diag("call to external function %s", s->name);
+		return -1;
+	}
+
+	if(limit < 0) {
+		stkbroke(up, limit);
+		return -1;
+	}
+
+	// morestack looks like it calls functions,
+	// but it switches the stack pointer first.
+	if(s == morestack)
+		return 0;
+
+	ch.up = up;
+	prolog = (s->text->textflag & NOSPLIT) == 0;
+	for(p = s->text; p != P; p = p->link) {
+		limit -= p->spadj;
+		if(prolog && p->spadj != 0) {
+			// The first stack adjustment in a function with a
+			// split-checking prologue marks the end of the
+			// prologue.  Assuming the split check is correct,
+			// after the adjustment there should still be at least
+			// StackLimit bytes available below the stack pointer.
+			// If this is not the top call in the chain, no need
+			// to duplicate effort, so just stop.
+			if(depth > 0)
+				return 0;
+			prolog = 0;
+			limit = StackLimit;
+		}
+		if(limit < 0) {
+			stkbroke(up, limit);
+			return -1;
+		}
+		if(iscall(p)) {
+			limit -= CallSize;
+			ch.limit = limit;
+			if(p->to.type == D_BRANCH) {
+				// Direct call.
+				ch.sym = p->to.sym;
+				if(stkcheck(&ch, depth+1) < 0)
+					return -1;
+			} else {
+				// Indirect call.  Assume it is a splitting function,
+				// so we have to make sure it can call morestack.
+				limit -= CallSize;
+				ch.sym = nil;
+				ch1.limit = limit;
+				ch1.up = &ch;
+				ch1.sym = morestack;
+				if(stkcheck(&ch1, depth+2) < 0)
+					return -1;
+				limit += CallSize;
+			}
+			limit += CallSize;
+		}
+		
+	}
+	return 0;
+}
+
+static void
+stkbroke(Chain *ch, int limit)
+{
+	diag("nosplit stack overflow");
+	stkprint(ch, limit);
+}
+
+static void
+stkprint(Chain *ch, int limit)
+{
+	char *name;
+
+	if(ch->sym)
+		name = ch->sym->name;
+	else
+		name = "function pointer";
+
+	if(ch->up == nil) {
+		// top of chain.  ch->sym != nil.
+		if(ch->sym->text->textflag & NOSPLIT)
+			print("\t%d\tassumed on entry to %s\n", ch->limit, name);
+		else
+			print("\t%d\tguaranteed after split check in %s\n", ch->limit, name);
+	} else {
+		stkprint(ch->up, ch->limit + (!HasLinkRegister)*PtrSize);
+		if(!HasLinkRegister)
+			print("\t%d\ton entry to %s\n", ch->limit, name);
+	}
+	if(ch->limit != limit)
+		print("\t%d\tafter %s uses %d\n", limit, name, ch->limit - limit);
+}
+
+int
+headtype(char *name)
+{
+	int i;
+
+	for(i=0; headers[i].name; i++)
+		if(strcmp(name, headers[i].name) == 0) {
+			headstring = headers[i].name;
+			return headers[i].val;
+		}
+	fprint(2, "unknown header type -H %s\n", name);
+	errorexit();
+	return -1;  // not reached
+}
+
+char*
+headstr(int v)
+{
+	static char buf[20];
+	int i;
+
+	for(i=0; headers[i].name; i++)
+		if(v == headers[i].val)
+			return headers[i].name;
+	snprint(buf, sizeof buf, "%d", v);
+	return buf;
+}
+
+void
+undef(void)
+{
+	Sym *s;
+
+	for(s = allsym; s != S; s = s->allsym)
+		if(s->type == SXREF)
+			diag("%s(%d): not defined", s->name, s->version);
+}
+
+int
+Yconv(Fmt *fp)
+{
+	Sym *s;
+	Fmt fmt;
+	int i;
+	char *str;
+
+	s = va_arg(fp->args, Sym*);
+	if (s == S) {
+		fmtprint(fp, "<nil>");
+	} else {
+		fmtstrinit(&fmt);
+		fmtprint(&fmt, "%s @0x%08llx [%lld]", s->name, (vlong)s->value, (vlong)s->size);
+		for (i = 0; i < s->size; i++) {
+			if (!(i%8)) fmtprint(&fmt,  "\n\t0x%04x ", i);
+			fmtprint(&fmt, "%02x ", s->p[i]);
+		}
+		fmtprint(&fmt, "\n");
+		for (i = 0; i < s->nr; i++) {
+			fmtprint(&fmt, "\t0x%04x[%x] %d %s[%llx]\n",
+			      s->r[i].off,
+			      s->r[i].siz,
+			      s->r[i].type,
+			      s->r[i].sym->name,
+			      (vlong)s->r[i].add);
+		}
+		str = fmtstrflush(&fmt);
+		fmtstrcpy(fp, str);
+		free(str);
+	}
+
+	return 0;
+}
+
+vlong coutpos;
+
+static void
+dowrite(int fd, char *p, int n)
+{
+	int m;
+	
+	while(n > 0) {
+		m = write(fd, p, n);
+		if(m <= 0) {
+			cursym = S;
+			diag("write error: %r");
+			errorexit();
+		}
+		n -= m;
+		p += m;
+	}
+}
+
+void
+cflush(void)
+{
+	int n;
+
+	if(cbpmax < cbp)
+		cbpmax = cbp;
+	n = cbpmax - buf.cbuf;
+	dowrite(cout, buf.cbuf, n);
+	coutpos += n;
+	cbp = buf.cbuf;
+	cbc = sizeof(buf.cbuf);
+	cbpmax = cbp;
+}
+
+vlong
+cpos(void)
+{
+	return coutpos + cbp - buf.cbuf;
+}
+
+void
+cseek(vlong p)
+{
+	vlong start;
+	int delta;
+
+	if(cbpmax < cbp)
+		cbpmax = cbp;
+	start = coutpos;
+	if(start <= p && p <= start+(cbpmax - buf.cbuf)) {
+//print("cseek %lld in [%lld,%lld] (%lld)\n", p, start, start+sizeof(buf.cbuf), cpos());
+		delta = p - (start + cbp - buf.cbuf);
+		cbp += delta;
+		cbc -= delta;
+//print("now at %lld\n", cpos());
+		return;
+	}
+
+	cflush();
+	seek(cout, p, 0);
+	coutpos = p;
+}
+
+void
+cwrite(void *buf, int n)
+{
+	cflush();
+	if(n <= 0)
+		return;
+	dowrite(cout, buf, n);
+	coutpos += n;
+}
+
+void
+usage(void)
+{
+	fprint(2, "usage: %cl [options] main.%c\n", thechar, thechar);
+	flagprint(2);
+	exits("usage");
+}
+
+void
+setheadtype(char *s)
+{
+	HEADTYPE = headtype(s);
+}
+
+void
+setinterp(char *s)
+{
+	debug['I'] = 1; // denote cmdline interpreter override
+	interpreter = s;
+}
+
+void
+doversion(void)
+{
+	print("%cl version %s\n", thechar, getgoversion());
+	errorexit();
+}
+
+void
+genasmsym(void (*put)(Sym*, char*, int, vlong, vlong, int, Sym*))
+{
+	Auto *a;
+	Sym *s;
+	int32 off;
+
+	// These symbols won't show up in the first loop below because we
+	// skip STEXT symbols. Normal STEXT symbols are emitted by walking textp.
+	s = lookup("text", 0);
+	if(s->type == STEXT)
+		put(s, s->name, 'T', s->value, s->size, s->version, 0);
+	s = lookup("etext", 0);
+	if(s->type == STEXT)
+		put(s, s->name, 'T', s->value, s->size, s->version, 0);
+
+	for(s=allsym; s!=S; s=s->allsym) {
+		if(s->hide)
+			continue;
+		switch(s->type&SMASK) {
+		case SCONST:
+		case SRODATA:
+		case SSYMTAB:
+		case SPCLNTAB:
+		case SDATA:
+		case SNOPTRDATA:
+		case SELFROSECT:
+		case SMACHOGOT:
+		case STYPE:
+		case SSTRING:
+		case SGOSTRING:
+		case SWINDOWS:
+		case SGCDATA:
+		case SGCBSS:
+			if(!s->reachable)
+				continue;
+			put(s, s->name, 'D', symaddr(s), s->size, s->version, s->gotype);
+			continue;
+
+		case SBSS:
+		case SNOPTRBSS:
+			if(!s->reachable)
+				continue;
+			if(s->np > 0)
+				diag("%s should not be bss (size=%d type=%d special=%d)", s->name, (int)s->np, s->type, s->special);
+			put(s, s->name, 'B', symaddr(s), s->size, s->version, s->gotype);
+			continue;
+
+		case SFILE:
+			put(nil, s->name, 'f', s->value, 0, s->version, 0);
+			continue;
+		}
+	}
+
+	for(s = textp; s != nil; s = s->next) {
+		if(s->text == nil)
+			continue;
+
+		/* filenames first */
+		for(a=s->autom; a; a=a->link)
+			if(a->type == D_FILE)
+				put(nil, a->asym->name, 'z', a->aoffset, 0, 0, 0);
+			else
+			if(a->type == D_FILE1)
+				put(nil, a->asym->name, 'Z', a->aoffset, 0, 0, 0);
+
+		put(s, s->name, 'T', s->value, s->size, s->version, s->gotype);
+
+		/* frame, locals, args, auto and param after */
+		put(nil, ".frame", 'm', (uint32)s->text->to.offset+PtrSize, 0, 0, 0);
+		put(nil, ".locals", 'm', s->locals, 0, 0, 0);
+		put(nil, ".args", 'm', s->args, 0, 0, 0);
+
+		for(a=s->autom; a; a=a->link) {
+			// Emit a or p according to actual offset, even if label is wrong.
+			// This avoids negative offsets, which cannot be encoded.
+			if(a->type != D_AUTO && a->type != D_PARAM)
+				continue;
+			
+			// compute offset relative to FP
+			if(a->type == D_PARAM)
+				off = a->aoffset;
+			else
+				off = a->aoffset - PtrSize;
+			
+			// FP
+			if(off >= 0) {
+				put(nil, a->asym->name, 'p', off, 0, 0, a->gotype);
+				continue;
+			}
+			
+			// SP
+			if(off <= -PtrSize) {
+				put(nil, a->asym->name, 'a', -(off+PtrSize), 0, 0, a->gotype);
+				continue;
+			}
+			
+			// Otherwise, off is addressing the saved program counter.
+			// Something underhanded is going on. Say nothing.
+		}
+	}
+	if(debug['v'] || debug['n'])
+		Bprint(&bso, "symsize = %ud\n", symsize);
+	Bflush(&bso);
+}

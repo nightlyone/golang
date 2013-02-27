@@ -1,10 +1,17 @@
-// $G $D/$F.go && $L $F.$A && ./$A.out
+// run
 
 // Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Test behavior of the blank identifier (_).
+
 package main
+
+import (
+	"os"
+	"unsafe"
+)
 
 import _ "fmt"
 
@@ -100,7 +107,57 @@ func main() {
 		panic(sum)
 	}
 
+	// exp/ssa/interp doesn't yet skip blank fields in struct
+	// equivalence.  It also cannot support unsafe.Pointer.
+	if os.Getenv("GOSSAINTERP") == "" {
+		type T1 struct{ x, y, z int }
+		t1 := *(*T)(unsafe.Pointer(&T1{1, 2, 3}))
+		t2 := *(*T)(unsafe.Pointer(&T1{4, 5, 6}))
+		if t1 != t2 {
+			panic("T{} != T{}")
+		}
+	}
+
 	h(a, b)
+
+	m()
+}
+
+type I interface {
+	M(_ int, y int)
+}
+
+type TI struct{}
+
+func (_ TI) M(x int, y int) {
+	if x != y {
+		println("invalid M call:", x, y)
+		panic("bad M")
+	}
+}
+
+var fp = func(_ int, y int) {}
+
+func init() {
+	fp = fp1
+}
+
+func fp1(x, y int) {
+	if x != y {
+		println("invalid fp1 call:", x, y)
+		panic("bad fp1")
+	}
+}
+
+func m() {
+	var i I
+
+	i = TI{}
+	i.M(1, 1)
+	i.M(2, 2)
+
+	fp(1, 1)
+	fp(2, 2)
 }
 
 // useless but legal

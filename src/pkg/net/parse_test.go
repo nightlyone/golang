@@ -7,18 +7,19 @@ package net
 import (
 	"bufio"
 	"os"
-	"testing"
 	"runtime"
+	"testing"
 )
 
 func TestReadLine(t *testing.T) {
-	// /etc/services file does not exist on windows.
-	if runtime.GOOS == "windows" {
-		return
+	// /etc/services file does not exist on windows and Plan 9.
+	switch runtime.GOOS {
+	case "plan9", "windows":
+		t.Skipf("skipping test on %q", runtime.GOOS)
 	}
 	filename := "/etc/services" // a nice big file
 
-	fd, err := os.Open(filename, os.O_RDONLY, 0)
+	fd, err := os.Open(filename)
 	if err != nil {
 		t.Fatalf("open %s: %v", filename, err)
 	}

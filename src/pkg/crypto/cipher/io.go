@@ -4,40 +4,34 @@
 
 package cipher
 
-import (
-	"os"
-	"io"
-)
+import "io"
 
 // The Stream* objects are so simple that all their members are public. Users
 // can create them themselves.
 
-// StreamReader wraps a Stream into an io.Reader. It simply calls XORKeyStream
+// StreamReader wraps a Stream into an io.Reader. It calls XORKeyStream
 // to process each slice of data which passes through.
 type StreamReader struct {
 	S Stream
 	R io.Reader
 }
 
-func (r StreamReader) Read(dst []byte) (n int, err os.Error) {
+func (r StreamReader) Read(dst []byte) (n int, err error) {
 	n, err = r.R.Read(dst)
 	r.S.XORKeyStream(dst[:n], dst[:n])
 	return
 }
 
-// StreamWriter wraps a Stream into an io.Writer. It simply calls XORKeyStream
+// StreamWriter wraps a Stream into an io.Writer. It calls XORKeyStream
 // to process each slice of data which passes through. If any Write call
 // returns short then the StreamWriter is out of sync and must be discarded.
 type StreamWriter struct {
 	S   Stream
 	W   io.Writer
-	Err os.Error
+	Err error // unused
 }
 
-func (w StreamWriter) Write(src []byte) (n int, err os.Error) {
-	if w.Err != nil {
-		return 0, w.Err
-	}
+func (w StreamWriter) Write(src []byte) (n int, err error) {
 	c := make([]byte, len(src))
 	w.S.XORKeyStream(c, src)
 	n, err = w.W.Write(c)
@@ -45,12 +39,11 @@ func (w StreamWriter) Write(src []byte) (n int, err os.Error) {
 		if err == nil { // should never happen
 			err = io.ErrShortWrite
 		}
-		w.Err = err
 	}
 	return
 }
 
-func (w StreamWriter) Close() os.Error {
+func (w StreamWriter) Close() error {
 	// This saves us from either requiring a WriteCloser or having a
 	// StreamWriterCloser.
 	return w.W.(io.Closer).Close()

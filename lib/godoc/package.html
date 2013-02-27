@@ -3,114 +3,261 @@
 	Use of this source code is governed by a BSD-style
 	license that can be found in the LICENSE file.
 -->
+<!--
+	Note: Static (i.e., not template-generated) href and id
+	attributes start with "pkg-" to make it impossible for
+	them to conflict with generated attributes (some of which
+	correspond to Go identifiers).
+-->
+{{with .PDoc}}
+	{{if not $.IsMain}}
+		<div id="short-nav">
+			<dl>
+			<dd><code>import "{{html .ImportPath}}"</code></dd>
+			</dl>
+			<dl>
+			<dd><a href="#pkg-overview" class="overviewLink">Overview</a></dd>
+			<dd><a href="#pkg-index" class="indexLink">Index</a></dd>
+			{{if $.Examples}}
+				<dd><a href="#pkg-examples" class="examplesLink">Examples</a></dd>
+			{{end}}
+			{{if $.Dirs}}
+				<dd><a href="#pkg-subdirectories">Subdirectories</a></dd>
+			{{end}}
+			</dl>
+		</div>
+		<!-- The package's Name is printed as title by the top-level template -->
+		<div id="pkg-overview" class="toggleVisible">
+			<div class="collapsed">
+				<h2 class="toggleButton" title="Click to show Overview section">Overview ▹</h2>
+			</div>
+			<div class="expanded">
+				<h2 class="toggleButton" title="Click to hide Overview section">Overview ▾</h2>
+				{{comment_html .Doc}}
+			</div>
+		</div>
+		{{example_html "" $.Examples $.FSet}}
 
-{.section PAst}
-	<pre>{@ FSet|html-esc}</pre>
-{.end}
-{.section PDoc}
-	<!-- PackageName is printed as title by the top-level template -->
-	{.section IsPkg}
-		{# ImportPath is a string - no need for FSet}
-		<p><code>import "{ImportPath|html-esc}"</code></p>
-	{.end}
-	{Doc|html-comment}
-	{.section IsPkg}
-		{.section Filenames}
-			{# Filenames are strings - no need for FSet}
-			<p>
+		<div id="pkg-index" class="toggleVisible">
+		<div class="collapsed">
+			<h2 class="toggleButton" title="Click to show Index section">Index ▹</h2>
+		</div>
+		<div class="expanded">
+			<h2 class="toggleButton" title="Click to hide Index section">Index ▾</h2>
+
+		<!-- Table of contents for API; must be named manual-nav to turn off auto nav. -->
+			<div id="manual-nav">
+			<dl>
+			{{if .Consts}}
+				<dd><a href="#pkg-constants">Constants</a></dd>
+			{{end}}
+			{{if .Vars}}
+				<dd><a href="#pkg-variables">Variables</a></dd>
+			{{end}}
+			{{range .Funcs}}
+				{{$name_html := html .Name}}
+				<dd><a href="#{{$name_html}}">{{node_html .Decl $.FSet}}</a></dd>
+			{{end}}
+			{{range .Types}}
+				{{$tname_html := html .Name}}
+				<dd><a href="#{{$tname_html}}">type {{$tname_html}}</a></dd>
+				{{range .Funcs}}
+					{{$name_html := html .Name}}
+					<dd>&nbsp; &nbsp; <a href="#{{$name_html}}">{{node_html .Decl $.FSet}}</a></dd>
+				{{end}}
+				{{range .Methods}}
+					{{$name_html := html .Name}}
+					<dd>&nbsp; &nbsp; <a href="#{{$tname_html}}.{{$name_html}}">{{node_html .Decl $.FSet}}</a></dd>
+				{{end}}
+			{{end}}
+			{{if $.Notes}}
+                                {{range $marker, $item := $.Notes}}
+				<dd><a href="#pkg-note-{{$marker}}">{{noteTitle $marker | html}}s</a></dd>
+                                {{end}}
+			{{end}}
+			</dl>
+			</div><!-- #manual-nav -->
+
+		{{if $.Examples}}
+		<div id="pkg-examples">
+			<h4>Examples</h4>
+			<dl>
+			{{range $.Examples}}
+			<dd><a class="exampleLink" href="#example_{{.Name}}">{{example_name .Name}}</a></dd>
+			{{end}}
+			</dl>
+		</div>
+		{{end}}
+	
+		{{with .Filenames}}
 			<h4>Package files</h4>
+			<p>
 			<span style="font-size:90%">
-			{.repeated section @}
-				<a href="/{@|url-src}">{@|localname}</a>
-			{.end}
+			{{range .}}
+				<a href="{{.|srcLink|html}}">{{.|filename|html}}</a>
+			{{end}}
 			</span>
 			</p>
-		{.end}
-	{.end}
-	{.section Consts}
-		<h2 id="Constants">Constants</h2>
-		{.repeated section @}
-			{Doc|html-comment}
-			<pre>{Decl FSet|html-esc}</pre>
-		{.end}
-	{.end}
-	{.section Vars}
-		<h2 id="Variables">Variables</h2>
-		{.repeated section @}
-			{Doc|html-comment}
-			<pre>{Decl FSet|html-esc}</pre>
-		{.end}
-	{.end}
-	{.section Funcs}
-		{.repeated section @}
-			{# Name is a string - no need for FSet}
-			<h2 id="{Name|html-esc}">func <a href="/{Decl FSet|url-pos}">{Name|html-esc}</a></h2>
-			<p><code>{Decl FSet|html-esc}</code></p>
-			{Doc|html-comment}
-		{.end}
-	{.end}
-	{.section Types}
-		{.repeated section @}
-			<h2 id="{Type.Name FSet|html-esc}">type <a href="/{Decl FSet|url-pos}">{Type.Name FSet|html-esc}</a></h2>
-			{Doc|html-comment}
-			<p><pre>{Decl FSet|html-esc}</pre></p>
-			{.repeated section Consts}
-				{Doc|html-comment}
-				<pre>{Decl FSet|html-esc}</pre>
-			{.end}
-			{.repeated section Vars}
-				{Doc|html-comment}
-				<pre>{Decl FSet|html-esc}</pre>
-			{.end}
-			{.repeated section Factories}
-				<h3 id="{Type.Name FSet|html-esc}.{Name|html-esc}">func <a href="/{Decl FSet|url-pos}">{Name|html-esc}</a></h3>
-				<p><code>{Decl FSet|html-esc}</code></p>
-				{Doc|html-comment}
-			{.end}
-			{.repeated section Methods}
-				<h3 id="{Type.Name FSet|html-esc}.{Name|html-esc}">func ({Recv FSet|html-esc}) <a href="/{Decl FSet|url-pos}">{Name|html-esc}</a></h3>
-				<p><code>{Decl FSet|html-esc}</code></p>
-				{Doc|html-comment}
-			{.end}
-		{.end}
-	{.end}
-	{.section Bugs}
-		<h2 id="Bugs">Bugs</h2>
-		{.repeated section @}
-		{@|html-comment}
-		{.end}
-	{.end}
-{.end}
-{.section PList}
-	<h2>Other packages</h2>
-	<p>
-	{# PLIst entries are strings - no need for FSet}
-	{.repeated section @}
-	<a href="?p={@|html-esc}">{@|html-esc}</a><br />
-	{.end}
-	</p>
-{.end}
-{.section Dirs}
-	{# DirList entries are numbers and strings - no need for FSet}
-	<h2 id="Subdirectories">Subdirectories</h2>
-	<p>
-	<table class="layout">
+		{{end}}
+		</div><!-- .expanded -->
+		</div><!-- #pkg-index -->
+	
+		{{with .Consts}}
+			<h2 id="pkg-constants">Constants</h2>
+			{{range .}}
+				<pre>{{node_html .Decl $.FSet}}</pre>
+				{{comment_html .Doc}}
+			{{end}}
+		{{end}}
+		{{with .Vars}}
+			<h2 id="pkg-variables">Variables</h2>
+			{{range .}}
+				<pre>{{node_html .Decl $.FSet}}</pre>
+				{{comment_html .Doc}}
+			{{end}}
+		{{end}}
+		{{range .Funcs}}
+			{{/* Name is a string - no need for FSet */}}
+			{{$name_html := html .Name}}
+			<h2 id="{{$name_html}}">func <a href="{{posLink_url .Decl $.FSet}}">{{$name_html}}</a></h2>
+			<pre>{{node_html .Decl $.FSet}}</pre>
+			{{comment_html .Doc}}
+			{{example_html .Name $.Examples $.FSet}}
+		{{end}}
+		{{range .Types}}
+			{{$tname := .Name}}
+			{{$tname_html := html .Name}}
+			<h2 id="{{$tname_html}}">type <a href="{{posLink_url .Decl $.FSet}}">{{$tname_html}}</a></h2>
+			<pre>{{node_html .Decl $.FSet}}</pre>
+			{{comment_html .Doc}}
+
+			{{range .Consts}}
+				<pre>{{node_html .Decl $.FSet}}</pre>
+				{{comment_html .Doc}}
+			{{end}}
+
+			{{range .Vars}}
+				<pre>{{node_html .Decl $.FSet}}</pre>
+				{{comment_html .Doc}}
+			{{end}}
+
+			{{example_html $tname $.Examples $.FSet}}
+
+			{{range .Funcs}}
+				{{$name_html := html .Name}}
+				<h3 id="{{$name_html}}">func <a href="{{posLink_url .Decl $.FSet}}">{{$name_html}}</a></h3>
+				<pre>{{node_html .Decl $.FSet}}</pre>
+				{{comment_html .Doc}}
+				{{example_html .Name $.Examples $.FSet}}
+			{{end}}
+
+			{{range .Methods}}
+				{{$name_html := html .Name}}
+				<h3 id="{{$tname_html}}.{{$name_html}}">func ({{html .Recv}}) <a href="{{posLink_url .Decl $.FSet}}">{{$name_html}}</a></h3>
+				<pre>{{node_html .Decl $.FSet}}</pre>
+				{{comment_html .Doc}}
+				{{$name := printf "%s_%s" $tname .Name}}
+				{{example_html $name $.Examples $.FSet}}
+			{{end}}
+		{{end}}
+	{{else}}  {{/* not a package; is a command */}}
+		{{comment_html .Doc}}
+	{{end}}
+
+	{{with $.Notes}}
+                {{range $marker, $content := .}}
+		    <h2 id="pkg-note-{{$marker}}">{{noteTitle $marker | html}}s</h2>
+		    {{range .}}
+		    {{comment_html .}}
+                    {{end}}
+		{{end}}
+	{{end}}
+{{end}}
+
+{{with .PAst}}
+	<pre>{{node_html . $.FSet}}</pre>
+{{end}}
+
+{{with .Dirs}}
+	{{/* DirList entries are numbers and strings - no need for FSet */}}
+	{{if $.PDoc}}
+		<h2 id="pkg-subdirectories">Subdirectories</h2>
+	{{else}}
+		<div class="pkgGopher">
+			<img class="gopher" src="/doc/gopher/pkg.png"/>
+		</div>
+	{{end}}
+	<table class="dir">
 	<tr>
-	<th align="left" colspan="{MaxHeight|html-esc}">Name</th>
-	<td width="25">&nbsp;</td>
-	<th align="left">Synopsis</th>
+	<th>Name</th>
+	<th>&nbsp;&nbsp;&nbsp;&nbsp;</th>
+	<th style="text-align: left; width: auto">Synopsis</th>
 	</tr>
-	<tr>
-	<th align="left"><a href="..">..</a></th>
-	</tr>
-	{.repeated section List}
+	{{if not $.DirFlat}}
 		<tr>
-		{Depth|padding}
-		<td align="left" colspan="{Height|html-esc}"><a href="{Path|html-esc}">{Name|html-esc}</a></td>
-		<td></td>
-		<td align="left">{Synopsis|html-esc}</td>
+		<td><a href="..">..</a></td>
 		</tr>
-	{.end}
+	{{end}}
+	{{range .List}}
+		{{if $.DirFlat}}
+			{{if .HasPkg}}
+				<tr>
+				<td class="name"><a href="{{html .Path}}/">{{html .Path}}</a></td>
+				<td>&nbsp;&nbsp;&nbsp;&nbsp;</td>
+				<td style="width: auto">{{html .Synopsis}}</td>
+				</tr>
+			{{end}}
+		{{else}}
+			<tr>
+			<td class="name">{{repeat `&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;` .Depth}}<a href="{{html .Path}}/">{{html .Name}}</a></td>
+			<td>&nbsp;&nbsp;&nbsp;&nbsp;</td>
+			<td style="width: auto">{{html .Synopsis}}</td>
+			</tr>
+		{{end}}
+	{{end}}
 	</table>
-	</p>
-{.end}
+	{{if $.PDoc}}{{else}}
+	<p>Need more packages? Take a look at the <a href="http://code.google.com/p/go-wiki/wiki/Projects">Go Projects wiki page</a>.</p>
+	{{end}}
+{{end}}
+
+{{if $.Examples}}
+<script>
+$(document).ready(function() {
+	'use strict';
+	// Set up playground when each element is toggled.
+	$('div.play').each(function (i, el) {
+		var built = false;
+		$(el).closest('.toggle').click(function() {
+			// Only set up playground once.
+			if (built) {
+				return;
+			}
+			built = true;
+
+			// Set up playground.
+			var code = $('.code', el);
+			playground({
+				'codeEl':   code,
+				'outputEl': $('.output', el),
+				'runEl':    $('.run', el),
+				'fmtEl':    $('.fmt', el),
+				'shareEl':  $('.share', el),
+				'shareRedirect': 'http://play.golang.org/p/'
+			});
+
+			// Make the code textarea resize to fit content.
+			var resize = function() {
+				code.height(0);
+				var h = code[0].scrollHeight;
+				code.height(h+20); // minimize bouncing
+				code.closest('.input').height(h);
+			};
+			code.on('keydown', resize);
+			code.on('keyup', resize);
+			code.keyup(); // resize now.
+		});
+	});
+});
+</script>
+{{end}}

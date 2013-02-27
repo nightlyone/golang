@@ -25,12 +25,12 @@ func pow2(i int) float64 {
 	return pow2(i/2) * pow2(i-i/2)
 }
 
-// Wrapper around strconv.Atof64.  Handles dddddp+ddd (binary exponent)
-// itself, passes the rest on to strconv.Atof64.
+// Wrapper around strconv.ParseFloat(x, 64).  Handles dddddp+ddd (binary exponent)
+// itself, passes the rest on to strconv.ParseFloat.
 func myatof64(s string) (f float64, ok bool) {
-	a := strings.Split(s, "p", 2)
+	a := strings.SplitN(s, "p", 2)
 	if len(a) == 2 {
-		n, err := strconv.Atoi64(a[0])
+		n, err := strconv.ParseInt(a[0], 10, 64)
 		if err != nil {
 			return 0, false
 		}
@@ -62,17 +62,17 @@ func myatof64(s string) (f float64, ok bool) {
 		}
 		return v * pow2(e), true
 	}
-	f1, err := strconv.Atof64(s)
+	f1, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return 0, false
 	}
 	return f1, true
 }
 
-// Wrapper around strconv.Atof32.  Handles dddddp+ddd (binary exponent)
-// itself, passes the rest on to strconv.Atof32.
+// Wrapper around strconv.ParseFloat(x, 32).  Handles dddddp+ddd (binary exponent)
+// itself, passes the rest on to strconv.ParseFloat.
 func myatof32(s string) (f float32, ok bool) {
-	a := strings.Split(s, "p", 2)
+	a := strings.SplitN(s, "p", 2)
 	if len(a) == 2 {
 		n, err := strconv.Atoi(a[0])
 		if err != nil {
@@ -86,7 +86,8 @@ func myatof32(s string) (f float32, ok bool) {
 		}
 		return float32(float64(n) * pow2(e)), true
 	}
-	f1, err1 := strconv.Atof32(s)
+	f64, err1 := strconv.ParseFloat(s, 32)
+	f1 := float32(f64)
 	if err1 != nil {
 		return 0, false
 	}
@@ -94,31 +95,22 @@ func myatof32(s string) (f float32, ok bool) {
 }
 
 func TestFp(t *testing.T) {
-	f, err := os.Open("testfp.txt", os.O_RDONLY, 0)
+	f, err := os.Open("testdata/testfp.txt")
 	if err != nil {
-		t.Fatal("testfp: open testfp.txt:", err.String())
+		t.Fatal("testfp: open testdata/testfp.txt:", err)
 	}
 	defer f.Close()
 
-	b := bufio.NewReader(f)
+	s := bufio.NewScanner(f)
 
-	lineno := 0
-	for {
-		line, err2 := b.ReadString('\n')
-		if err2 == os.EOF {
-			break
-		}
-		if err2 != nil {
-			t.Fatal("testfp: read testfp.txt: " + err2.String())
-		}
-		line = line[0 : len(line)-1]
-		lineno++
+	for lineno := 1; s.Scan(); lineno++ {
+		line := s.Text()
 		if len(line) == 0 || line[0] == '#' {
 			continue
 		}
-		a := strings.Split(line, " ", -1)
+		a := strings.Split(line, " ")
 		if len(a) != 4 {
-			t.Error("testfp.txt:", lineno, ": wrong field count")
+			t.Error("testdata/testfp.txt:", lineno, ": wrong field count")
 			continue
 		}
 		var s string
@@ -128,22 +120,25 @@ func TestFp(t *testing.T) {
 			var ok bool
 			v, ok = myatof64(a[2])
 			if !ok {
-				t.Error("testfp.txt:", lineno, ": cannot atof64 ", a[2])
+				t.Error("testdata/testfp.txt:", lineno, ": cannot atof64 ", a[2])
 				continue
 			}
 			s = fmt.Sprintf(a[1], v)
 		case "float32":
 			v1, ok := myatof32(a[2])
 			if !ok {
-				t.Error("testfp.txt:", lineno, ": cannot atof32 ", a[2])
+				t.Error("testdata/testfp.txt:", lineno, ": cannot atof32 ", a[2])
 				continue
 			}
 			s = fmt.Sprintf(a[1], v1)
 			v = float64(v1)
 		}
 		if s != a[3] {
-			t.Error("testfp.txt:", lineno, ": ", a[0], " ", a[1], " ", a[2], " (", v, ") ",
+			t.Error("testdata/testfp.txt:", lineno, ": ", a[0], " ", a[1], " ", a[2], " (", v, ") ",
 				"want ", a[3], " got ", s)
 		}
+	}
+	if s.Err() != nil {
+		t.Fatal("testfp: read testdata/testfp.txt: ", s.Err())
 	}
 }

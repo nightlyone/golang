@@ -2,10 +2,10 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
-"""GDB Pretty printers and convencience functions for Go's runtime structures.
+"""GDB Pretty printers and convenience functions for Go's runtime structures.
 
 This script is loaded by GDB when it finds a .debug_gdb_scripts
-section in the compiled binary.  The [68]l linkers emit this with a
+section in the compiled binary. The [68]l linkers emit this with a
 path to this file based on the path to the runtime package.
 """
 
@@ -13,7 +13,7 @@ path to this file based on the path to the runtime package.
 #    - pretty printing only works for the 'native' strings. E.g. 'type
 #      foo string' will make foo a plain struct in the eyes of gdb,
 #      circumventing the pretty print triggering.
-#    -
+
 
 import sys, re
 
@@ -39,7 +39,8 @@ class StringTypePrinter:
 		return 'string'
 
 	def to_string(self):
-		return self.val['str']
+		l = int(self.val['len'])
+		return self.val['str'].string("utf-8", "ignore", l)
 
 
 class SliceTypePrinter:
@@ -57,6 +58,8 @@ class SliceTypePrinter:
 		return str(self.val.type)[6:]  # skip 'struct '
 
 	def children(self):
+		if self.val["len"] > self.val["cap"]:
+			return
 		ptr = self.val["array"]
 		for idx in range(self.val["len"]):
 			yield ('[%d]' % idx, (ptr + idx).dereference())
@@ -84,14 +87,14 @@ class MapTypePrinter:
 		stab = self.val['st']
 		i = 0
 		for v in self.traverse_hash(stab):
-			yield ("[%d]" %  i, v['key'])
+			yield ("[%d]" % i, v['key'])
 			yield ("[%d]" % (i + 1), v['val'])
 			i += 2
 
 	def traverse_hash(self, stab):
 		ptr = stab['entry'].address
-		end = stab['end']
-		while ptr < end:
+		last = stab['last']
+		while ptr <= last:
 			v = ptr.dereference()
 			ptr = ptr + 1
 			if v['hash'] == 0: continue
@@ -121,10 +124,13 @@ class ChanTypePrinter:
 		return str(self.val.type)
 
 	def children(self):
-		ptr = self.val['recvdataq']
-		for idx in range(self.val["qcount"]):
-			yield ('[%d]' % idx, ptr['elem'])
-			ptr = ptr['link']
+		# see chan.c chanbuf(). et is the type stolen from hchan<T>::recvq->first->elem
+		et = [x.type for x in self.val['recvq']['first'].type.target().fields() if x.name == 'elem'][0]
+		ptr = (self.val.address + 1).cast(et.pointer())
+		for i in range(self.val["qcount"]):
+			j = (self.val["recvx"] + i) % self.val["dataqsiz"]
+			yield ('[%d]' % i, (ptr + j).dereference())
+
 
 #
 #  Register all the *Printer classes above.
@@ -143,8 +149,8 @@ goobjfile.pretty_printers.extend([makematcher(k) for k in vars().values() if has
 
 #
 #  For reference, this is what we're trying to do:
-#  eface: p *(*(struct 'runtime.commonType'*)'main.e'->type_->data)->string
-#  iface: p *(*(struct 'runtime.commonType'*)'main.s'->tab->Type->data)->string
+#  eface: p *(*(struct 'runtime.rtype'*)'main.e'->type_->data)->string
+#  iface: p *(*(struct 'runtime.rtype'*)'main.s'->tab->Type->data)->string
 #
 # interface types can't be recognized by their name, instead we check
 # if they have the expected fields.  Unfortunately the mapping of
@@ -180,26 +186,47 @@ def lookup_type(name):
 	except:
 		pass
 
+_rctp_type = gdb.lookup_type("struct runtime.rtype").pointer()
 
-def iface_dtype(obj):
-	"Decode type of the data field of an eface or iface struct."
-
+def iface_commontype(obj):
 	if is_iface(obj):
 		go_type_ptr = obj['tab']['_type']
 	elif is_eface(obj):
 		go_type_ptr = obj['_type']
 	else:
 		return
+	
+	return go_type_ptr.cast(_rctp_type).dereference()
+	
 
-	ct = gdb.lookup_type("struct runtime.commonType").pointer()
-	dynamic_go_type = go_type_ptr['ptr'].cast(ct).dereference()
+def iface_dtype(obj):
+	"Decode type of the data field of an eface or iface struct."
+	# known issue: dtype_name decoded from runtime.rtype is "nested.Foo"
+	# but the dwarf table lists it as "full/path/to/nested.Foo"
+
+	dynamic_go_type = iface_commontype(obj)
+	if dynamic_go_type is None:
+		return
 	dtype_name = dynamic_go_type['string'].dereference()['str'].string()
-	type_size = int(dynamic_go_type['size'])
-	uintptr_size = int(dynamic_go_type['size'].type.sizeof)  # size is itself an uintptr
+
 	dynamic_gdb_type = lookup_type(dtype_name)
+	if dynamic_gdb_type is None:
+		return
+	
+	type_size = int(dynamic_go_type['size'])
+	uintptr_size = int(dynamic_go_type['size'].type.sizeof)	 # size is itself an uintptr
 	if type_size > uintptr_size:
-		dynamic_gdb_type = dynamic_gdb_type.pointer()
+			dynamic_gdb_type = dynamic_gdb_type.pointer()
+
 	return dynamic_gdb_type
+
+def iface_dtype_name(obj):
+	"Decode type name of the data field of an eface or iface struct."
+
+	dynamic_go_type = iface_commontype(obj)
+	if dynamic_go_type is None:
+		return
+	return dynamic_go_type['string'].dereference()['str'].string()
 
 
 class IfacePrinter:
@@ -214,10 +241,16 @@ class IfacePrinter:
 		return 'string'
 
 	def to_string(self):
+		if self.val['data'] == 0:
+			return 0x0
 		try:
 			dtype = iface_dtype(self.val)
 		except:
 			return "<bad dynamic type>"
+
+		if dtype is None:  # trouble looking up, print something reasonable
+			return "(%s)%s" % (iface_dtype_name(self.val), self.val['data'])
+
 		try:
 			return self.val['data'].cast(dtype).dereference()
 		except:
@@ -238,7 +271,7 @@ goobjfile.pretty_printers.append(ifacematcher)
 class GoLenFunc(gdb.Function):
 	"Length of strings, slices, maps or channels"
 
-	how = ((StringTypePrinter, 'len' ),
+	how = ((StringTypePrinter, 'len'),
 	       (SliceTypePrinter, 'len'),
 	       (MapTypePrinter, 'count'),
 	       (ChanTypePrinter, 'qcount'))
@@ -287,7 +320,7 @@ class DTypeFunc(gdb.Function):
 #  Commands
 #
 
-sts = ( 'idle', 'runnable', 'running', 'syscall', 'waiting', 'moribund', 'dead', 'recovery')
+sts = ('idle', 'runnable', 'running', 'syscall', 'waiting', 'moribund', 'dead', 'recovery')
 
 def linked_list(ptr, linkfield):
 	while ptr:
@@ -307,15 +340,11 @@ class GoroutinesCmd(gdb.Command):
 		for ptr in linked_list(gdb.parse_and_eval("'runtime.allg'"), 'alllink'):
 			if ptr['status'] == 6:	# 'gdead'
 				continue
-			m = ptr['m']
 			s = ' '
-			if m:
-				pc = m['sched']['pc'].cast(vp)
-				sp = m['sched']['sp'].cast(vp)
+			if ptr['m']:
 				s = '*'
-			else:
-				pc = ptr['sched']['pc'].cast(vp)
-				sp = ptr['sched']['sp'].cast(vp)
+			pc = ptr['sched']['pc'].cast(vp)
+			sp = ptr['sched']['sp'].cast(vp)
 			blk = gdb.block_for_pc(long((pc)))
 			print s, ptr['goid'], "%8s" % sts[long((ptr['status']))], blk.function
 
@@ -325,7 +354,7 @@ def find_goroutine(goid):
 		if ptr['status'] == 6:	# 'gdead'
 			continue
 		if ptr['goid'] == goid:
-			return [(ptr['m'] or ptr)['sched'][x].cast(vp) for x in 'pc', 'sp']
+			return [ptr['sched'][x].cast(vp) for x in 'pc', 'sp']
 	return None, None
 
 
@@ -346,6 +375,7 @@ class GoroutineCmd(gdb.Command):
 
 	def invoke(self, arg, from_tty):
 		goid, cmd = arg.split(None, 1)
+		goid = gdb.parse_and_eval(goid)
 		pc, sp = find_goroutine(int(goid))
 		if not pc:
 			print "No such goroutine: ", goid
@@ -357,10 +387,10 @@ class GoroutineCmd(gdb.Command):
 		gdb.parse_and_eval('$sp = 0x%x' % long(sp))
 		try:
 			gdb.execute(cmd)
-                finally:
+		finally:
 			gdb.parse_and_eval('$pc = $save_pc')
-                        gdb.parse_and_eval('$sp = $save_sp')
-                        save_frame.select()
+			gdb.parse_and_eval('$sp = $save_sp')
+			save_frame.select()
 
 
 class GoIfaceCmd(gdb.Command):
@@ -378,8 +408,12 @@ class GoIfaceCmd(gdb.Command):
 				print "Can't parse ", obj, ": ", e
 				continue
 
-			dtype = iface_dtype(obj)
-			if not dtype:
+			if obj['data'] == 0:
+				dtype = "nil"
+			else:
+				dtype = iface_dtype(obj)
+				
+			if dtype is None:
 				print "Not an interface: ", obj.type
 				continue
 
@@ -391,7 +425,7 @@ class GoIfaceCmd(gdb.Command):
 # so Itype will start with a commontype which has kind = interface
 
 #
-# Register all convience functions and CLI commands
+# Register all convenience functions and CLI commands
 #
 for k in vars().values():
 	if hasattr(k, 'invoke'):

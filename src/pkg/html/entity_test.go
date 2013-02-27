@@ -6,7 +6,7 @@ package html
 
 import (
 	"testing"
-	"utf8"
+	"unicode/utf8"
 )
 
 func TestEntityLength(t *testing.T) {
@@ -16,6 +16,9 @@ func TestEntityLength(t *testing.T) {
 	for k, v := range entity {
 		if 1+len(k) < utf8.RuneLen(v) {
 			t.Error("escaped entity &" + k + " is shorter than its UTF-8 encoding " + string(v))
+		}
+		if len(k) > longestEntityWithoutSemicolon && k[len(k)-1] != ';' {
+			t.Errorf("entity name %s is %d characters, but longestEntityWithoutSemicolon=%d", k, len(k), longestEntityWithoutSemicolon)
 		}
 	}
 	for k, v := range entity2 {

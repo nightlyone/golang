@@ -422,6 +422,7 @@ void
 ldmacho(Biobuf *f, char *pkg, int64 len, char *pn)
 {
 	int i, j, is64;
+	uint64 secaddr;
 	uchar hdr[7*4], *cmdp;
 	uchar tmp[4];
 	uchar *dat;
@@ -478,7 +479,7 @@ ldmacho(Biobuf *f, char *pkg, int64 len, char *pn)
 	
 	switch(thechar) {
 	default:
-		diag("%s: mach-o %s unimplemented", thestring);
+		diag("%s: mach-o %s unimplemented", pn, thestring);
 		return;
 	case '6':
 		if(e != &le || m->cputype != MachoCpuAmd64) {
@@ -564,16 +565,21 @@ ldmacho(Biobuf *f, char *pkg, int64 len, char *pn)
 			continue;
 		if(strcmp(sect->name, "__eh_frame") == 0)
 			continue;
-		name = smprint("%s(%s/%s)", pn, sect->segname, sect->name);
+		name = smprint("%s(%s/%s)", pkg, sect->segname, sect->name);
 		s = lookup(name, version);
 		if(s->type != 0) {
 			werrstr("duplicate %s/%s", sect->segname, sect->name);
 			goto bad;
 		}
 		free(name);
-		s->p = dat + sect->addr - c->seg.vmaddr;
+
 		s->np = sect->size;
 		s->size = s->np;
+		if((sect->flags & 0xff) == 1) // S_ZEROFILL
+			s->p = mal(s->size);
+		else {
+			s->p = dat + sect->addr - c->seg.vmaddr;
+		}
 		
 		if(strcmp(sect->segname, "__TEXT") == 0) {
 			if(strcmp(sect->name, "__text") == 0)
@@ -581,7 +587,11 @@ ldmacho(Biobuf *f, char *pkg, int64 len, char *pn)
 			else
 				s->type = SRODATA;
 		} else {
-			s->type = SDATA;
+			if (strcmp(sect->name, "__bss") == 0) {
+				s->type = SBSS;
+				s->np = 0;
+			} else
+				s->type = SDATA;
 		}
 		if(s->type == STEXT) {
 			if(etextp)
@@ -674,19 +684,28 @@ ldmacho(Biobuf *f, char *pkg, int64 len, char *pn)
 				int k;
 				MachoSect *ks;
 
-				if(thechar != '8')
+				if(thechar != '8') {
+					// mach-o only uses scattered relocation on 32-bit platforms
 					diag("unexpected scattered relocation");
+					continue;
+				}
 
-				// on 386, rewrite scattered 4/1 relocation into
-				// the pseudo-pc-relative reference that it is.
+				// on 386, rewrite scattered 4/1 relocation and some
+				// scattered 2/1 relocation into the pseudo-pc-relative
+				// reference that it is.
 				// assume that the second in the pair is in this section
 				// and use that as the pc-relative base.
-				if(thechar != '8' || rel->type != 4 || j+1 >= sect->nreloc ||
-						!(rel+1)->scattered || (rel+1)->type != 1 ||
-						(rel+1)->value < sect->addr || (rel+1)->value >= sect->addr+sect->size) {
+				if(j+1 >= sect->nreloc) {
+					werrstr("unsupported scattered relocation %d", (int)rel->type);
+					goto bad;
+				}
+				if(!(rel+1)->scattered || (rel+1)->type != 1 ||
+				   (rel->type != 4 && rel->type != 2) ||
+				   (rel+1)->value < sect->addr || (rel+1)->value >= sect->addr+sect->size) {
 					werrstr("unsupported scattered relocation %d/%d", (int)rel->type, (int)(rel+1)->type);
 					goto bad;
 				}
+
 				rp->siz = rel->length;
 				rp->off = rel->addr;
 				
@@ -751,8 +770,29 @@ ldmacho(Biobuf *f, char *pkg, int64 len, char *pn)
 			rp->siz = rel->length;
 			rp->type = 512 + (rel->type<<1) + rel->pcrel;
 			rp->off = rel->addr;
-			
-			rp->add = e->e32(s->p+rp->off);
+
+			// Handle X86_64_RELOC_SIGNED referencing a section (rel->extrn == 0).
+			if (thechar == '6' && rel->extrn == 0 && rel->type == 1) {
+				// Calculate the addend as the offset into the section.
+				//
+				// The rip-relative offset stored in the object file is encoded
+				// as follows:
+				//    
+				//    movsd	0x00000360(%rip),%xmm0
+				//
+				// To get the absolute address of the value this rip-relative address is pointing
+				// to, we must add the address of the next instruction to it. This is done by
+				// taking the address of the relocation and adding 4 to it (since the rip-relative
+				// offset can at most be 32 bits long).  To calculate the offset into the section the
+				// relocation is referencing, we subtract the vaddr of the start of the referenced
+				// section found in the original object file.
+				//
+				// [For future reference, see Darwin's /usr/include/mach-o/x86_64/reloc.h]
+				secaddr = c->seg.sect[rel->symnum-1].addr;
+				rp->add = e->e32(s->p+rp->off) + rp->off + 4 - secaddr;
+			} else
+				rp->add = e->e32(s->p+rp->off);
+
 			// For i386 Mach-O PC-relative, the addend is written such that
 			// it *is* the PC being subtracted.  Use that to make
 			// it match our version of PC-relative.

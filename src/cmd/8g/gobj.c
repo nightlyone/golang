@@ -28,6 +28,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 
 void
@@ -92,9 +94,9 @@ zaddr(Biobuf *b, Addr *a, int s, int gotype)
 	switch(a->type) {
 
 	case D_BRANCH:
-		if(a->branch == nil)
+		if(a->u.branch == nil)
 			fatal("unpatched branch");
-		a->offset = a->branch->loc;
+		a->offset = a->u.branch->loc;
 
 	default:
 		t |= T_TYPE;
@@ -135,7 +137,7 @@ zaddr(Biobuf *b, Addr *a, int s, int gotype)
 	if(t & T_SYM)		/* implies sym */
 		Bputc(b, s);
 	if(t & T_FCONST) {
-		ieeedtod(&e, a->dval);
+		ieeedtod(&e, a->u.dval);
 		l = e;
 		Bputc(b, l);
 		Bputc(b, l>>8);
@@ -149,7 +151,7 @@ zaddr(Biobuf *b, Addr *a, int s, int gotype)
 		return;
 	}
 	if(t & T_SCONST) {
-		n = a->sval;
+		n = a->u.sval;
 		for(i=0; i<NSNAME; i++) {
 			Bputc(b, *n);
 			n++;
@@ -226,6 +228,8 @@ dumpfuncs(void)
 	// fix up pc
 	pcloc = 0;
 	for(pl=plist; pl!=nil; pl=pl->link) {
+		if(isblank(pl->name))
+			continue;
 		for(p=pl->firstpc; p!=P; p=p->link) {
 			p->loc = pcloc;
 			if(p->as != ADATA && p->as != AGLOBL)
@@ -235,8 +239,11 @@ dumpfuncs(void)
 
 	// put out functions
 	for(pl=plist; pl!=nil; pl=pl->link) {
+		if(isblank(pl->name))
+			continue;
 
-		if(debug['S']) {
+		// -S prints code; -SS prints code and data
+		if(debug['S'] && (pl->name || debug['S']>1)) {
 			s = S;
 			if(pl->name != N)
 				s = pl->name->sym;
@@ -272,52 +279,22 @@ dumpfuncs(void)
 	}
 }
 
-/* deferred DATA output */
-static Prog *strdat;
-static Prog *estrdat;
-static int gflag;
-static Prog *savepc;
-
-void
-data(void)
-{
-	gflag = debug['g'];
-	debug['g'] = 0;
-
-	if(estrdat == nil) {
-		strdat = mal(sizeof(*pc));
-		clearp(strdat);
-		estrdat = strdat;
-	}
-	if(savepc)
-		fatal("data phase error");
-	savepc = pc;
-	pc = estrdat;
-}
-
-void
-text(void)
-{
-	if(!savepc)
-		fatal("text phase error");
-	debug['g'] = gflag;
-	estrdat = pc;
-	pc = savepc;
-	savepc = nil;
-}
-
-void
-dumpdata(void)
+int
+dsname(Sym *s, int off, char *t, int n)
 {
 	Prog *p;
 
-	if(estrdat == nil)
-		return;
-	*pc = *strdat;
-	if(gflag)
-		for(p=pc; p!=estrdat; p=p->link)
-			print("%P\n", p);
-	pc = estrdat;
+	p = gins(ADATA, N, N);
+	p->from.type = D_EXTERN;
+	p->from.index = D_NONE;
+	p->from.offset = off;
+	p->from.scale = n;
+	p->from.sym = s;
+	
+	p->to.type = D_SCONST;
+	p->to.index = D_NONE;
+	memmove(p->to.u.sval, t, n);
+	return off + n;
 }
 
 /*
@@ -327,74 +304,14 @@ dumpdata(void)
 void
 datastring(char *s, int len, Addr *a)
 {
-	int w;
-	Prog *p;
-	Addr ac, ao;
-	static int gen;
-	struct {
-		Strlit lit;
-		char buf[100];
-	} tmp;
-
-	// string
-	memset(&ao, 0, sizeof(ao));
-	ao.type = D_STATIC;
-	ao.index = D_NONE;
-	ao.etype = TINT32;
-	ao.offset = 0;		// fill in
-
-	// constant
-	memset(&ac, 0, sizeof(ac));
-	ac.type = D_CONST;
-	ac.index = D_NONE;
-	ac.offset = 0;		// fill in
-
-	// huge strings are made static to avoid long names.
-	if(len > 100) {
-		snprint(namebuf, sizeof(namebuf), ".string.%d", gen++);
-		ao.sym = lookup(namebuf);
-		ao.type = D_STATIC;
-	} else {
-		if(len > 0 && s[len-1] == '\0')
-			len--;
-		tmp.lit.len = len;
-		memmove(tmp.lit.s, s, len);
-		tmp.lit.s[len] = '\0';
-		len++;
-		snprint(namebuf, sizeof(namebuf), "\"%Z\"", &tmp.lit);
-		ao.sym = pkglookup(namebuf, stringpkg);
-		ao.type = D_EXTERN;
-	}
-	*a = ao;
-
-	// only generate data the first time.
-	if(ao.sym->flags & SymUniq)
-		return;
-	ao.sym->flags |= SymUniq;
-
-	data();
-	for(w=0; w<len; w+=8) {
-		p = pc;
-		gins(ADATA, N, N);
-
-		// DATA s+w, [NSNAME], $"xxx"
-		p->from = ao;
-		p->from.offset = w;
-
-		p->from.scale = NSNAME;
-		if(w+8 > len)
-			p->from.scale = len-w;
-
-		p->to = ac;
-		p->to.type = D_SCONST;
-		p->to.offset = len;
-		memmove(p->to.sval, s+w, p->from.scale);
-	}
-	p = pc;
-	ggloblsym(ao.sym, len, ao.type == D_EXTERN);
-	if(ao.type == D_STATIC)
-		p->from.type = D_STATIC;
-	text();
+	Sym *sym;
+	
+	sym = stringsym(s, len);
+	a->type = D_EXTERN;
+	a->sym = sym;
+	a->node = sym->def;
+	a->offset = widthptr+4;  // skip header
+	a->etype = TINT32;
 }
 
 /*
@@ -404,76 +321,14 @@ datastring(char *s, int len, Addr *a)
 void
 datagostring(Strlit *sval, Addr *a)
 {
-	Prog *p;
-	Addr ac, ao, ap;
-	int32 wi, wp;
-	static int gen;
-
-	memset(&ac, 0, sizeof(ac));
-	memset(&ao, 0, sizeof(ao));
-	memset(&ap, 0, sizeof(ap));
-
-	// constant
-	ac.type = D_CONST;
-	ac.index = D_NONE;
-	ac.offset = 0;			// fill in
-
-	// string len+ptr
-	ao.type = D_STATIC;		// fill in
-	ao.index = D_NONE;
-	ao.etype = TINT32;
-	ao.sym = nil;			// fill in
-
-	// $string len+ptr
-	datastring(sval->s, sval->len, &ap);
-	ap.index = ap.type;
-	ap.type = D_ADDR;
-	ap.etype = TINT32;
-
-	wi = types[TUINT32]->width;
-	wp = types[tptr]->width;
-
-	if(ap.index == D_STATIC) {
-		// huge strings are made static to avoid long names
-		snprint(namebuf, sizeof(namebuf), ".gostring.%d", ++gen);
-		ao.sym = lookup(namebuf);
-		ao.type = D_STATIC;
-	} else {
-		// small strings get named by their contents,
-		// so that multiple modules using the same string
-		// can share it.
-		snprint(namebuf, sizeof(namebuf), "\"%Z\"", sval);
-		ao.sym = pkglookup(namebuf, gostringpkg);
-		ao.type = D_EXTERN;
-	}
-
-	*a = ao;
-	if(ao.sym->flags & SymUniq)
-		return;
-	ao.sym->flags |= SymUniq;
-
-	data();
-	// DATA gostring, wp, $cstring
-	p = pc;
-	gins(ADATA, N, N);
-	p->from = ao;
-	p->from.scale = wp;
-	p->to = ap;
-
-	// DATA gostring+wp, wi, $len
-	p = pc;
-	gins(ADATA, N, N);
-	p->from = ao;
-	p->from.offset = wp;
-	p->from.scale = wi;
-	p->to = ac;
-	p->to.offset = sval->len;
-
-	p = pc;
-	ggloblsym(ao.sym, types[TSTRING]->width, ao.type == D_EXTERN);
-	if(ao.type == D_STATIC)
-		p->from.type = D_STATIC;
-	text();
+	Sym *sym;
+	
+	sym = stringsym(sval->s, sval->len);
+	a->type = D_EXTERN;
+	a->sym = sym;
+	a->node = sym->def;
+	a->offset = 0;  // header
+	a->etype = TINT32;
 }
 
 void
@@ -481,6 +336,17 @@ gdata(Node *nam, Node *nr, int wid)
 {
 	Prog *p;
 	vlong v;
+
+	if(nr->op == OLITERAL) {
+		switch(nr->val.ctype) {
+		case CTCPLX:
+			gdatacomplex(nam, nr->val.u.cval);
+			return;
+		case CTSTR:
+			gdatastring(nam, nr->val.u.sval);
+			return;
+		}
+	}
 
 	if(wid == 8 && is64(nr->type)) {
 		v = mpgetfix(nr->val.u.xval);
@@ -507,13 +373,13 @@ gdatacomplex(Node *nam, Mpcplx *cval)
 	p = gins(ADATA, nam, N);
 	p->from.scale = w;
 	p->to.type = D_FCONST;
-	p->to.dval = mpgetflt(&cval->real);
+	p->to.u.dval = mpgetflt(&cval->real);
 
 	p = gins(ADATA, nam, N);
 	p->from.scale = w;
 	p->from.offset += w;
 	p->to.type = D_FCONST;
-	p->to.dval = mpgetflt(&cval->imag);
+	p->to.u.dval = mpgetflt(&cval->imag);
 }
 
 void
@@ -649,6 +515,8 @@ genembedtramp(Type *rcvr, Type *method, Sym *newnam, int iface)
 	Prog *p;
 	Type *f;
 
+	USED(iface);
+
 	e = method->sym;
 	for(d=0; d<nelem(dotlist); d++) {
 		c = adddot1(e, rcvr, d, nil, 0);
@@ -728,7 +596,6 @@ out:
 		// but 6l has a bug, and it can't handle
 		// JMP instructions too close to the top of
 		// a new function.
-		p = pc;
 		gins(ANOP, N, N);
 	}
 

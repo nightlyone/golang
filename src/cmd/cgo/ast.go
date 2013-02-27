@@ -9,7 +9,6 @@ package main
 import (
 	"fmt"
 	"go/ast"
-	"go/doc"
 	"go/parser"
 	"go/scanner"
 	"go/token"
@@ -17,7 +16,7 @@ import (
 	"strings"
 )
 
-func parse(name string, flags uint) *ast.File {
+func parse(name string, flags parser.Mode) *ast.File {
 	ast1, err := parser.ParseFile(fset, name, nil, flags)
 	if err != nil {
 		if list, ok := err.(scanner.ErrorList); ok {
@@ -30,7 +29,7 @@ func parse(name string, flags uint) *ast.File {
 			}
 			os.Exit(2)
 		}
-		fatal("parsing %s: %s", name, err)
+		fatalf("parsing %s: %s", name, err)
 	}
 	return ast1
 }
@@ -71,7 +70,7 @@ func (f *File) ReadGo(name string) {
 			}
 			sawC = true
 			if s.Name != nil {
-				error(s.Path.Pos(), `cannot rename import "C"`)
+				error_(s.Path.Pos(), `cannot rename import "C"`)
 			}
 			cg := s.Doc
 			if cg == nil && len(d.Specs) == 1 {
@@ -79,12 +78,12 @@ func (f *File) ReadGo(name string) {
 			}
 			if cg != nil {
 				f.Preamble += fmt.Sprintf("#line %d %q\n", sourceLine(cg), name)
-				f.Preamble += doc.CommentText(cg) + "\n"
+				f.Preamble += commentText(cg) + "\n"
 			}
 		}
 	}
 	if !sawC {
-		error(token.NoPos, `cannot find import "C"`)
+		error_(token.NoPos, `cannot find import "C"`)
 	}
 
 	// In ast2, strip the import "C" line.
@@ -128,7 +127,32 @@ func (f *File) ReadGo(name string) {
 	f.walk(ast1, "prog", (*File).saveExport)
 	f.walk(ast2, "prog", (*File).saveExport2)
 
+	f.Comments = ast1.Comments
 	f.AST = ast2
+}
+
+// Like ast.CommentGroup's Text method but preserves
+// leading blank lines, so that line numbers line up.
+func commentText(g *ast.CommentGroup) string {
+	if g == nil {
+		return ""
+	}
+	var pieces []string
+	for _, com := range g.List {
+		c := string(com.Text)
+		// Remove comment markers.
+		// The parser has given us exactly the comment text.
+		switch c[1] {
+		case '/':
+			//-style comment (no newline at the end)
+			c = c[2:] + "\n"
+		case '*':
+			/*-style comment */
+			c = c[2 : len(c)-2]
+		}
+		pieces = append(pieces, c)
+	}
+	return strings.Join(pieces, "")
 }
 
 // Save references to C.xxx for later processing.
@@ -147,9 +171,12 @@ func (f *File) saveRef(x interface{}, context string) {
 			if context == "as2" {
 				context = "expr"
 			}
+			if context == "embed-type" {
+				error_(sel.Pos(), "cannot embed C type")
+			}
 			goname := sel.Sel.Name
 			if goname == "errno" {
-				error(sel.Pos(), "cannot refer to errno directly; see documentation")
+				error_(sel.Pos(), "cannot refer to errno directly; see documentation")
 				return
 			}
 			name := f.Name[goname]
@@ -180,13 +207,17 @@ func (f *File) saveExport(x interface{}, context string) {
 		return
 	}
 	for _, c := range n.Doc.List {
-		if string(c.Text[0:9]) != "//export " {
+		if !strings.HasPrefix(string(c.Text), "//export ") {
 			continue
 		}
 
 		name := strings.TrimSpace(string(c.Text[9:]))
 		if name == "" {
-			error(c.Pos(), "export missing name")
+			error_(c.Pos(), "export missing name")
+		}
+
+		if name != n.Name.Name {
+			error_(c.Pos(), "export comment has wrong name %q, want %q", name, n.Name.Name)
 		}
 
 		f.ExpFunc = append(f.ExpFunc, &ExpFunc{
@@ -221,14 +252,18 @@ func (f *File) walk(x interface{}, context string, visit func(*File, interface{}
 
 	// everything else just recurs
 	default:
-		error(token.NoPos, "unexpected type %T in walk", x, visit)
+		error_(token.NoPos, "unexpected type %T in walk", x, visit)
 		panic("unexpected type")
 
 	case nil:
 
 	// These are ordered and grouped to match ../../pkg/go/ast/ast.go
 	case *ast.Field:
-		f.walk(&n.Type, "type", visit)
+		if len(n.Names) == 0 && context == "field" {
+			f.walk(&n.Type, "embed-type", visit)
+		} else {
+			f.walk(&n.Type, "type", visit)
+		}
 	case *ast.FieldList:
 		for _, field := range n.List {
 			f.walk(field, context, visit)
@@ -285,9 +320,9 @@ func (f *File) walk(x interface{}, context string, visit func(*File, interface{}
 	case *ast.StructType:
 		f.walk(n.Fields, "field", visit)
 	case *ast.FuncType:
-		f.walk(n.Params, "field", visit)
+		f.walk(n.Params, "param", visit)
 		if n.Results != nil {
-			f.walk(n.Results, "field", visit)
+			f.walk(n.Results, "param", visit)
 		}
 	case *ast.InterfaceType:
 		f.walk(n.Methods, "field", visit)
@@ -325,26 +360,28 @@ func (f *File) walk(x interface{}, context string, visit func(*File, interface{}
 		f.walk(n.Results, "expr", visit)
 	case *ast.BranchStmt:
 	case *ast.BlockStmt:
-		f.walk(n.List, "stmt", visit)
+		f.walk(n.List, context, visit)
 	case *ast.IfStmt:
 		f.walk(n.Init, "stmt", visit)
 		f.walk(&n.Cond, "expr", visit)
 		f.walk(n.Body, "stmt", visit)
 		f.walk(n.Else, "stmt", visit)
 	case *ast.CaseClause:
-		f.walk(n.Values, "expr", visit)
+		if context == "typeswitch" {
+			context = "type"
+		} else {
+			context = "expr"
+		}
+		f.walk(n.List, context, visit)
 		f.walk(n.Body, "stmt", visit)
 	case *ast.SwitchStmt:
 		f.walk(n.Init, "stmt", visit)
 		f.walk(&n.Tag, "expr", visit)
-		f.walk(n.Body, "stmt", visit)
-	case *ast.TypeCaseClause:
-		f.walk(n.Types, "type", visit)
-		f.walk(n.Body, "stmt", visit)
+		f.walk(n.Body, "switch", visit)
 	case *ast.TypeSwitchStmt:
 		f.walk(n.Init, "stmt", visit)
 		f.walk(n.Assign, "stmt", visit)
-		f.walk(n.Body, "stmt", visit)
+		f.walk(n.Body, "typeswitch", visit)
 	case *ast.CommClause:
 		f.walk(n.Comm, "stmt", visit)
 		f.walk(n.Body, "stmt", visit)
@@ -373,7 +410,7 @@ func (f *File) walk(x interface{}, context string, visit func(*File, interface{}
 		f.walk(n.Specs, "spec", visit)
 	case *ast.FuncDecl:
 		if n.Recv != nil {
-			f.walk(n.Recv, "field", visit)
+			f.walk(n.Recv, "param", visit)
 		}
 		f.walk(n.Type, "type", visit)
 		if n.Body != nil {

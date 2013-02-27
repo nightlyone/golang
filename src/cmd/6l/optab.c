@@ -200,7 +200,8 @@ uchar	ymovq[] =
 	Ymm,	Ymr,	Zm_r_xm,	1,	// MMX MOVD
 	Ymr,	Ymm,	Zr_m_xm,	1,	// MMX MOVD
 	Yxr,	Ymr,	Zm_r_xm_nr,	2,	// MOVDQ2Q
-	Yxr,	Ym,	Zr_m_xm_nr,	2,	// MOVQ xmm store
+	Yxm,	Yxr,	Zm_r_xm_nr,	2, // MOVQ xmm1/m64 -> xmm2
+	Yxr,	Yxm,	Zr_m_xm_nr,	2, // MOVQ xmm1 -> xmm2/m64
 	Yml,	Yxr,	Zm_r_xm,	2,	// MOVD xmm load
 	Yxr,	Yml,	Zr_m_xm,	2,	// MOVD xmm store
 	Yiauto,	Yrl,	Zaut_r,	2,	// built-in LEAQ
@@ -266,6 +267,11 @@ uchar	yimul[] =
 	Yml,	Yrl,	Zm_r,	2,
 	0
 };
+uchar	yimul3[] =
+{
+	Yml,	Yrl,	Zibm_r,	2,
+	0
+};
 uchar	ybyte[] =
 {
 	Yi64,	Ynone,	Zbyte,	1,
@@ -296,6 +302,11 @@ uchar	ypopl[] =
 	Ynone,	Ym,	Zo_m,	2,
 	0
 };
+uchar	ybswap[] =
+{
+	Ynone,	Yrl,	Z_rp,	2,
+	0,
+};
 uchar	yscond[] =
 {
 	Ynone,	Ymb,	Zo_m,	2,
@@ -303,7 +314,9 @@ uchar	yscond[] =
 };
 uchar	yjcond[] =
 {
-	Ynone,	Ybr,	Zbr,	1,
+	Ynone,	Ybr,	Zbr,	0,
+	Yi0,	Ybr,	Zbr,	0,
+	Yi1,	Ybr,	Zbr,	1,
 	0
 };
 uchar	yloop[] =
@@ -313,7 +326,8 @@ uchar	yloop[] =
 };
 uchar	ycall[] =
 {
-	Ynone,	Yml,	Zo_m64,	2,
+	Ynone,	Yml,	Zo_m64,	0,
+	Yrx,	Yrx,	Zo_m64,	2,
 	Ynone,	Ybr,	Zcall,	1,
 	0
 };
@@ -505,17 +519,17 @@ uchar	ymrxr[] =
 };
 uchar	ymshuf[] =
 {
-	Ymm,	Ymr,	Zibm_r,	1,
+	Ymm,	Ymr,	Zibm_r,	2,
 	0
 };
 uchar	yxshuf[] =
 {
-	Yxm,	Yxr,	Zibm_r,	1,
+	Yxm,	Yxr,	Zibm_r,	2,
 	0
 };
 uchar	yextrw[] =
 {
-	Yxr,	Yrl,	Zibm_r,	1,
+	Yxr,	Yrl,	Zibm_r,	2,
 	0
 };
 uchar	ypsdq[] =
@@ -529,7 +543,84 @@ uchar	ymskb[] =
 	Ymr,	Yrl,	Zm_r_xm,	1,
 	0
 };
+uchar	ycrc32l[] =
+{
+	Yml,	Yrl,	Zlitm_r,	0,
+};
+uchar	yprefetch[] =
+{
+	Ym,	Ynone,	Zm_o,	2,
+	0,
+};
+uchar	yaes[] =
+{
+	Yxm,	Yxr,	Zlitm_r,	2,
+	0
+};
+uchar	yaes2[] =
+{
+	Yxm,	Yxr,	Zibm_r,	2,
+	0
+};
 
+/*
+ * You are doasm, holding in your hand a Prog* with p->as set to, say, ACRC32,
+ * and p->from and p->to as operands (Adr*).  The linker scans optab to find
+ * the entry with the given p->as and then looks through the ytable for that
+ * instruction (the second field in the optab struct) for a line whose first
+ * two values match the Ytypes of the p->from and p->to operands.  The function
+ * oclass in span.c computes the specific Ytype of an operand and then the set
+ * of more general Ytypes that it satisfies is implied by the ycover table, set
+ * up in instinit.  For example, oclass distinguishes the constants 0 and 1
+ * from the more general 8-bit constants, but instinit says
+ *
+ *        ycover[Yi0*Ymax + Ys32] = 1;
+ *        ycover[Yi1*Ymax + Ys32] = 1;
+ *        ycover[Yi8*Ymax + Ys32] = 1;
+ *
+ * which means that Yi0, Yi1, and Yi8 all count as Ys32 (signed 32)
+ * if that's what an instruction can handle.
+ *
+ * In parallel with the scan through the ytable for the appropriate line, there
+ * is a z pointer that starts out pointing at the strange magic byte list in
+ * the Optab struct.  With each step past a non-matching ytable line, z
+ * advances by the 4th entry in the line.  When a matching line is found, that
+ * z pointer has the extra data to use in laying down the instruction bytes.
+ * The actual bytes laid down are a function of the 3rd entry in the line (that
+ * is, the Ztype) and the z bytes.
+ *
+ * For example, let's look at AADDL.  The optab line says:
+ *        { AADDL,        yaddl,  Px, 0x83,(00),0x05,0x81,(00),0x01,0x03 },
+ *
+ * and yaddl says
+ *        uchar   yaddl[] =
+ *        {
+ *                Yi8,    Yml,    Zibo_m, 2,
+ *                Yi32,   Yax,    Zil_,   1,
+ *                Yi32,   Yml,    Zilo_m, 2,
+ *                Yrl,    Yml,    Zr_m,   1,
+ *                Yml,    Yrl,    Zm_r,   1,
+ *                0
+ *        };
+ *
+ * so there are 5 possible types of ADDL instruction that can be laid down, and
+ * possible states used to lay them down (Ztype and z pointer, assuming z
+ * points at {0x83,(00),0x05,0x81,(00),0x01,0x03}) are:
+ *
+ *        Yi8, Yml -> Zibo_m, z (0x83, 00)
+ *        Yi32, Yax -> Zil_, z+2 (0x05)
+ *        Yi32, Yml -> Zilo_m, z+2+1 (0x81, 0x00)
+ *        Yrl, Yml -> Zr_m, z+2+1+2 (0x01)
+ *        Yml, Yrl -> Zm_r, z+2+1+2+1 (0x03)
+ *
+ * The Pconstant in the optab line controls the prefix bytes to emit.  That's
+ * relatively straightforward as this program goes.
+ *
+ * The switch on t[2] in doasm implements the various Z cases.  Zibo_m, for
+ * example, is an opcode byte (z[0]) then an asmando (which is some kind of
+ * encoded addressing mode for the Yml arg), and then a single immediate byte.
+ * Zilo_m is the same but a long (32-bit) immediate.
+ */
 Optab optab[] =
 /*	as, ytab, andproto, opcode */
 {
@@ -568,6 +659,8 @@ Optab optab[] =
 	{ ABSRL,	yml_rl,	Pm, 0xbd },
 	{ ABSRQ,	yml_rl,	Pw, 0x0f,0xbd },
 	{ ABSRW,	yml_rl,	Pq, 0xbd },
+	{ ABSWAPL,	ybswap,	Px, 0x0f,0xc8 },
+	{ ABSWAPQ,	ybswap,	Pw, 0x0f,0xc8 },
 	{ ABTCL,	ybtl,	Pm, 0xba,(07),0xbb },
 	{ ABTCQ,	ybtl,	Pw, 0x0f,0xba,(07),0x0f,0xbb },
 	{ ABTCW,	ybtl,	Pq, 0xba,(07),0xbb },
@@ -709,6 +802,7 @@ Optab optab[] =
 	{ AIMULL,	yimul,	Px, 0xf7,(05),0x6b,0x69,Pm,0xaf },
 	{ AIMULQ,	yimul,	Pw, 0xf7,(05),0x6b,0x69,Pm,0xaf },
 	{ AIMULW,	yimul,	Pe, 0xf7,(05),0x6b,0x69,Pm,0xaf },
+	{ AIMUL3Q,	yimul3,	Pw, 0x6b,(00) },
 	{ AINB,		yin,	Pb, 0xe4,0xec },
 	{ AINCB,	yincb,	Pb, 0xfe,(00) },
 	{ AINCL,	yincl,	Px, 0xff,(00) },
@@ -726,7 +820,8 @@ Optab optab[] =
 	{ AIRETW,	ynone,	Pe, 0xcf },
 	{ AJCC,		yjcond,	Px, 0x73,0x83,(00) },
 	{ AJCS,		yjcond,	Px, 0x72,0x82 },
-	{ AJCXZ,	yloop,	Px, 0xe3 },
+	{ AJCXZL,	yloop,	Px, 0xe3 },
+	{ AJCXZQ,	yloop,	Px, 0xe3 },
 	{ AJEQ,		yjcond,	Px, 0x74,0x84 },
 	{ AJGE,		yjcond,	Px, 0x7d,0x8d },
 	{ AJGT,		yjcond,	Px, 0x7f,0x8f },
@@ -799,7 +894,7 @@ Optab optab[] =
 	{ AMOVNTPD,	yxr_ml,	Pe, 0x2b },
 	{ AMOVNTPS,	yxr_ml,	Pm, 0x2b },
 	{ AMOVNTQ,	ymr_ml,	Pm, 0xe7 },
-	{ AMOVQ,	ymovq,	Pw, 0x89,0x8b,0x31,0xc7,(00),0xb8,0xc7,(00),0x6f,0x7f,0x6e,0x7e,Pf2,0xd6,Pe,0xd6,Pe,0x6e,Pe,0x7e },
+	{ AMOVQ,	ymovq,	Pw, 0x89, 0x8b, 0x31, 0xc7,(00), 0xb8, 0xc7,(00), 0x6f, 0x7f, 0x6e, 0x7e, Pf2,0xd6, Pf3,0x7e, Pe,0xd6, Pe,0x6e, Pe,0x7e },
 	{ AMOVQOZX,	ymrxr,	Pf3, 0xd6,0x7e },
 	{ AMOVSB,	ynone,	Pb, 0xa4 },
 	{ AMOVSD,	yxmov,	Pf2, 0x10,0x11 },
@@ -857,6 +952,7 @@ Optab optab[] =
 	{ APADDW,	ymm,	Py, 0xfd,Pe,0xfd },
 	{ APAND,	ymm,	Py, 0xdb,Pe,0xdb },
 	{ APANDN,	ymm,	Py, 0xdf,Pe,0xdf },
+	{ APAUSE,	ynone,	Px, 0xf3,0x90 },
 	{ APAVGB,	ymm,	Py, 0xe0,Pe,0xe0 },
 	{ APAVGW,	ymm,	Py, 0xe3,Pe,0xe3 },
 	{ APCMPEQB,	ymm,	Py, 0x74,Pe,0x74 },
@@ -865,7 +961,7 @@ Optab optab[] =
 	{ APCMPGTB,	ymm,	Py, 0x64,Pe,0x64 },
 	{ APCMPGTL,	ymm,	Py, 0x66,Pe,0x66 },
 	{ APCMPGTW,	ymm,	Py, 0x65,Pe,0x65 },
-	{ APEXTRW,	yextrw,	Pq, 0xc5 },
+	{ APEXTRW,	yextrw,	Pq, 0xc5,(00) },
 	{ APF2IL,	ymfp,	Px, 0x1d },
 	{ APF2IW,	ymfp,	Px, 0x1c },
 	{ API2FL,	ymfp,	Px, 0x0d },
@@ -886,7 +982,7 @@ Optab optab[] =
 	{ APFRSQRT,	ymfp,	Px, 0x97 },
 	{ APFSUB,	ymfp,	Px, 0x9a },
 	{ APFSUBR,	ymfp,	Px, 0xaa },
-	{ APINSRW,	yextrw,	Pq, 0xc4 },
+	{ APINSRW,	yextrw,	Pq, 0xc4,(00) },
 	{ APMADDWL,	ymm,	Py, 0xf5,Pe,0xf5 },
 	{ APMAXSW,	yxm,	Pe, 0xee },
 	{ APMAXUB,	yxm,	Pe, 0xde },
@@ -908,13 +1004,13 @@ Optab optab[] =
 	{ APOPW,	ypopl,	Pe, 0x58,0x8f,(00) },
 	{ APOR,		ymm,	Py, 0xeb,Pe,0xeb },
 	{ APSADBW,	yxm,	Pq, 0xf6 },
-	{ APSHUFHW,	yxshuf,	Pf3, 0x70 },
-	{ APSHUFL,	yxshuf,	Pq, 0x70 },
-	{ APSHUFLW,	yxshuf,	Pf2, 0x70 },
-	{ APSHUFW,	ymshuf,	Pm, 0x70 },
+	{ APSHUFHW,	yxshuf,	Pf3, 0x70,(00) },
+	{ APSHUFL,	yxshuf,	Pq, 0x70,(00) },
+	{ APSHUFLW,	yxshuf,	Pf2, 0x70,(00) },
+	{ APSHUFW,	ymshuf,	Pm, 0x70,(00) },
 	{ APSLLO,	ypsdq,	Pq, 0x73,(07) },
 	{ APSLLL,	yps,	Py, 0xf2, 0x72,(06), Pe,0xf2, Pe,0x72,(06) },
-	{ APSLLQ,	yps,	Py, 0xf3, 0x73,(06), Pe,0xf3, Pe,0x7e,(06) },
+	{ APSLLQ,	yps,	Py, 0xf3, 0x73,(06), Pe,0xf3, Pe,0x73,(06) },
 	{ APSLLW,	yps,	Py, 0xf1, 0x71,(06), Pe,0xf1, Pe,0x71,(06) },
 	{ APSRAL,	yps,	Py, 0xe2, 0x72,(04), Pe,0xe2, Pe,0x72,(04) },
 	{ APSRAW,	yps,	Py, 0xe1, 0x71,(04), Pe,0xe1, Pe,0x71,(04) },
@@ -1016,8 +1112,8 @@ Optab optab[] =
 	{ ASHRL,	yshl,	Px, 0xd1,(05),0xc1,(05),0xd3,(05),0xd3,(05) },
 	{ ASHRQ,	yshl,	Pw, 0xd1,(05),0xc1,(05),0xd3,(05),0xd3,(05) },
 	{ ASHRW,	yshl,	Pe, 0xd1,(05),0xc1,(05),0xd3,(05),0xd3,(05) },
-	{ ASHUFPD,	yxshuf,	Pq, 0xc6 },
-	{ ASHUFPS,	yxshuf,	Pm, 0xc6 },
+	{ ASHUFPD,	yxshuf,	Pq, 0xc6,(00) },
+	{ ASHUFPS,	yxshuf,	Pm, 0xc6,(00) },
 	{ ASQRTPD,	yxm,	Pe, 0x51 },
 	{ ASQRTPS,	yxm,	Pm, 0x51 },
 	{ ASQRTSD,	yxm,	Pf2, 0x51 },
@@ -1198,6 +1294,31 @@ Optab optab[] =
 	{ AXADDL,	yrl_ml,	Px, 0x0f,0xc1 },
 	{ AXADDQ,	yrl_ml,	Pw, 0x0f,0xc1 },
 	{ AXADDW,	yrl_ml,	Pe, 0x0f,0xc1 },
+
+	{ ACRC32B,       ycrc32l,Px, 0xf2,0x0f,0x38,0xf0,0 },
+	{ ACRC32Q,       ycrc32l,Pw, 0xf2,0x0f,0x38,0xf1,0 },
+	
+	{ APREFETCHT0,	yprefetch,	Pm,	0x18,(01) },
+	{ APREFETCHT1,	yprefetch,	Pm,	0x18,(02) },
+	{ APREFETCHT2,	yprefetch,	Pm,	0x18,(03) },
+	{ APREFETCHNTA,	yprefetch,	Pm,	0x18,(00) },
+	
+	{ AMOVQL,	yrl_ml,	Px, 0x89 },
+
+	{ AUNDEF,		ynone,	Px, 0x0f, 0x0b },
+
+	{ AAESENC,	yaes,	Pq, 0x38,0xdc,(0) },
+	{ AAESENCLAST,	yaes,	Pq, 0x38,0xdd,(0) },
+	{ AAESDEC,	yaes,	Pq, 0x38,0xde,(0) },
+	{ AAESDECLAST,	yaes,	Pq, 0x38,0xdf,(0) },
+	{ AAESIMC,	yaes,	Pq, 0x38,0xdb,(0) },
+	{ AAESKEYGENASSIST,	yaes2,	Pq, 0x3a,0xdf,(0) },
+
+	{ APSHUFD,	yaes2,	Pq,	0x70,(0) },
+
+	{ AUSEFIELD,	ynop,	Px, 0,0 },
+	{ ALOCALS },
+	{ ATYPE },
 
 	{ AEND },
 	0

@@ -28,11 +28,30 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-
 #include "gc.h"
 
 void
 swit1(C1 *q, int nc, int32 def, Node *n)
+{
+	Node nreg;
+
+	if(typev[n->type->etype]) {
+		regsalloc(&nreg, n);
+		nreg.type = types[TVLONG];
+		cgen(n, &nreg);
+		swit2(q, nc, def, &nreg);
+		return;
+	}
+
+	regalloc(&nreg, n, Z);
+	nreg.type = types[TLONG];
+	cgen(n, &nreg);
+	swit2(q, nc, def, &nreg);
+	regfree(&nreg);
+}
+
+void
+swit2(C1 *q, int nc, int32 def, Node *n)
 {
 	C1 *r;
 	int i;
@@ -65,12 +84,12 @@ swit1(C1 *q, int nc, int32 def, Node *n)
 	sp = p;
 	gopcode(OEQ, nodconst(r->val), n, Z);	/* just gen the B.EQ */
 	patch(p, r->label);
-	swit1(q, i, def, n);
+	swit2(q, i, def, n);
 
 	if(debug['W'])
 		print("case < %.8ux\n", r->val);
 	patch(sp, pc);
-	swit1(r+1, nc-i-1, def, n);
+	swit2(r+1, nc-i-1, def, n);
 	return;
 
 direct:
@@ -380,12 +399,16 @@ outcode(void)
 		Bprint(&outbuf, "\n");
 		Bprint(&outbuf, "$$  // exports\n\n");
 		Bprint(&outbuf, "$$  // local types\n\n");
-		Bprint(&outbuf, "$$  // dynimport\n", thestring);
+		Bprint(&outbuf, "$$  // dynimport\n");
 		for(i=0; i<ndynimp; i++)
 			Bprint(&outbuf, "dynimport %s %s %s\n", dynimp[i].local, dynimp[i].remote, dynimp[i].path);
-		Bprint(&outbuf, "\n$$  // dynexport\n", thestring);
+		Bprint(&outbuf, "\n$$  // dynexport\n");
 		for(i=0; i<ndynexp; i++)
 			Bprint(&outbuf, "dynexport %s %s\n", dynexp[i].local, dynexp[i].remote);
+		Bprint(&outbuf, "\n$$  // dynlinker\n");
+		if(dynlinker != nil) {
+			Bprint(&outbuf, "dynlinker %s\n", dynlinker);
+		}
 		Bprint(&outbuf, "\n$$\n\n");
 	}
 	Bprint(&outbuf, "!\n");
@@ -453,24 +476,46 @@ outhist(Biobuf *b)
 	char *p, *q, *op, c;
 	Prog pg;
 	int n;
+	char *tofree;
+	static int first = 1;
+	static char *goroot, *goroot_final;
 
+	if(first) {
+		// Decide whether we need to rewrite paths from $GOROOT to $GOROOT_FINAL.
+		first = 0;
+		goroot = getenv("GOROOT");
+		goroot_final = getenv("GOROOT_FINAL");
+		if(goroot == nil)
+			goroot = "";
+		if(goroot_final == nil)
+			goroot_final = goroot;
+		if(strcmp(goroot, goroot_final) == 0) {
+			goroot = nil;
+			goroot_final = nil;
+		}
+	}
+
+	tofree = nil;
 	pg = zprog;
 	pg.as = AHISTORY;
 	c = pathchar();
 	for(h = hist; h != H; h = h->link) {
 		p = h->name;
-		op = 0;
-		/* on windows skip drive specifier in pathname */
-		if(systemtype(Windows) && p && p[1] == ':'){
-			p += 2;
-			c = *p;
+		if(p != nil && goroot != nil) {
+			n = strlen(goroot);
+			if(strncmp(p, goroot, strlen(goroot)) == 0 && p[n] == '/') {
+				tofree = smprint("%s%s", goroot_final, p+n);
+				p = tofree;
+			}
 		}
-		if(p && p[0] != c && h->offset == 0 && pathname){
-			/* on windows skip drive specifier in pathname */
+		op = 0;
+		if(systemtype(Windows) && p && p[1] == ':'){
+			c = p[2];
+		} else if(p && p[0] != c && h->offset == 0 && pathname){
 			if(systemtype(Windows) && pathname[1] == ':') {
 				op = p;
-				p = pathname+2;
-				c = *p;
+				p = pathname;
+				c = p[2];
 			} else if(pathname[0] == c){
 				op = p;
 				p = pathname;
@@ -510,6 +555,11 @@ outhist(Biobuf *b)
 			pg.to.type = D_CONST;
 
 		zwrite(b, &pg, 0, 0);
+
+ 		if(tofree) {
+ 			free(tofree);
+ 			tofree = nil;
+ 		}
 	}
 }
 
@@ -551,7 +601,8 @@ zaddr(char *bp, Adr *a, int s)
 	bp[1] = a->reg;
 	bp[2] = s;
 	bp[3] = a->name;
-	bp += 4;
+	bp[4] = 0;
+	bp += 5;
 	switch(a->type) {
 	default:
 		diag(Z, "unknown type %d in zaddr", a->type);
@@ -665,7 +716,9 @@ align(int32 i, Type *t, int op, int32 *maxalign)
 
 	case Aarg2:	/* width of a parameter */
 		o += t->width;
-		w = SZ_LONG;
+		w = t->width;
+		if(w > SZ_LONG)
+			w = SZ_LONG;
 		break;
 
 	case Aaut3:	/* total align of automatic */

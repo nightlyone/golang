@@ -31,7 +31,7 @@
 #include	<u.h>
 #include	<libc.h>
 #include	<bio.h>
-#include	"../6l/6.out.h"
+#include	"6.out.h"
 
 #ifndef	EXTERN
 #define	EXTERN	extern
@@ -39,16 +39,32 @@
 
 enum
 {
-	PtrSize = 8
+	thechar = '6',
+	PtrSize = 8,
+	IntSize = 8,
+	
+	// Loop alignment constants:
+	// want to align loop entry to LoopAlign-byte boundary,
+	// and willing to insert at most MaxLoopPad bytes of NOP to do so.
+	// We define a loop entry as the target of a backward jump.
+	//
+	// gcc uses MaxLoopPad = 10 for its 'generic x86-64' config,
+	// and it aligns all jump targets, not just backward jump targets.
+	//
+	// As of 6/1/2012, the effect of setting MaxLoopPad = 10 here
+	// is very slight but negative, so the alignment is disabled by
+	// setting MaxLoopPad = 0. The code is here for reference and
+	// for future experiments.
+	// 
+	LoopAlign = 16,
+	MaxLoopPad = 0,
+
+	FuncAlign = 16
 };
 
 #define	P		((Prog*)0)
 #define	S		((Sym*)0)
 #define	TNAME		(cursym?cursym->name:noname)
-#define	cput(c)\
-	{ *cbp++ = c;\
-	if(--cbc <= 0)\
-		cflush(); }
 
 typedef	struct	Adr	Adr;
 typedef	struct	Prog	Prog;
@@ -111,6 +127,7 @@ struct	Prog
 };
 #define	datasize	from.scale
 #define	textflag	from.scale
+#define	iscall(p)	((p)->as == ACALL)
 
 struct	Auto
 {
@@ -129,20 +146,31 @@ struct	Sym
 	uchar	reachable;
 	uchar	dynexport;
 	uchar	special;
+	uchar	stkcheck;
+	uchar	hide;
 	int32	dynid;
 	int32	sig;
 	int32	plt;
 	int32	got;
+	int32	align;	// if non-zero, required alignment in bytes
+	int32	elfsym;
+	int32	locals;	// size of stack frame locals area
+	int32	args;	// size of stack frame incoming arguments area
 	Sym*	hash;	// in hash table
+	Sym*	allsym;	// in all symbol list
 	Sym*	next;	// in text or data list
 	Sym*	sub;	// in SSUB list
 	Sym*	outer;	// container of sub
+	Sym*	reachparent;
+	Sym*	queue;
 	vlong	value;
 	vlong	size;
 	Sym*	gotype;
 	char*	file;
 	char*	dynimpname;
 	char*	dynimplib;
+	char*	dynimpvers;
+	struct Section*	sect;
 	
 	// STEXT
 	Auto*	autom;
@@ -155,13 +183,14 @@ struct	Sym
 	Reloc*	r;
 	int32	nr;
 	int32	maxr;
+	int 	rel_ro;
 };
 struct	Optab
 {
 	short	as;
 	uchar*	ytab;
 	uchar	prefix;
-	uchar	op[20];
+	uchar	op[22];
 };
 struct	Movtab
 {
@@ -174,29 +203,6 @@ struct	Movtab
 
 enum
 {
-	Sxxx,
-	
-	/* order here is order in output file */
-	STEXT		= 1,
-	SELFDATA,
-	SMACHOPLT,
-	SRODATA,
-	SDATA,
-	SMACHOGOT,
-	SWINDOWS,
-	SBSS,
-
-	SXREF,
-	SMACHODYNSTR,
-	SMACHODYNSYM,
-	SMACHOINDIRECTPLT,
-	SMACHOINDIRECTGOT,
-	SFILE,
-	SCONST,
-	SDYNIMPORT,
-	SSUB	= 1<<8,
-
-	NHASH		= 10007,
 	MINSIZ		= 8,
 	STRINGSZ	= 200,
 	MINLC		= 1,
@@ -239,6 +245,7 @@ enum
 	Zxxx		= 0,
 
 	Zlit,
+	Zlitm_r,
 	Z_rp,
 	Zbr,
 	Zcall,
@@ -302,34 +309,21 @@ enum
 	Maxand	= 10,		/* in -a output width of the byte codes */
 };
 
-EXTERN union
-{
-	struct
-	{
-		char	obuf[MAXIO];			/* output buffer */
-		uchar	ibuf[MAXIO];			/* input buffer */
-	} u;
-	char	dbuf[1];
-} buf;
-
-#define	cbuf	u.obuf
-#define	xbuf	u.ibuf
-
 #pragma	varargck	type	"A"	uint
 #pragma	varargck	type	"D"	Adr*
+#pragma	varargck	type	"I"	uchar*
 #pragma	varargck	type	"P"	Prog*
 #pragma	varargck	type	"R"	int
 #pragma	varargck	type	"S"	char*
+#pragma	varargck	type	"i"	char*
 
 EXTERN	int32	HEADR;
 EXTERN	int32	HEADTYPE;
 EXTERN	int32	INITRND;
-EXTERN	vlong	INITTEXT;
-EXTERN	vlong	INITDAT;
+EXTERN	int64	INITTEXT;
+EXTERN	int64	INITDAT;
 EXTERN	char*	INITENTRY;		/* entry point */
-EXTERN	Biobuf	bso;
-EXTERN	int	cbc;
-EXTERN	char*	cbp;
+EXTERN	char*	LIBINITENTRY;		/* shared library entry point */
 EXTERN	char*	pcstr;
 EXTERN	Auto*	curauto;
 EXTERN	Auto*	curhist;
@@ -337,7 +331,7 @@ EXTERN	Prog*	curp;
 EXTERN	Sym*	cursym;
 EXTERN	Sym*	datap;
 EXTERN	vlong	elfdatsize;
-EXTERN	char	debug[128];
+EXTERN	int	debug[128];
 EXTERN	char	literal[32];
 EXTERN	Sym*	textp;
 EXTERN	Sym*	etextp;
@@ -367,10 +361,6 @@ EXTERN	Sym*	fromgotype;	// type symbol on last p->from read
 
 EXTERN	vlong	textstksiz;
 EXTERN	vlong	textarg;
-extern	char	thechar;
-EXTERN	int	elfstrsize;
-EXTERN	char*	elfstrdat;
-EXTERN	int	elftextsh;
 
 extern	Optab	optab[];
 extern	Optab*	opindex[];
@@ -394,9 +384,7 @@ vlong	atolwhex(char*);
 Prog*	brchain(Prog*);
 Prog*	brloop(Prog*);
 void	buildop(void);
-void	cflush(void);
 Prog*	copyp(Prog*);
-vlong	cpos(void);
 double	cputime(void);
 void	datblk(int32, int32);
 void	deadcode(void);
@@ -450,6 +438,7 @@ uint32	machheadr(void);
 #pragma	varargck	type	"D"	Adr*
 #pragma	varargck	type	"P"	Prog*
 #pragma	varargck	type	"R"	int
+#pragma	varargck	type	"Z"	char*
 #pragma	varargck	type	"A"	int
 #pragma	varargck	argpos	diag 1
 

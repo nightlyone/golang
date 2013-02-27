@@ -12,10 +12,18 @@
 
 static	int	macho64;
 static	MachoHdr	hdr;
-static	MachoLoad	load[16];
+static	MachoLoad	*load;
 static	MachoSeg	seg[16];
 static	MachoDebug	xdebug[16];
-static	int	nload, nseg, ndebug, nsect;
+static	int	nload, mload, nseg, ndebug, nsect;
+
+// Amount of space left for adding load commands
+// that refer to dynamic libraries.  Because these have
+// to go in the Mach-O header, we can't just pick a
+// "big enough" header size.  The initial header is 
+// one page, the non-dynamic library stuff takes
+// up about 1300 bytes; we overestimate that as 2k.
+static	int	load_budget = INITIAL_MACHO_HEADR - 2*1024;
 
 void
 machoinit(void)
@@ -43,11 +51,18 @@ newMachoLoad(uint32 type, uint32 ndata)
 {
 	MachoLoad *l;
 
-	if(nload >= nelem(load)) {
-		diag("too many loads");
-		errorexit();
+	if(nload >= mload) {
+		if(mload == 0)
+			mload = 1;
+		else
+			mload *= 2;
+		load = realloc(load, mload*sizeof load[0]);
+		if(load == nil) {
+			diag("out of memory");
+			errorexit();
+		}
 	}
-	
+
 	if(macho64 && (ndata & 1))
 		ndata++;
 	
@@ -260,6 +275,17 @@ domacho(void)
 void
 machoadddynlib(char *lib)
 {
+	// Will need to store the library name rounded up
+	// and 24 bytes of header metadata.  If not enough
+	// space, grab another page of initial space at the
+	// beginning of the output file.
+	load_budget -= (strlen(lib)+7)/8*8 + 24;
+	if(load_budget < 0) {
+		HEADR += 4096;
+		INITTEXT += 4096;
+		load_budget += 4096;
+	}
+
 	if(ndylib%32 == 0) {
 		dylib = realloc(dylib, (ndylib+32)*sizeof dylib[0]);
 		if(dylib == nil) {
@@ -276,7 +302,6 @@ asmbmacho(void)
 	vlong v, w;
 	vlong va;
 	int a, i;
-	char *pkgroot;
 	MachoHdr *mh;
 	MachoSect *msect;
 	MachoSeg *ms;
@@ -343,11 +368,13 @@ asmbmacho(void)
 
 	msect = newMachoSect(ms, "__data");
 	msect->addr = va+v;
-	msect->size = symaddr(lookup(".got", 0)) - msect->addr;
 	msect->off = v;
+	msect->size = segdata.filelen;
 
 	s = lookup(".got", 0);
 	if(s->size > 0) {
+		msect->size = symaddr(s) - msect->addr;
+
 		msect = newMachoSect(ms, "__nl_symbol_ptr");
 		msect->addr = symaddr(s);
 		msect->size = s->size;
@@ -386,9 +413,9 @@ asmbmacho(void)
 
 		// must match domacholink below
 		s1 = lookup(".dynsym", 0);
-		s2 = lookup(".dynstr", 0);
-		s3 = lookup(".linkedit.plt", 0);
-		s4 = lookup(".linkedit.got", 0);
+		s2 = lookup(".linkedit.plt", 0);
+		s3 = lookup(".linkedit.got", 0);
+		s4 = lookup(".dynstr", 0);
 
 		ms = newMachoSeg("__LINKEDIT", 0);
 		ms->vaddr = va+v+rnd(segdata.len, INITRND);
@@ -401,8 +428,8 @@ asmbmacho(void)
 		ml = newMachoLoad(2, 4);	/* LC_SYMTAB */
 		ml->data[0] = linkoff;	/* symoff */
 		ml->data[1] = s1->size / (macho64 ? 16 : 12);	/* nsyms */
-		ml->data[2] = linkoff + s1->size;	/* stroff */
-		ml->data[3] = s2->size;	/* strsize */
+		ml->data[2] = linkoff + s1->size + s2->size + s3->size;	/* stroff */
+		ml->data[3] = s4->size;	/* strsize */
 
 		ml = newMachoLoad(11, 18);	/* LC_DYSYMTAB */
 		ml->data[0] = 0;	/* ilocalsym */
@@ -417,8 +444,8 @@ asmbmacho(void)
 		ml->data[9] = 0;	/* nmodtab */
 		ml->data[10] = 0;	/* extrefsymoff */
 		ml->data[11] = 0;	/* nextrefsyms */
-		ml->data[12] = linkoff + s1->size + s2->size;	/* indirectsymoff */
-		ml->data[13] = (s3->size + s4->size) / 4;	/* nindirectsyms */
+		ml->data[12] = linkoff + s1->size;	/* indirectsymoff */
+		ml->data[13] = (s2->size + s3->size) / 4;	/* nindirectsyms */
 		ml->data[14] = 0;	/* extreloff */
 		ml->data[15] = 0;	/* nextrel */
 		ml->data[16] = 0;	/* locreloff */
@@ -428,12 +455,6 @@ asmbmacho(void)
 		ml->data[0] = 12;	/* offset to string */
 		strcpy((char*)&ml->data[1], "/usr/lib/dyld");
 
-		if(ndylib > 0) {	/* add reference to where .so files are installed */
-			pkgroot = smprint("%s/pkg/%s_%s", goroot, goos, goarch);
-			ml = newMachoLoad(0x80000000 | 0x1c, 1+(strlen(pkgroot)+1+7)/8*2);	/* LC_RPATH */
-			ml->data[0] = 12;	/* offset of string from beginning of load */
-			strcpy((char*)&ml->data[1], pkgroot);
-		}
 		for(i=0; i<ndylib; i++) {
 			ml = newMachoLoad(12, 4+(strlen(dylib[i])+1+7)/8*2);	/* LC_LOAD_DYLIB */
 			ml->data[0] = 24;	/* offset of string from beginning of load */
@@ -461,8 +482,8 @@ asmbmacho(void)
 	}
 
 	a = machowrite();
-	if(a > MACHORESERVE)
-		diag("MACHORESERVE too small: %d > %d", a, MACHORESERVE);
+	if(a > HEADR)
+		diag("HEADR too small: %d > %d", a, HEADR);
 }
 
 vlong
@@ -474,23 +495,40 @@ domacholink(void)
 	// write data that will be linkedit section
 	s1 = lookup(".dynsym", 0);
 	relocsym(s1);
-	s2 = lookup(".dynstr", 0);
-	s3 = lookup(".linkedit.plt", 0);
-	s4 = lookup(".linkedit.got", 0);
+	s2 = lookup(".linkedit.plt", 0);
+	s3 = lookup(".linkedit.got", 0);
+	s4 = lookup(".dynstr", 0);
 
-	while(s2->size%4)
-		adduint8(s2, 0);
+	// Force the linkedit section to end on a 16-byte
+	// boundary.  This allows pure (non-cgo) Go binaries
+	// to be code signed correctly.
+	//
+	// Apple's codesign_allocate (a helper utility for
+	// the codesign utility) can do this fine itself if
+	// it is run on a dynamic Mach-O binary.  However,
+	// when it is run on a pure (non-cgo) Go binary, where
+	// the linkedit section is mostly empty, it fails to
+	// account for the extra padding that it itself adds
+	// when adding the LC_CODE_SIGNATURE load command
+	// (which must be aligned on a 16-byte boundary).
+	//
+	// By forcing the linkedit section to end on a 16-byte
+	// boundary, codesign_allocate will not need to apply
+	// any alignment padding itself, working around the
+	// issue.
+	while(s4->size%16)
+		adduint8(s4, 0);
 	
 	size = s1->size + s2->size + s3->size + s4->size;
 
 	if(size > 0) {
-		linkoff = rnd(HEADR+segtext.len, INITRND) + rnd(segdata.filelen, INITRND);
-		seek(cout, linkoff, 0);
+		linkoff = rnd(HEADR+segtext.len, INITRND) + rnd(segdata.filelen, INITRND) + rnd(segdwarf.filelen, INITRND);
+		cseek(linkoff);
 
-		ewrite(cout, s1->p, s1->size);
-		ewrite(cout, s2->p, s2->size);
-		ewrite(cout, s3->p, s3->size);
-		ewrite(cout, s4->p, s4->size);
+		cwrite(s1->p, s1->size);
+		cwrite(s2->p, s2->size);
+		cwrite(s3->p, s3->size);
+		cwrite(s4->p, s4->size);
 	}
 
 	return rnd(size, INITRND);

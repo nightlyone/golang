@@ -277,6 +277,18 @@ cgen(Node *n, Node *nn)
 				break;
 			}
 		}
+		if(n->op == OOR && l->op == OASHL && r->op == OLSHR
+		&& l->right->op == OCONST && r->right->op == OCONST
+		&& l->left->op == ONAME && r->left->op == ONAME
+		&& l->left->sym == r->left->sym
+		&& l->right->vconst + r->right->vconst == 8 * l->left->type->width) {
+			regalloc(&nod, l->left, nn);
+			cgen(l->left, &nod);
+			gopcode(OROTL, n->type, l->right, &nod);
+			gmove(&nod, nn);
+			regfree(&nod);
+			break;
+		}
 		if(n->op == OADD && l->op == OASHL && l->right->op == OCONST
 		&& (r->op != OCONST || r->vconst < -128 || r->vconst > 127)) {
 			c = l->right->vconst;
@@ -1221,7 +1233,7 @@ void
 boolgen(Node *n, int true, Node *nn)
 {
 	int o;
-	Prog *p1, *p2;
+	Prog *p1, *p2, *p3;
 	Node *l, *r, nod, nod1;
 	int32 curs;
 
@@ -1346,6 +1358,15 @@ boolgen(Node *n, int true, Node *nn)
 			cgen64(n, Z);
 			goto com;
 		}
+		if(true && typefd[l->type->etype] && (o == OEQ || o == ONE)) {
+			// Cannot rewrite !(l == r) into l != r with float64; it breaks NaNs.
+			// Jump around instead.
+			boolgen(n, 0, Z);
+			p1 = p;
+			gbranch(OGOTO);
+			patch(p1, pc);
+			goto com;
+		}
 		if(true)
 			o = comrel[relindex(o)];
 		if(l->complex >= FNX && r->complex >= FNX) {
@@ -1377,6 +1398,30 @@ boolgen(Node *n, int true, Node *nn)
 					fgopcode(o, &fregnode0, &fregnode1, 1, 1);
 				} else
 					fgopcode(o, l, &fregnode0, 0, 1);
+			}
+			switch(o) {
+			case OEQ:
+				// Already emitted AJEQ; want AJEQ and AJPC.
+				p1 = p;
+				gbranch(OGOTO);
+				p2 = p;
+				patch(p1, pc);
+				gins(AJPC, Z, Z);
+				patch(p2, pc);
+				break;
+
+			case ONE:
+				// Already emitted AJNE; want AJNE or AJPS.
+				p1 = p;
+				gins(AJPS, Z, Z);
+				p2 = p;
+				gbranch(OGOTO);
+				p3 = p;
+				patch(p1, pc);
+				patch(p2, pc);
+				gbranch(OGOTO);
+				patch(p3, pc);
+				break;
 			}
 			goto com;
 		}
@@ -1581,7 +1626,7 @@ sugen(Node *n, Node *nn, int32 w)
 			nod0.addable = 0;
 			nod0.right = l;
 
-			/* prtree(&nod0, "hand craft"); /* */
+			// prtree(&nod0, "hand craft");
 			cgen(&nod0, Z);
 		}
 		break;
@@ -1670,6 +1715,7 @@ copy:
 		}
 	}
 
+	v = w == 8;
 	if(n->complex >= FNX && nn != nil && nn->complex >= FNX) {
 		t = nn->type;
 		nn->type = types[TLONG];
@@ -1695,8 +1741,28 @@ copy:
 	}
 
 	x = 0;
-	v = w == 8;
 	if(v) {
+		if(nn != nil && nn->complex >= FNX) {
+			t = nn->type;
+			nn->type = types[TLONG];
+			regialloc(&nod2, nn, Z);
+			lcgen(nn, &nod2);
+			nn->type = t;
+			
+			nod2.type = typ(TIND, t);
+	
+			nod1 = nod2;
+			nod1.op = OIND;
+			nod1.left = &nod2;
+			nod1.right = Z;
+			nod1.complex = 1;
+			nod1.type = t;
+	
+			sugen(n, &nod1, w);
+			regfree(&nod2);
+			return;
+		}
+			
 		c = cursafe;
 		if(n->left != Z && n->left->complex >= FNX
 		&& n->right != Z && n->right->complex >= FNX) {

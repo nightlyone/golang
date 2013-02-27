@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
+	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 )
 
 type writerTestEntry struct {
@@ -24,58 +27,99 @@ type writerTest struct {
 }
 
 var writerTests = []*writerTest{
-	&writerTest{
+	// The writer test file was produced with this command:
+	// tar (GNU tar) 1.26
+	//   ln -s small.txt link.txt
+	//   tar -b 1 --format=ustar -c -f writer.tar small.txt small2.txt link.txt
+	{
 		file: "testdata/writer.tar",
 		entries: []*writerTestEntry{
-			&writerTestEntry{
+			{
 				header: &Header{
 					Name:     "small.txt",
 					Mode:     0640,
 					Uid:      73025,
 					Gid:      5000,
 					Size:     5,
-					Mtime:    1246508266,
+					ModTime:  time.Unix(1246508266, 0),
 					Typeflag: '0',
 					Uname:    "dsymonds",
 					Gname:    "eng",
 				},
 				contents: "Kilts",
 			},
-			&writerTestEntry{
+			{
 				header: &Header{
 					Name:     "small2.txt",
 					Mode:     0640,
 					Uid:      73025,
 					Gid:      5000,
 					Size:     11,
-					Mtime:    1245217492,
+					ModTime:  time.Unix(1245217492, 0),
 					Typeflag: '0',
 					Uname:    "dsymonds",
 					Gname:    "eng",
 				},
 				contents: "Google.com\n",
 			},
+			{
+				header: &Header{
+					Name:     "link.txt",
+					Mode:     0777,
+					Uid:      1000,
+					Gid:      1000,
+					Size:     0,
+					ModTime:  time.Unix(1314603082, 0),
+					Typeflag: '2',
+					Linkname: "small.txt",
+					Uname:    "strings",
+					Gname:    "strings",
+				},
+				// no contents
+			},
 		},
 	},
 	// The truncated test file was produced using these commands:
 	//   dd if=/dev/zero bs=1048576 count=16384 > /tmp/16gig.txt
 	//   tar -b 1 -c -f- /tmp/16gig.txt | dd bs=512 count=8 > writer-big.tar
-	&writerTest{
+	{
 		file: "testdata/writer-big.tar",
 		entries: []*writerTestEntry{
-			&writerTestEntry{
+			{
 				header: &Header{
 					Name:     "tmp/16gig.txt",
 					Mode:     0640,
 					Uid:      73025,
 					Gid:      5000,
 					Size:     16 << 30,
-					Mtime:    1254699560,
+					ModTime:  time.Unix(1254699560, 0),
 					Typeflag: '0',
 					Uname:    "dsymonds",
 					Gname:    "eng",
 				},
-				// no contents
+				// fake contents
+				contents: strings.Repeat("\x00", 4<<10),
+			},
+		},
+	},
+	// This file was produced using gnu tar 1.17
+	// gnutar  -b 4 --format=ustar (longname/)*15 + file.txt
+	{
+		file: "testdata/ustar.tar",
+		entries: []*writerTestEntry{
+			{
+				header: &Header{
+					Name:     strings.Repeat("longname/", 15) + "file.txt",
+					Mode:     0644,
+					Uid:      0765,
+					Gid:      024,
+					Size:     06,
+					ModTime:  time.Unix(1360135598, 0),
+					Typeflag: '0',
+					Uname:    "shane",
+					Gname:    "staff",
+				},
+				contents: "hello\n",
 			},
 		},
 	},
@@ -130,7 +174,9 @@ testLoop:
 
 		buf := new(bytes.Buffer)
 		tw := NewWriter(iotest.TruncateWriter(buf, 4<<10)) // only catch the first 4 KB
+		big := false
 		for j, entry := range test.entries {
+			big = big || entry.header.Size > 1<<10
 			if err := tw.WriteHeader(entry.header); err != nil {
 				t.Errorf("test %d, entry %d: Failed writing header: %v", i, j, err)
 				continue testLoop
@@ -140,7 +186,8 @@ testLoop:
 				continue testLoop
 			}
 		}
-		if err := tw.Close(); err != nil {
+		// Only interested in Close failures for the small tests.
+		if err := tw.Close(); err != nil && !big {
 			t.Errorf("test %d: Failed closing archive: %v", i, err)
 			continue testLoop
 		}
@@ -149,6 +196,67 @@ testLoop:
 		if !bytes.Equal(expected, actual) {
 			t.Errorf("test %d: Incorrect result: (-=expected, +=actual)\n%v",
 				i, bytediff(expected, actual))
+		}
+		if testing.Short() { // The second test is expensive.
+			break
+		}
+	}
+}
+
+func TestPax(t *testing.T) {
+	// Create an archive with a large name
+	fileinfo, err := os.Stat("testdata/small.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr, err := FileInfoHeader(fileinfo, "")
+	if err != nil {
+		t.Fatalf("os.Stat: %v", err)
+	}
+	// Force a PAX long name to be written
+	longName := strings.Repeat("ab", 100)
+	contents := strings.Repeat(" ", int(hdr.Size))
+	hdr.Name = longName
+	var buf bytes.Buffer
+	writer := NewWriter(&buf)
+	if err := writer.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = writer.Write([]byte(contents)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Simple test to make sure PAX extensions are in effect
+	if !bytes.Contains(buf.Bytes(), []byte("PaxHeaders.")) {
+		t.Fatal("Expected at least one PAX header to be written.")
+	}
+	// Test that we can get a long name back out of the archive.
+	reader := NewReader(&buf)
+	hdr, err = reader.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdr.Name != longName {
+		t.Fatal("Couldn't recover long file name")
+	}
+}
+
+func TestPAXHeader(t *testing.T) {
+	medName := strings.Repeat("CD", 50)
+	longName := strings.Repeat("AB", 100)
+	paxTests := [][2]string{
+		{"name=/etc/hosts", "19 name=/etc/hosts\n"},
+		{"a=b", "6 a=b\n"},          // Single digit length
+		{"a=names", "11 a=names\n"}, // Test case involving carries
+		{"name=" + longName, fmt.Sprintf("210 name=%s\n", longName)},
+		{"name=" + medName, fmt.Sprintf("110 name=%s\n", medName)}}
+
+	for _, test := range paxTests {
+		key, expected := test[0], test[1]
+		if result := paxHeader(key); result != expected {
+			t.Fatalf("paxHeader: got %s, expected %s", result, expected)
 		}
 	}
 }

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The debug package contains facilities for programs to debug themselves
-// while they are running.
+// Package debug contains facilities for programs to debug themselves while
+// they are running.
 package debug
 
 import (
@@ -29,6 +29,8 @@ func PrintStack() {
 // For each routine, it includes the source line information and PC value,
 // then attempts to discover, for Go functions, the calling function or
 // method and the text of the line containing the invocation.
+//
+// This function is deprecated. Use package runtime's Stack instead.
 func Stack() []byte {
 	return stack()
 }
@@ -52,7 +54,7 @@ func stack() []byte {
 			if err != nil {
 				continue
 			}
-			lines = bytes.Split(data, []byte{'\n'}, -1)
+			lines = bytes.Split(data, []byte{'\n'})
 			lastFile = file
 		}
 		line-- // in stack trace, lines are 1-indexed but our array is 0-indexed

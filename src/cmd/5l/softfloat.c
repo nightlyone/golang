@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#define	EXTERN
 #include	"l.h"
+#include	"../ld/lib.h"
 
 // Software floating point.
 
@@ -53,6 +53,10 @@ softfloat(void)
 			case AMULD:
 			case ADIVF:
 			case ADIVD:
+			case ASQRTF:
+			case ASQRTD:
+			case AABSF:
+			case AABSD:
 				goto soft;
 
 			default:
@@ -72,6 +76,7 @@ softfloat(void)
 	 				p->to.type = D_BRANCH;
 					p->to.sym = symsfloat;
 					p->cond = psfloat;
+					p->line = next->line;
 	
 					p = next;
 					wasfloat = 1;

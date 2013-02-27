@@ -170,7 +170,7 @@ me(kern_return_t r)
 // handles to tasks (processes), and handles to threads within a
 // process.  All of them are small integers.
 //
-// To accomodate Mach, we employ a clumsy hack: in this interface,
+// To accommodate Mach, we employ a clumsy hack: in this interface,
 // if you pass in a positive number, that's a process id.
 // If you pass in a negative number, that identifies a thread that
 // has been previously returned by procthreadpids (it indexes
@@ -222,12 +222,21 @@ addpid(int pid, int force)
 		// The excthread reads that port and signals
 		// us if we are waiting on that thread.
 		pthread_t p;
+		int err;
 
 		excport = mach_reply_port();
 		pthread_mutex_init(&mu, nil);
 		pthread_cond_init(&cond, nil);
-		pthread_create(&p, nil, excthread, nil);
-		pthread_create(&p, nil, waitthread, (void*)(uintptr)pid);
+		err = pthread_create(&p, nil, excthread, nil);
+		if (err != 0) {
+			fprint(2, "pthread_create failed: %s\n", strerror(err));
+			abort();
+		}
+		err = pthread_create(&p, nil, waitthread, (void*)(uintptr)pid);
+		if (err != 0) {
+			fprint(2, "pthread_create failed: %s\n", strerror(err));
+			abort();
+		}
 		first = 0;
 	}
 
@@ -579,7 +588,7 @@ machregrw(Map *map, Seg *seg, uvlong addr, void *v, uint n, int isr)
 		if(!isr)
 			thread_resume(thread);
 		rerrstr(buf, sizeof buf);
-		if(strcmp(buf, "send invalid dest") == 0)
+		if(strstr(buf, "send invalid dest") != nil) 
 			werrstr("process exited");
 		else
 			werrstr("thread_get_state: %r");
@@ -742,7 +751,7 @@ havet:
 static void*
 excthread(void *v)
 {
-	extern boolean_t exc_server();
+	extern boolean_t exc_server(mach_msg_header_t *, mach_msg_header_t *);
 	mach_msg_server(exc_server, 2048, excport, 0);
 	return 0;
 }

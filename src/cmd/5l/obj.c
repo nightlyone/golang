@@ -34,6 +34,7 @@
 #include	"l.h"
 #include	"../ld/lib.h"
 #include	"../ld/elf.h"
+#include	"../ld/dwarf.h"
 #include	<ar.h>
 
 #ifndef	DEFAULT
@@ -41,38 +42,37 @@
 #endif
 
 char	*noname		= "<none>";
-char	thechar		= '5';
 char	*thestring 	= "arm";
 
-/*
- *	-H1 -T0x10005000 -R4		is aif for risc os
- *	-H2 -T4128 -R4096		is plan9 format
- *	-H3 -T0xF0000020 -R4		is NetBSD format
- *	-H4				is IXP1200 (raw)
- *	-H5 -T0xC0008010 -R1024		is ipaq
- */
-
-static char*
-linkername[] =
-{
-	"runtime.softfloat",
+Header headers[] = {
+   "noheader", Hnoheader,
+   "risc", Hrisc,
+   "plan9", Hplan9x32,
+   "ixp1200", Hixp1200,
+   "ipaq", Hipaq,
+   "linux", Hlinux,
+   "freebsd", Hfreebsd,
+   "netbsd", Hnetbsd,
+   0, 0
 };
 
-void
-usage(void)
-{
-	fprint(2, "usage: 5l [-E entry] [-H head] [-I interpreter] [-L dir] [-T text] [-D data] [-R rnd] [-r path] [-o out] main.5\n");
-	errorexit();
-}
+/*
+ *	-Hrisc -T0x10005000 -R4		is aif for risc os
+ *	-Hplan9 -T4128 -R4096		is plan9 format
+ *	-Hixp1200			is IXP1200 (raw)
+ *	-Hipaq -T0xC0008010 -R1024	is ipaq
+ *	-Hlinux -Tx -Rx			is linux elf
+ *	-Hfreebsd			is freebsd elf
+ *	-Hnetbsd			is netbsd elf
+ */
 
 void
 main(int argc, char *argv[])
 {
-	int c, i;
 	char *p;
+	Sym *s;
 
 	Binit(&bso, 1, OWRITE);
-	cout = -1;
 	listinit();
 	nerrors = 0;
 	outfile = "5.out";
@@ -81,77 +81,66 @@ main(int argc, char *argv[])
 	INITDAT = -1;
 	INITRND = -1;
 	INITENTRY = 0;
+	LIBINITENTRY = 0;
+	nuxiinit();
 	
-	p = getenv("GOARM");
-	if(p != nil && strcmp(p, "5") == 0)
+	p = getgoarm();
+	if(p != nil)
+		goarm = atoi(p);
+	else
+		goarm = 6;
+	if(goarm == 5)
 		debug['F'] = 1;
 
-	ARGBEGIN {
-	default:
-		c = ARGC();
-		if(c == 'l')
-			usage();
- 		if(c >= 0 && c < sizeof(debug))
-			debug[c]++;
-		break;
-	case 'o':
-		outfile = EARGF(usage());
-		break;
-	case 'E':
-		INITENTRY = EARGF(usage());
-		break;
-	case 'I':
-		interpreter = EARGF(usage());
-		break;
-	case 'L':
-		Lflag(EARGF(usage()));
-		break;
-	case 'T':
-		INITTEXT = atolwhex(EARGF(usage()));
-		break;
-	case 'D':
-		INITDAT = atolwhex(EARGF(usage()));
-		break;
-	case 'R':
-		INITRND = atolwhex(EARGF(usage()));
-		break;
-	case 'r':
-		rpath = EARGF(usage());
-		break;
-	case 'H':
-		HEADTYPE = atolwhex(EARGF(usage()));
-		/* do something about setting INITTEXT */
-		break;
-	case 'V':
-		print("%cl version %s\n", thechar, getgoversion());
-		errorexit();
-	} ARGEND
-
-	USED(argc);
+	flagcount("1", "use alternate profiling code", &debug['1']);
+	flagfn1("B", "info: define ELF NT_GNU_BUILD_ID note", addbuildinfo);
+	flagstr("E", "sym: entry symbol", &INITENTRY);
+	flagint32("D", "addr: data address", &INITDAT);
+	flagcount("G", "debug pseudo-ops", &debug['G']);
+	flagfn1("I", "interp: set ELF interp", setinterp);
+	flagfn1("L", "dir: add dir to library path", Lflag);
+	flagfn1("H", "head: header type", setheadtype);
+	flagcount("K", "add stack underflow checks", &debug['K']);
+	flagcount("M", "disable software div/mod", &debug['M']);
+	flagcount("O", "print pc-line tables", &debug['O']);
+	flagcount("P", "debug code generation", &debug['P']);
+	flagint32("R", "rnd: address rounding", &INITRND);
+	flagint32("T", "addr: text address", &INITTEXT);
+	flagfn0("V", "print version and exit", doversion);
+	flagcount("W", "disassemble input", &debug['W']);
+	flagfn2("X", "name value: define string data", addstrdata);
+	flagcount("Z", "clear stack frame on entry", &debug['Z']);
+	flagcount("a", "disassemble output", &debug['a']);
+	flagcount("c", "dump call graph", &debug['c']);
+	flagcount("d", "disable dynamic executable", &debug['d']);
+	flagcount("f", "ignore version mismatch", &debug['f']);
+	flagcount("g", "disable go package data checks", &debug['g']);
+	flagstr("k", "sym: set field tracking symbol", &tracksym);
+	flagcount("n", "dump symbol table", &debug['n']);
+	flagstr("o", "outfile: set output file", &outfile);
+	flagcount("p", "insert profiling code", &debug['p']);
+	flagstr("r", "dir1:dir2:...: set ELF dynamic linker search path", &rpath);
+	flagcount("race", "enable race detector", &flag_race);
+	flagcount("s", "disable symbol table", &debug['s']);
+	flagcount("u", "reject unsafe packages", &debug['u']);
+	flagcount("v", "print link trace", &debug['v']);
+	flagcount("w", "disable DWARF generation", &debug['w']);
+	flagcount("shared", "generate shared object", &flag_shared);
+	
+	flagparse(&argc, &argv, usage);
 
 	if(argc != 1)
 		usage();
 
 	libinit();
-	if(rpath == nil)
-		rpath = smprint("%s/pkg/%s_%s", goroot, goos, goarch);
 
-	if(!debug['9'] && !debug['U'] && !debug['B'])
-		debug[DEFAULT] = 1;
-	if(HEADTYPE == -1) {
-		if(debug['U'])
-			HEADTYPE = 0;
-		if(debug['B'])
-			HEADTYPE = 1;
-		if(debug['9'])
-			HEADTYPE = 2;
-		HEADTYPE = 6;
-	}
+	if(HEADTYPE == -1)
+		HEADTYPE = headtype(goos);
 	switch(HEADTYPE) {
 	default:
 		diag("unknown -H option");
 		errorexit();
-	case 0:	/* no header */
+	case Hnoheader:	/* no header */
 		HEADR = 0L;
 		if(INITTEXT == -1)
 			INITTEXT = 0;
@@ -160,7 +149,7 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 4;
 		break;
-	case 1:	/* aif for risc os */
+	case Hrisc:	/* aif for risc os */
 		HEADR = 128L;
 		if(INITTEXT == -1)
 			INITTEXT = 0x10005000 + HEADR;
@@ -169,7 +158,7 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 4;
 		break;
-	case 2:	/* plan 9 */
+	case Hplan9x32:	/* plan 9 */
 		HEADR = 32L;
 		if(INITTEXT == -1)
 			INITTEXT = 4128;
@@ -178,16 +167,7 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 4096;
 		break;
-	case 3:	/* boot for NetBSD */
-		HEADR = 32L;
-		if(INITTEXT == -1)
-			INITTEXT = 0xF0000020L;
-		if(INITDAT == -1)
-			INITDAT = 0;
-		if(INITRND == -1)
-			INITRND = 4096;
-		break;
-	case 4: /* boot for IXP1200 */
+	case Hixp1200: /* boot for IXP1200 */
 		HEADR = 0L;
 		if(INITTEXT == -1)
 			INITTEXT = 0x0;
@@ -196,7 +176,7 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 4;
 		break;
-	case 5: /* boot for ipaq */
+	case Hipaq: /* boot for ipaq */
 		HEADR = 16L;
 		if(INITTEXT == -1)
 			INITTEXT = 0xC0008010;
@@ -205,12 +185,16 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 1024;
 		break;
-	case 6:	/* arm elf */
-		debug['d'] = 1;	// no dynamic linking
+	case Hlinux:	/* arm elf */
+	case Hfreebsd:
+	case Hnetbsd:
+		debug['d'] = 0;	// with dynamic linking
+		tlsoffset = -8; // hardcoded number, first 4-byte word for g, and then 4-byte word for m
+		                // this number is known to ../../pkg/runtime/cgo/gcc_linux_arm.c
 		elfinit();
 		HEADR = ELFRESERVE;
 		if(INITTEXT == -1)
-			INITTEXT = 0x8000 + HEADR;
+			INITTEXT = 0x10000 + HEADR;
 		if(INITDAT == -1)
 			INITDAT = 0;
 		if(INITRND == -1)
@@ -232,23 +216,25 @@ main(int argc, char *argv[])
 	zprg.from.reg = NREG;
 	zprg.to = zprg.from;
 	buildop();
-	thumbbuildop();	// could build on demand
 	histgen = 0;
 	pc = 0;
 	dtype = 4;
-	nuxiinit();
 
 	version = 0;
 	cbp = buf.cbuf;
 	cbc = sizeof(buf.cbuf);
 
+	// embed goarm to runtime.goarm
+	s = lookup("runtime.goarm", 0);
+	s->dupok = 1;
+	adduint8(s, goarm);
+
 	addlibpath("command line", "command line", argv[0], "main");
 	loadlib();
 
 	// mark some functions that are only referenced after linker code editing
-	// TODO(kaib): this doesn't work, the prog can't be found in runtime
-	for(i=0; i<nelem(linkername); i++)
-		mark(lookup(linkername[i], 0));
+	if(debug['F'])
+		mark(rlookup("_sfloat", 0));
 	deadcode();
 	if(textp == nil) {
 		diag("no code");
@@ -264,20 +250,27 @@ main(int argc, char *argv[])
 	doelf();
 	follow();
 	softfloat();
-	noops();
+	// 5l -Z means zero the stack frame on entry.
+	// This slows down function calls but can help avoid
+	// false positives in garbage collection.
+	if(debug['Z'])
+		dozerostk();
+	noops(); // generate stack split prolog, handle div/mod, etc.
+	dostkcheck();
 	span();
+	addexport();
+	// textaddress() functionality is handled in span()
 	pclntab();
 	symtab();
 	dodata();
 	address();
+	doweak();
 	reloc();
 	asmb();
 	undef();
 
-	if(debug['c']){
-		thumbcount();
+	if(debug['c'])
 		print("ARM size = %d\n", armsize);
-	}
 	if(debug['v']) {
 		Bprint(&bso, "%5.2f cpu time\n", cputime());
 		Bprint(&bso, "%d sizeof adr\n", sizeof(Adr));
@@ -287,26 +280,40 @@ main(int argc, char *argv[])
 	errorexit();
 }
 
+static Sym*
+zsym(char *pn, Biobuf *f, Sym *h[])
+{	
+	int o;
+	
+	o = BGETC(f);
+	if(o == 0)
+		return S;
+	if(o < 0 || o >= NSYM || h[o] == nil)
+		mangle(pn);
+	return h[o];
+}
+
 static void
-zaddr(Biobuf *f, Adr *a, Sym *h[])
+zaddr(char *pn, Biobuf *f, Adr *a, Sym *h[])
 {
 	int i, c;
 	int32 l;
 	Sym *s;
 	Auto *u;
 
-	a->type = Bgetc(f);
-	a->reg = Bgetc(f);
-	c = Bgetc(f);
+	a->type = BGETC(f);
+	a->reg = BGETC(f);
+	c = BGETC(f);
 	if(c < 0 || c > NSYM){
 		print("sym out of range: %d\n", c);
 		Bputc(f, ALAST+1);
 		return;
 	}
 	a->sym = h[c];
-	a->name = Bgetc(f);
+	a->name = BGETC(f);
+	adrgotype = zsym(pn, f, h);
 
-	if(a->reg < 0 || a->reg > NREG) {
+	if((schar)a->reg < 0 || a->reg > NREG) {
 		print("register out of range %d\n", a->reg);
 		Bputc(f, ALAST+1);
 		return;	/*  force real diagnostic */
@@ -337,8 +344,8 @@ zaddr(Biobuf *f, Adr *a, Sym *h[])
 		break;
 
 	case D_REGREG:
-		a->offset = Bgetc(f);
-		c++;
+	case D_REGREG2:
+		a->offset = BGETC(f);
 		break;
 
 	case D_CONST2:
@@ -354,7 +361,6 @@ zaddr(Biobuf *f, Adr *a, Sym *h[])
 	case D_SCONST:
 		a->sval = mal(NSNAME);
 		Bread(f, a->sval, NSNAME);
-		c += NSNAME;
 		break;
 
 	case D_FCONST:
@@ -366,8 +372,11 @@ zaddr(Biobuf *f, Adr *a, Sym *h[])
 	if(s == S)
 		return;
 	i = a->name;
-	if(i != D_AUTO && i != D_PARAM)
+	if(i != D_AUTO && i != D_PARAM) {
+		if(s && adrgotype)
+			s->gotype = adrgotype;
 		return;
+	}
 
 	l = a->offset;
 	for(u=curauto; u; u=u->link)
@@ -375,6 +384,8 @@ zaddr(Biobuf *f, Adr *a, Sym *h[])
 		if(u->type == i) {
 			if(u->aoffset > l)
 				u->aoffset = l;
+			if(adrgotype)
+				u->gotype = adrgotype;
 			return;
 		}
 
@@ -384,6 +395,7 @@ zaddr(Biobuf *f, Adr *a, Sym *h[])
 	u->asym = s;
 	u->aoffset = l;
 	u->type = i;
+	u->gotype = adrgotype;
 }
 
 void
@@ -394,14 +406,12 @@ nopout(Prog *p)
 	p->to.type = D_NONE;
 }
 
-static void puntfp(Prog *);
-
 void
 ldobj1(Biobuf *f, char *pkg, int64 len, char *pn)
 {
 	int32 ipc;
 	Prog *p;
-	Sym *h[NSYM], *s, *di;
+	Sym *h[NSYM], *s;
 	int v, o, r, skip;
 	uint32 sig;
 	char *name;
@@ -413,7 +423,6 @@ ldobj1(Biobuf *f, char *pkg, int64 len, char *pn)
 	lastp = nil;
 	ntext = 0;
 	eof = Boffset(f) + len;
-	di = S;
 	src[0] = 0;
 
 newloop:
@@ -426,7 +435,7 @@ newloop:
 loop:
 	if(f->state == Bracteof || Boffset(f) >= eof)
 		goto eof;
-	o = Bgetc(f);
+	o = BGETC(f);
 	if(o == Beof)
 		goto eof;
 
@@ -439,8 +448,8 @@ loop:
 		sig = 0;
 		if(o == ASIGNAME)
 			sig = Bget4(f);
-		v = Bgetc(f); /* type */
-		o = Bgetc(f); /* sym */
+		v = BGETC(f); /* type */
+		o = BGETC(f); /* sym */
 		r = 0;
 		if(v == D_STATIC)
 			r = version;
@@ -456,7 +465,6 @@ loop:
 		s = lookup(x, r);
 		if(x != name)
 			free(x);
-		name = nil;
 
 		if(sig != 0){
 			if(s->sig != 0 && s->sig != sig)
@@ -485,18 +493,20 @@ loop:
 				histfrogp++;
 			} else
 				collapsefrog(s);
+			dwarfaddfrag(s->value, s->name);
 		}
 		goto loop;
 	}
 
 	p = mal(sizeof(Prog));
 	p->as = o;
-	p->scond = Bgetc(f);
-	p->reg = Bgetc(f);
+	p->scond = BGETC(f);
+	p->reg = BGETC(f);
 	p->line = Bget4(f);
 
-	zaddr(f, &p->from, h);
-	zaddr(f, &p->to, h);
+	zaddr(pn, f, &p->from, h);
+	fromgotype = adrgotype;
+	zaddr(pn, f, &p->to, h);
 
 	if(p->as != ATEXT && p->as != AGLOBL && p->reg > NREG)
 		diag("register out of range %A %d", p->as, p->reg);
@@ -542,7 +552,7 @@ loop:
 			s->type = SBSS;
 			s->value = 0;
 		}
-		if(s->type != SBSS) {
+		if(s->type != SBSS && s->type != SNOPTRBSS && !s->dupok) {
 			diag("redefinition: %s\n%P", s->name, p);
 			s->type = SBSS;
 			s->value = 0;
@@ -551,6 +561,10 @@ loop:
 			s->size = p->to.offset;
 		if(p->reg & DUPOK)
 			s->dupok = 1;
+		if(p->reg & RODATA)
+			s->type = SRODATA;
+		else if(p->reg & NOPTR)
+			s->type = SNOPTRBSS;
 		break;
 
 	case ADATA:
@@ -560,8 +574,8 @@ loop:
 		// redefinitions.
 		s = p->from.sym;
 		if(s->dupok) {
-			if(debug['v'])
-				Bprint(&bso, "skipping %s in %s: dupok\n", s->name, pn);
+//			if(debug['v'])
+//				Bprint(&bso, "skipping %s in %s: dupok\n", s->name, pn);
 			goto loop;
 		}
 		if(s->file == nil)
@@ -570,7 +584,7 @@ loop:
 			diag("multiple initialization for %s: in both %s and %s", s->name, s->file, pn);
 			errorexit();
 		}
-		savedata(s, p);
+		savedata(s, p, pn);
 		unmal(p, sizeof *p);
 		break;
 
@@ -579,6 +593,15 @@ loop:
 		p->pc = pc;
 		pc++;
 		break;
+
+	case ALOCALS:
+		cursym->locals = p->to.offset;
+		pc++;
+		break;
+
+	case ATYPE:
+		pc++;
+		goto loop;
 
 	case ATEXT:
 		if(cursym != nil && cursym->text) {
@@ -592,6 +615,10 @@ loop:
 			errorexit();
 		}
 		cursym = s;
+		if(s->type != 0 && s->type != SXREF && (p->reg & DUPOK)) {
+			skip = 1;
+			goto casedef;
+		}
 		if(ntext++ == 0 && s->type != 0 && s->type != SXREF) {
 			/* redefinition, so file has probably been seen before */
 			if(debug['v'])
@@ -599,20 +626,18 @@ loop:
 			return;
 		}
 		skip = 0;
-		if(s->type != 0 && s->type != SXREF) {
-			if(p->reg & DUPOK) {
-				skip = 1;
-				goto casedef;
-			}
+		if(s->type != 0 && s->type != SXREF)
 			diag("redefinition: %s\n%P", s->name, p);
-		}
 		if(etextp)
 			etextp->next = s;
 		else
 			textp = s;
+		if(fromgotype) {
+			if(s->gotype && s->gotype != fromgotype)
+				diag("%s: type mismatch for %s", pn, s->name);
+			s->gotype = fromgotype;
+		}
 		etextp = s;
-		setarch(p);
-		setthumb(p);
 		p->align = 4;
 		autosize = (p->to.offset+3L) & ~3L;
 		p->to.offset = autosize;
@@ -620,7 +645,7 @@ loop:
 		s->type = STEXT;
 		s->text = p;
 		s->value = pc;
-		s->thumb = thumb;
+		s->args = p->to.offset2;
 		lastp = p;
 		p->pc = pc;
 		pc++;
@@ -662,13 +687,9 @@ loop:
 	case AMULD:
 	case ADIVF:
 	case ADIVD:
-		if(thumb)
-			puntfp(p);
 		goto casedef;
 
 	case AMOVF:
-		if(thumb)
-			puntfp(p);
 		if(skip)
 			goto casedef;
 
@@ -678,7 +699,7 @@ loop:
 			sprint(literal, "$%ux", ieeedtof(&p->from.ieee));
 			s = lookup(literal, 0);
 			if(s->type == 0) {
-				s->type = SBSS;
+				s->type = SRODATA;
 				adduint32(s, ieeedtof(&p->from.ieee));
 				s->reachable = 0;
 			}
@@ -690,8 +711,6 @@ loop:
 		goto casedef;
 
 	case AMOVD:
-		if(thumb)
-			puntfp(p);
 		if(skip)
 			goto casedef;
 
@@ -702,7 +721,7 @@ loop:
 				p->from.ieee.l, p->from.ieee.h);
 			s = lookup(literal, 0);
 			if(s->type == 0) {
-				s->type = SBSS;
+				s->type = SRODATA;
 				adduint32(s, p->from.ieee.l);
 				adduint32(s, p->from.ieee.h);
 				s->reachable = 0;
@@ -745,17 +764,6 @@ prg(void)
 	p = mal(sizeof(Prog));
 	*p = zprg;
 	return p;
-}
-
-static void
-puntfp(Prog *p)
-{
-	USED(p);
-	/* floating point - punt for now */
-	cursym->text->reg = NREG;	/* ARM */
-	cursym->thumb = 0;
-	thumb = 0;
-	// print("%s: generating ARM code (contains floating point ops %d)\n", curtext->from.sym->name, p->line);
 }
 
 Prog*

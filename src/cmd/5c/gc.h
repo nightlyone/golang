@@ -28,7 +28,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-
+#include	<u.h>
 #include	"../cc/cc.h"
 #include	"../5l/5.out.h"
 
@@ -69,7 +69,7 @@ struct	Adr
 
 	Sym*	sym;
 	char	type;
-	char	reg;
+	uchar	reg;
 	char	name;
 	char	etype;
 };
@@ -83,7 +83,7 @@ struct	Prog
 	Prog*	link;
 	int32	lineno;
 	char	as;
-	char	reg;
+	uchar	reg;
 	uchar	scond;
 };
 #define	P	((Prog*)0)
@@ -181,7 +181,7 @@ EXTERN	int32	maxargsafe;
 EXTERN	int	mnstring;
 EXTERN	Multab	multab[20];
 EXTERN	int	retok;
-EXTERN	int	hintabsize;
+extern	int	hintabsize;
 EXTERN	Node*	nodrat;
 EXTERN	Node*	nodret;
 EXTERN	Node*	nodsafe;
@@ -297,6 +297,7 @@ void	patch(Prog*, int32);
 int	sconst(Node*);
 int	sval(int32);
 void	gpseudo(int, Sym*, Node*);
+void	gprefetch(Node*);
 
 /*
  * swt.c
@@ -304,7 +305,8 @@ void	gpseudo(int, Sym*, Node*);
 int	swcmp(const void*, const void*);
 void	doswit(Node*);
 void	swit1(C1*, int, int32, Node*);
-void	cas(void);
+void	swit2(C1*, int, int32, Node*);
+void	newcase(void);
 void	bitload(Node*, Node*, Node*, Node*, Node*);
 void	bitstore(Node*, Node*, Node*, Node*, Node*);
 int	mulcon(Node*, Node*);

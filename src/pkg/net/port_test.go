@@ -27,9 +27,7 @@ var porttests = []portTest{
 	{"tcp", "smtp", 25, true},
 	{"tcp", "time", 37, true},
 	{"tcp", "domain", 53, true},
-	{"tcp", "gopher", 70, true},
 	{"tcp", "finger", 79, true},
-	{"tcp", "http", 80, true},
 
 	{"udp", "echo", 7, true},
 	{"udp", "tftp", 69, true},
@@ -48,7 +46,7 @@ func TestLookupPort(t *testing.T) {
 	for i := 0; i < len(porttests); i++ {
 		tt := porttests[i]
 		if port, err := LookupPort(tt.netw, tt.name); port != tt.port || (err == nil) != tt.ok {
-			t.Errorf("LookupPort(%q, %q) = %v, %s; want %v",
+			t.Errorf("LookupPort(%q, %q) = %v, %v; want %v",
 				tt.netw, tt.name, port, err, tt.port)
 		}
 	}

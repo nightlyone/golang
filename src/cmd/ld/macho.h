@@ -50,7 +50,7 @@ struct MachoDebug {
 	uint32	filesize;
 };
 
-MachoHdr*	getMachoHdr();
+MachoHdr*	getMachoHdr(void);
 MachoSeg*	newMachoSeg(char*, int);
 MachoSect*	newMachoSect(MachoSeg*, char*);
 MachoLoad*	newMachoLoad(uint32, uint32);
@@ -63,7 +63,7 @@ void	machoinit(void);
  * for Header, PHeaders, and SHeaders.
  * May waste some.
  */
-#define	MACHORESERVE	3*1024
+#define	INITIAL_MACHO_HEADR	4*1024
 
 enum {
 	MACHO_CPU_AMD64 = (1<<24)|7,

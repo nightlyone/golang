@@ -13,79 +13,120 @@ package syscall
 
 import "unsafe"
 
-const OS = "linux"
-
 /*
  * Wrapped
  */
 
-//sys	open(path string, mode int, perm uint32) (fd int, errno int)
-func Open(path string, mode int, perm uint32) (fd int, errno int) {
+//sys	open(path string, mode int, perm uint32) (fd int, err error)
+
+func Open(path string, mode int, perm uint32) (fd int, err error) {
 	return open(path, mode|O_LARGEFILE, perm)
 }
 
-//sys	openat(dirfd int, path string, flags int, mode uint32) (fd int, errno int)
-func Openat(dirfd int, path string, flags int, mode uint32) (fd int, errno int) {
+//sys	openat(dirfd int, path string, flags int, mode uint32) (fd int, err error)
+
+func Openat(dirfd int, path string, flags int, mode uint32) (fd int, err error) {
 	return openat(dirfd, path, flags|O_LARGEFILE, mode)
 }
 
-//sys	pipe(p *[2]_C_int) (errno int)
-func Pipe(p []int) (errno int) {
+//sysnb	pipe(p *[2]_C_int) (err error)
+
+func Pipe(p []int) (err error) {
 	if len(p) != 2 {
 		return EINVAL
 	}
 	var pp [2]_C_int
-	errno = pipe(&pp)
+	err = pipe(&pp)
 	p[0] = int(pp[0])
 	p[1] = int(pp[1])
 	return
 }
 
-//sys	utimes(path string, times *[2]Timeval) (errno int)
-func Utimes(path string, tv []Timeval) (errno int) {
+//sysnb pipe2(p *[2]_C_int, flags int) (err error)
+
+func Pipe2(p []int, flags int) (err error) {
+	if len(p) != 2 {
+		return EINVAL
+	}
+	var pp [2]_C_int
+	err = pipe2(&pp, flags)
+	p[0] = int(pp[0])
+	p[1] = int(pp[1])
+	return
+}
+
+//sys	utimes(path string, times *[2]Timeval) (err error)
+
+func Utimes(path string, tv []Timeval) (err error) {
 	if len(tv) != 2 {
 		return EINVAL
 	}
 	return utimes(path, (*[2]Timeval)(unsafe.Pointer(&tv[0])))
 }
 
-//sys	futimesat(dirfd int, path *byte, times *[2]Timeval) (errno int)
-func Futimesat(dirfd int, path string, tv []Timeval) (errno int) {
+//sys	utimensat(dirfd int, path string, times *[2]Timespec) (err error)
+
+func UtimesNano(path string, ts []Timespec) (err error) {
+	if len(ts) != 2 {
+		return EINVAL
+	}
+	err = utimensat(_AT_FDCWD, path, (*[2]Timespec)(unsafe.Pointer(&ts[0])))
+	if err != ENOSYS {
+		return err
+	}
+	// If the utimensat syscall isn't available (utimensat was added to Linux
+	// in 2.6.22, Released, 8 July 2007) then fall back to utimes
+	var tv [2]Timeval
+	for i := 0; i < 2; i++ {
+		tv[i].Sec = ts[i].Sec
+		tv[i].Usec = ts[i].Nsec / 1000
+	}
+	return utimes(path, (*[2]Timeval)(unsafe.Pointer(&tv[0])))
+}
+
+//sys	futimesat(dirfd int, path *byte, times *[2]Timeval) (err error)
+
+func Futimesat(dirfd int, path string, tv []Timeval) (err error) {
 	if len(tv) != 2 {
 		return EINVAL
 	}
-	return futimesat(dirfd, StringBytePtr(path), (*[2]Timeval)(unsafe.Pointer(&tv[0])))
+	pathp, err := BytePtrFromString(path)
+	if err != nil {
+		return err
+	}
+	return futimesat(dirfd, pathp, (*[2]Timeval)(unsafe.Pointer(&tv[0])))
 }
 
-func Futimes(fd int, tv []Timeval) (errno int) {
+func Futimes(fd int, tv []Timeval) (err error) {
 	// Believe it or not, this is the best we can do on Linux
 	// (and is what glibc does).
-	return Utimes("/proc/self/fd/"+str(fd), tv)
+	return Utimes("/proc/self/fd/"+itoa(fd), tv)
 }
 
 const ImplementsGetwd = true
 
-//sys	Getcwd(buf []byte) (n int, errno int)
-func Getwd() (wd string, errno int) {
+//sys	Getcwd(buf []byte) (n int, err error)
+
+func Getwd() (wd string, err error) {
 	var buf [PathMax]byte
 	n, err := Getcwd(buf[0:])
-	if err != 0 {
+	if err != nil {
 		return "", err
 	}
 	// Getcwd returns the number of bytes written to buf, including the NUL.
 	if n < 1 || n > len(buf) || buf[n-1] != 0 {
 		return "", EINVAL
 	}
-	return string(buf[0 : n-1]), 0
+	return string(buf[0 : n-1]), nil
 }
 
-func Getgroups() (gids []int, errno int) {
+func Getgroups() (gids []int, err error) {
 	n, err := getgroups(0, nil)
-	if err != 0 {
-		return nil, errno
+	if err != nil {
+		return nil, err
 	}
 	if n == 0 {
-		return nil, 0
+		return nil, nil
 	}
 
 	// Sanity check group count.  Max is 1<<16 on Linux.
@@ -95,8 +136,8 @@ func Getgroups() (gids []int, errno int) {
 
 	a := make([]_Gid_t, n)
 	n, err = getgroups(n, &a[0])
-	if err != 0 {
-		return nil, errno
+	if err != nil {
+		return nil, err
 	}
 	gids = make([]int, n)
 	for i, v := range a[0:n] {
@@ -105,7 +146,7 @@ func Getgroups() (gids []int, errno int) {
 	return
 }
 
-func Setgroups(gids []int) (errno int) {
+func Setgroups(gids []int) (err error) {
 	if len(gids) == 0 {
 		return setgroups(0, nil)
 	}
@@ -153,18 +194,18 @@ func (w WaitStatus) ExitStatus() int {
 	return int(w>>shift) & 0xFF
 }
 
-func (w WaitStatus) Signal() int {
+func (w WaitStatus) Signal() Signal {
 	if !w.Signaled() {
 		return -1
 	}
-	return int(w & mask)
+	return Signal(w & mask)
 }
 
-func (w WaitStatus) StopSignal() int {
+func (w WaitStatus) StopSignal() Signal {
 	if !w.Stopped() {
 		return -1
 	}
-	return int(w>>shift) & 0xFF
+	return Signal(w>>shift) & 0xFF
 }
 
 func (w WaitStatus) TrapCause() int {
@@ -174,20 +215,19 @@ func (w WaitStatus) TrapCause() int {
 	return int(w>>shift) >> 8
 }
 
-//sys	wait4(pid int, wstatus *_C_int, options int, rusage *Rusage) (wpid int, errno int)
-func Wait4(pid int, wstatus *WaitStatus, options int, rusage *Rusage) (wpid int, errno int) {
+//sys	wait4(pid int, wstatus *_C_int, options int, rusage *Rusage) (wpid int, err error)
+
+func Wait4(pid int, wstatus *WaitStatus, options int, rusage *Rusage) (wpid int, err error) {
 	var status _C_int
-	wpid, errno = wait4(pid, &status, options, rusage)
+	wpid, err = wait4(pid, &status, options, rusage)
 	if wstatus != nil {
 		*wstatus = WaitStatus(status)
 	}
 	return
 }
 
-func Sleep(nsec int64) (errno int) {
-	tv := NsecToTimeval(nsec)
-	_, err := Select(0, nil, nil, nil, &tv)
-	return err
+func Mkfifo(path string, mode uint32) (err error) {
+	return Mknod(path, mode|S_IFIFO, 0)
 }
 
 // For testing: clients can set this flag to force
@@ -195,7 +235,7 @@ func Sleep(nsec int64) (errno int) {
 var SocketDisableIPv6 bool
 
 type Sockaddr interface {
-	sockaddr() (ptr uintptr, len _Socklen, errno int) // lowercase; only we can define Sockaddrs
+	sockaddr() (ptr uintptr, len _Socklen, err error) // lowercase; only we can define Sockaddrs
 }
 
 type SockaddrInet4 struct {
@@ -204,7 +244,7 @@ type SockaddrInet4 struct {
 	raw  RawSockaddrInet4
 }
 
-func (sa *SockaddrInet4) sockaddr() (uintptr, _Socklen, int) {
+func (sa *SockaddrInet4) sockaddr() (uintptr, _Socklen, error) {
 	if sa.Port < 0 || sa.Port > 0xFFFF {
 		return 0, 0, EINVAL
 	}
@@ -215,16 +255,17 @@ func (sa *SockaddrInet4) sockaddr() (uintptr, _Socklen, int) {
 	for i := 0; i < len(sa.Addr); i++ {
 		sa.raw.Addr[i] = sa.Addr[i]
 	}
-	return uintptr(unsafe.Pointer(&sa.raw)), SizeofSockaddrInet4, 0
+	return uintptr(unsafe.Pointer(&sa.raw)), SizeofSockaddrInet4, nil
 }
 
 type SockaddrInet6 struct {
-	Port int
-	Addr [16]byte
-	raw  RawSockaddrInet6
+	Port   int
+	ZoneId uint32
+	Addr   [16]byte
+	raw    RawSockaddrInet6
 }
 
-func (sa *SockaddrInet6) sockaddr() (uintptr, _Socklen, int) {
+func (sa *SockaddrInet6) sockaddr() (uintptr, _Socklen, error) {
 	if sa.Port < 0 || sa.Port > 0xFFFF {
 		return 0, 0, EINVAL
 	}
@@ -232,10 +273,11 @@ func (sa *SockaddrInet6) sockaddr() (uintptr, _Socklen, int) {
 	p := (*[2]byte)(unsafe.Pointer(&sa.raw.Port))
 	p[0] = byte(sa.Port >> 8)
 	p[1] = byte(sa.Port)
+	sa.raw.Scope_id = sa.ZoneId
 	for i := 0; i < len(sa.Addr); i++ {
 		sa.raw.Addr[i] = sa.Addr[i]
 	}
-	return uintptr(unsafe.Pointer(&sa.raw)), SizeofSockaddrInet6, 0
+	return uintptr(unsafe.Pointer(&sa.raw)), SizeofSockaddrInet6, nil
 }
 
 type SockaddrUnix struct {
@@ -243,10 +285,10 @@ type SockaddrUnix struct {
 	raw  RawSockaddrUnix
 }
 
-func (sa *SockaddrUnix) sockaddr() (uintptr, _Socklen, int) {
+func (sa *SockaddrUnix) sockaddr() (uintptr, _Socklen, error) {
 	name := sa.Name
 	n := len(name)
-	if n >= len(sa.raw.Path) || n == 0 {
+	if n >= len(sa.raw.Path) {
 		return 0, 0, EINVAL
 	}
 	sa.raw.Family = AF_UNIX
@@ -254,14 +296,17 @@ func (sa *SockaddrUnix) sockaddr() (uintptr, _Socklen, int) {
 		sa.raw.Path[i] = int8(name[i])
 	}
 	// length is family (uint16), name, NUL.
-	sl := 2 + _Socklen(n) + 1
+	sl := _Socklen(2)
+	if n > 0 {
+		sl += _Socklen(n) + 1
+	}
 	if sa.raw.Path[0] == '@' {
 		sa.raw.Path[0] = 0
 		// Don't count trailing NUL for abstract address.
 		sl--
 	}
 
-	return uintptr(unsafe.Pointer(&sa.raw)), sl, 0
+	return uintptr(unsafe.Pointer(&sa.raw)), sl, nil
 }
 
 type SockaddrLinklayer struct {
@@ -274,7 +319,7 @@ type SockaddrLinklayer struct {
 	raw      RawSockaddrLinklayer
 }
 
-func (sa *SockaddrLinklayer) sockaddr() (uintptr, _Socklen, int) {
+func (sa *SockaddrLinklayer) sockaddr() (uintptr, _Socklen, error) {
 	if sa.Ifindex < 0 || sa.Ifindex > 0x7fffffff {
 		return 0, 0, EINVAL
 	}
@@ -287,11 +332,36 @@ func (sa *SockaddrLinklayer) sockaddr() (uintptr, _Socklen, int) {
 	for i := 0; i < len(sa.Addr); i++ {
 		sa.raw.Addr[i] = sa.Addr[i]
 	}
-	return uintptr(unsafe.Pointer(&sa.raw)), SizeofSockaddrLinklayer, 0
+	return uintptr(unsafe.Pointer(&sa.raw)), SizeofSockaddrLinklayer, nil
 }
 
-func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, int) {
+type SockaddrNetlink struct {
+	Family uint16
+	Pad    uint16
+	Pid    uint32
+	Groups uint32
+	raw    RawSockaddrNetlink
+}
+
+func (sa *SockaddrNetlink) sockaddr() (uintptr, _Socklen, error) {
+	sa.raw.Family = AF_NETLINK
+	sa.raw.Pad = sa.Pad
+	sa.raw.Pid = sa.Pid
+	sa.raw.Groups = sa.Groups
+	return uintptr(unsafe.Pointer(&sa.raw)), SizeofSockaddrNetlink, nil
+}
+
+func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 	switch rsa.Addr.Family {
+	case AF_NETLINK:
+		pp := (*RawSockaddrNetlink)(unsafe.Pointer(rsa))
+		sa := new(SockaddrNetlink)
+		sa.Family = pp.Family
+		sa.Pad = pp.Pad
+		sa.Pid = pp.Pid
+		sa.Groups = pp.Groups
+		return sa, nil
+
 	case AF_PACKET:
 		pp := (*RawSockaddrLinklayer)(unsafe.Pointer(rsa))
 		sa := new(SockaddrLinklayer)
@@ -303,7 +373,7 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, int) {
 		for i := 0; i < len(sa.Addr); i++ {
 			sa.Addr[i] = pp.Addr[i]
 		}
-		return sa, 0
+		return sa, nil
 
 	case AF_UNIX:
 		pp := (*RawSockaddrUnix)(unsafe.Pointer(rsa))
@@ -328,7 +398,7 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, int) {
 		}
 		bytes := (*[10000]byte)(unsafe.Pointer(&pp.Path[0]))[0:n]
 		sa.Name = string(bytes)
-		return sa, 0
+		return sa, nil
 
 	case AF_INET:
 		pp := (*RawSockaddrInet4)(unsafe.Pointer(rsa))
@@ -338,123 +408,199 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, int) {
 		for i := 0; i < len(sa.Addr); i++ {
 			sa.Addr[i] = pp.Addr[i]
 		}
-		return sa, 0
+		return sa, nil
 
 	case AF_INET6:
 		pp := (*RawSockaddrInet6)(unsafe.Pointer(rsa))
 		sa := new(SockaddrInet6)
 		p := (*[2]byte)(unsafe.Pointer(&pp.Port))
 		sa.Port = int(p[0])<<8 + int(p[1])
+		sa.ZoneId = pp.Scope_id
 		for i := 0; i < len(sa.Addr); i++ {
 			sa.Addr[i] = pp.Addr[i]
 		}
-		return sa, 0
+		return sa, nil
 	}
 	return nil, EAFNOSUPPORT
 }
 
-func Accept(fd int) (nfd int, sa Sockaddr, errno int) {
+func Accept(fd int) (nfd int, sa Sockaddr, err error) {
 	var rsa RawSockaddrAny
 	var len _Socklen = SizeofSockaddrAny
-	nfd, errno = accept(fd, &rsa, &len)
-	if errno != 0 {
+	nfd, err = accept(fd, &rsa, &len)
+	if err != nil {
 		return
 	}
-	sa, errno = anyToSockaddr(&rsa)
-	if errno != 0 {
+	sa, err = anyToSockaddr(&rsa)
+	if err != nil {
 		Close(nfd)
 		nfd = 0
 	}
 	return
 }
 
-func Getsockname(fd int) (sa Sockaddr, errno int) {
+func Accept4(fd int, flags int) (nfd int, sa Sockaddr, err error) {
 	var rsa RawSockaddrAny
 	var len _Socklen = SizeofSockaddrAny
-	if errno = getsockname(fd, &rsa, &len); errno != 0 {
+	nfd, err = accept4(fd, &rsa, &len, flags)
+	if err != nil {
+		return
+	}
+	sa, err = anyToSockaddr(&rsa)
+	if err != nil {
+		Close(nfd)
+		nfd = 0
+	}
+	return
+}
+
+func Getsockname(fd int) (sa Sockaddr, err error) {
+	var rsa RawSockaddrAny
+	var len _Socklen = SizeofSockaddrAny
+	if err = getsockname(fd, &rsa, &len); err != nil {
 		return
 	}
 	return anyToSockaddr(&rsa)
 }
 
-func Getpeername(fd int) (sa Sockaddr, errno int) {
+func Getpeername(fd int) (sa Sockaddr, err error) {
 	var rsa RawSockaddrAny
 	var len _Socklen = SizeofSockaddrAny
-	if errno = getpeername(fd, &rsa, &len); errno != 0 {
+	if err = getpeername(fd, &rsa, &len); err != nil {
 		return
 	}
 	return anyToSockaddr(&rsa)
 }
 
-func Bind(fd int, sa Sockaddr) (errno int) {
+func Bind(fd int, sa Sockaddr) (err error) {
 	ptr, n, err := sa.sockaddr()
-	if err != 0 {
+	if err != nil {
 		return err
 	}
 	return bind(fd, ptr, n)
 }
 
-func Connect(fd int, sa Sockaddr) (errno int) {
+func Connect(fd int, sa Sockaddr) (err error) {
 	ptr, n, err := sa.sockaddr()
-	if err != 0 {
+	if err != nil {
 		return err
 	}
 	return connect(fd, ptr, n)
 }
 
-func Socket(domain, typ, proto int) (fd, errno int) {
+func Socket(domain, typ, proto int) (fd int, err error) {
 	if domain == AF_INET6 && SocketDisableIPv6 {
 		return -1, EAFNOSUPPORT
 	}
-	fd, errno = socket(domain, typ, proto)
+	fd, err = socket(domain, typ, proto)
 	return
 }
 
-func Socketpair(domain, typ, proto int) (fd [2]int, errno int) {
-	errno = socketpair(domain, typ, proto, &fd)
+func Socketpair(domain, typ, proto int) (fd [2]int, err error) {
+	var fdx [2]int32
+	err = socketpair(domain, typ, proto, &fdx)
+	if err == nil {
+		fd[0] = int(fdx[0])
+		fd[1] = int(fdx[1])
+	}
 	return
 }
 
-func SetsockoptInt(fd, level, opt int, value int) (errno int) {
+func GetsockoptInt(fd, level, opt int) (value int, err error) {
+	var n int32
+	vallen := _Socklen(4)
+	err = getsockopt(fd, level, opt, uintptr(unsafe.Pointer(&n)), &vallen)
+	return int(n), err
+}
+
+func GetsockoptInet4Addr(fd, level, opt int) (value [4]byte, err error) {
+	vallen := _Socklen(4)
+	err = getsockopt(fd, level, opt, uintptr(unsafe.Pointer(&value[0])), &vallen)
+	return value, err
+}
+
+func GetsockoptIPMreq(fd, level, opt int) (*IPMreq, error) {
+	var value IPMreq
+	vallen := _Socklen(SizeofIPMreq)
+	err := getsockopt(fd, level, opt, uintptr(unsafe.Pointer(&value)), &vallen)
+	return &value, err
+}
+
+func GetsockoptIPMreqn(fd, level, opt int) (*IPMreqn, error) {
+	var value IPMreqn
+	vallen := _Socklen(SizeofIPMreqn)
+	err := getsockopt(fd, level, opt, uintptr(unsafe.Pointer(&value)), &vallen)
+	return &value, err
+}
+
+func GetsockoptIPv6Mreq(fd, level, opt int) (*IPv6Mreq, error) {
+	var value IPv6Mreq
+	vallen := _Socklen(SizeofIPv6Mreq)
+	err := getsockopt(fd, level, opt, uintptr(unsafe.Pointer(&value)), &vallen)
+	return &value, err
+}
+
+func GetsockoptUcred(fd, level, opt int) (*Ucred, error) {
+	var value Ucred
+	vallen := _Socklen(SizeofUcred)
+	err := getsockopt(fd, level, opt, uintptr(unsafe.Pointer(&value)), &vallen)
+	return &value, err
+}
+
+func SetsockoptInt(fd, level, opt int, value int) (err error) {
 	var n = int32(value)
 	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(&n)), 4)
 }
 
-func SetsockoptTimeval(fd, level, opt int, tv *Timeval) (errno int) {
+func SetsockoptInet4Addr(fd, level, opt int, value [4]byte) (err error) {
+	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(&value[0])), 4)
+}
+
+func SetsockoptTimeval(fd, level, opt int, tv *Timeval) (err error) {
 	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(tv)), unsafe.Sizeof(*tv))
 }
 
-func SetsockoptLinger(fd, level, opt int, l *Linger) (errno int) {
+func SetsockoptLinger(fd, level, opt int, l *Linger) (err error) {
 	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(l)), unsafe.Sizeof(*l))
 }
 
-func SetsockoptIpMreq(fd, level, opt int, mreq *IpMreq) (errno int) {
+func SetsockoptIPMreq(fd, level, opt int, mreq *IPMreq) (err error) {
 	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(mreq)), unsafe.Sizeof(*mreq))
 }
 
-func SetsockoptString(fd, level, opt int, s string) (errno int) {
-	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(&[]byte(s)[0])), len(s))
+func SetsockoptIPMreqn(fd, level, opt int, mreq *IPMreqn) (err error) {
+	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(mreq)), unsafe.Sizeof(*mreq))
 }
 
-func Recvfrom(fd int, p []byte, flags int) (n int, from Sockaddr, errno int) {
+func SetsockoptIPv6Mreq(fd, level, opt int, mreq *IPv6Mreq) (err error) {
+	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(mreq)), unsafe.Sizeof(*mreq))
+}
+
+func SetsockoptString(fd, level, opt int, s string) (err error) {
+	return setsockopt(fd, level, opt, uintptr(unsafe.Pointer(&[]byte(s)[0])), uintptr(len(s)))
+}
+
+func Recvfrom(fd int, p []byte, flags int) (n int, from Sockaddr, err error) {
 	var rsa RawSockaddrAny
 	var len _Socklen = SizeofSockaddrAny
-	if n, errno = recvfrom(fd, p, flags, &rsa, &len); errno != 0 {
+	if n, err = recvfrom(fd, p, flags, &rsa, &len); err != nil {
 		return
 	}
-	from, errno = anyToSockaddr(&rsa)
+	if rsa.Addr.Family != AF_UNSPEC {
+		from, err = anyToSockaddr(&rsa)
+	}
 	return
 }
 
-func Sendto(fd int, p []byte, flags int, to Sockaddr) (errno int) {
+func Sendto(fd int, p []byte, flags int, to Sockaddr) (err error) {
 	ptr, n, err := to.sockaddr()
-	if err != 0 {
+	if err != nil {
 		return err
 	}
 	return sendto(fd, p, flags, ptr, n)
 }
 
-func Recvmsg(fd int, p, oob []byte, flags int) (n, oobn int, recvflags int, from Sockaddr, errno int) {
+func Recvmsg(fd int, p, oob []byte, flags int) (n, oobn int, recvflags int, from Sockaddr, err error) {
 	var msg Msghdr
 	var rsa RawSockaddrAny
 	msg.Name = (*byte)(unsafe.Pointer(&rsa))
@@ -476,31 +622,31 @@ func Recvmsg(fd int, p, oob []byte, flags int) (n, oobn int, recvflags int, from
 	}
 	msg.Iov = &iov
 	msg.Iovlen = 1
-	if n, errno = recvmsg(fd, &msg, flags); errno != 0 {
+	if n, err = recvmsg(fd, &msg, flags); err != nil {
 		return
 	}
 	oobn = int(msg.Controllen)
 	recvflags = int(msg.Flags)
 	// source address is only specified if the socket is unconnected
-	if rsa.Addr.Family != 0 {
-		from, errno = anyToSockaddr(&rsa)
+	if rsa.Addr.Family != AF_UNSPEC {
+		from, err = anyToSockaddr(&rsa)
 	}
 	return
 }
 
-func Sendmsg(fd int, p, oob []byte, to Sockaddr, flags int) (errno int) {
+func Sendmsg(fd int, p, oob []byte, to Sockaddr, flags int) (err error) {
 	var ptr uintptr
-	var nsock _Socklen
+	var salen _Socklen
 	if to != nil {
-		var err int
-		ptr, nsock, err = to.sockaddr()
-		if err != 0 {
+		var err error
+		ptr, salen, err = to.sockaddr()
+		if err != nil {
 			return err
 		}
 	}
 	var msg Msghdr
 	msg.Name = (*byte)(unsafe.Pointer(ptr))
-	msg.Namelen = uint32(nsock)
+	msg.Namelen = uint32(salen)
 	var iov Iovec
 	if len(p) > 0 {
 		iov.Base = (*byte)(unsafe.Pointer(&p[0]))
@@ -518,20 +664,20 @@ func Sendmsg(fd int, p, oob []byte, to Sockaddr, flags int) (errno int) {
 	}
 	msg.Iov = &iov
 	msg.Iovlen = 1
-	if errno = sendmsg(fd, &msg, flags); errno != 0 {
+	if err = sendmsg(fd, &msg, flags); err != nil {
 		return
 	}
 	return
 }
 
 // BindToDevice binds the socket associated with fd to device.
-func BindToDevice(fd int, device string) (errno int) {
+func BindToDevice(fd int, device string) (err error) {
 	return SetsockoptString(fd, SOL_SOCKET, SO_BINDTODEVICE, device)
 }
 
-//sys	ptrace(request int, pid int, addr uintptr, data uintptr) (errno int)
+//sys	ptrace(request int, pid int, addr uintptr, data uintptr) (err error)
 
-func ptracePeek(req int, pid int, addr uintptr, out []byte) (count int, errno int) {
+func ptracePeek(req int, pid int, addr uintptr, out []byte) (count int, err error) {
 	// The peek requests are machine-size oriented, so we wrap it
 	// to retrieve arbitrary-length data.
 
@@ -547,9 +693,9 @@ func ptracePeek(req int, pid int, addr uintptr, out []byte) (count int, errno in
 	// boundary.
 	n := 0
 	if addr%sizeofPtr != 0 {
-		errno = ptrace(req, pid, addr-addr%sizeofPtr, uintptr(unsafe.Pointer(&buf[0])))
-		if errno != 0 {
-			return 0, errno
+		err = ptrace(req, pid, addr-addr%sizeofPtr, uintptr(unsafe.Pointer(&buf[0])))
+		if err != nil {
+			return 0, err
 		}
 		n += copy(out, buf[addr%sizeofPtr:])
 		out = out[n:]
@@ -557,29 +703,29 @@ func ptracePeek(req int, pid int, addr uintptr, out []byte) (count int, errno in
 
 	// Remainder.
 	for len(out) > 0 {
-		// We use an internal buffer to gaurantee alignment.
+		// We use an internal buffer to guarantee alignment.
 		// It's not documented if this is necessary, but we're paranoid.
-		errno = ptrace(req, pid, addr+uintptr(n), uintptr(unsafe.Pointer(&buf[0])))
-		if errno != 0 {
-			return n, errno
+		err = ptrace(req, pid, addr+uintptr(n), uintptr(unsafe.Pointer(&buf[0])))
+		if err != nil {
+			return n, err
 		}
 		copied := copy(out, buf[0:])
 		n += copied
 		out = out[copied:]
 	}
 
-	return n, 0
+	return n, nil
 }
 
-func PtracePeekText(pid int, addr uintptr, out []byte) (count int, errno int) {
+func PtracePeekText(pid int, addr uintptr, out []byte) (count int, err error) {
 	return ptracePeek(PTRACE_PEEKTEXT, pid, addr, out)
 }
 
-func PtracePeekData(pid int, addr uintptr, out []byte) (count int, errno int) {
+func PtracePeekData(pid int, addr uintptr, out []byte) (count int, err error) {
 	return ptracePeek(PTRACE_PEEKDATA, pid, addr, out)
 }
 
-func ptracePoke(pokeReq int, peekReq int, pid int, addr uintptr, data []byte) (count int, errno int) {
+func ptracePoke(pokeReq int, peekReq int, pid int, addr uintptr, data []byte) (count int, err error) {
 	// As for ptracePeek, we need to align our accesses to deal
 	// with the possibility of straddling an invalid page.
 
@@ -587,15 +733,15 @@ func ptracePoke(pokeReq int, peekReq int, pid int, addr uintptr, data []byte) (c
 	n := 0
 	if addr%sizeofPtr != 0 {
 		var buf [sizeofPtr]byte
-		errno = ptrace(peekReq, pid, addr-addr%sizeofPtr, uintptr(unsafe.Pointer(&buf[0])))
-		if errno != 0 {
-			return 0, errno
+		err = ptrace(peekReq, pid, addr-addr%sizeofPtr, uintptr(unsafe.Pointer(&buf[0])))
+		if err != nil {
+			return 0, err
 		}
 		n += copy(buf[addr%sizeofPtr:], data)
 		word := *((*uintptr)(unsafe.Pointer(&buf[0])))
-		errno = ptrace(pokeReq, pid, addr-addr%sizeofPtr, word)
-		if errno != 0 {
-			return 0, errno
+		err = ptrace(pokeReq, pid, addr-addr%sizeofPtr, word)
+		if err != nil {
+			return 0, err
 		}
 		data = data[n:]
 	}
@@ -603,9 +749,9 @@ func ptracePoke(pokeReq int, peekReq int, pid int, addr uintptr, data []byte) (c
 	// Interior.
 	for len(data) > sizeofPtr {
 		word := *((*uintptr)(unsafe.Pointer(&data[0])))
-		errno = ptrace(pokeReq, pid, addr+uintptr(n), word)
-		if errno != 0 {
-			return n, errno
+		err = ptrace(pokeReq, pid, addr+uintptr(n), word)
+		if err != nil {
+			return n, err
 		}
 		n += sizeofPtr
 		data = data[sizeofPtr:]
@@ -614,141 +760,229 @@ func ptracePoke(pokeReq int, peekReq int, pid int, addr uintptr, data []byte) (c
 	// Trailing edge.
 	if len(data) > 0 {
 		var buf [sizeofPtr]byte
-		errno = ptrace(peekReq, pid, addr+uintptr(n), uintptr(unsafe.Pointer(&buf[0])))
-		if errno != 0 {
-			return n, errno
+		err = ptrace(peekReq, pid, addr+uintptr(n), uintptr(unsafe.Pointer(&buf[0])))
+		if err != nil {
+			return n, err
 		}
 		copy(buf[0:], data)
 		word := *((*uintptr)(unsafe.Pointer(&buf[0])))
-		errno = ptrace(pokeReq, pid, addr+uintptr(n), word)
-		if errno != 0 {
-			return n, errno
+		err = ptrace(pokeReq, pid, addr+uintptr(n), word)
+		if err != nil {
+			return n, err
 		}
 		n += len(data)
 	}
 
-	return n, 0
+	return n, nil
 }
 
-func PtracePokeText(pid int, addr uintptr, data []byte) (count int, errno int) {
+func PtracePokeText(pid int, addr uintptr, data []byte) (count int, err error) {
 	return ptracePoke(PTRACE_POKETEXT, PTRACE_PEEKTEXT, pid, addr, data)
 }
 
-func PtracePokeData(pid int, addr uintptr, data []byte) (count int, errno int) {
+func PtracePokeData(pid int, addr uintptr, data []byte) (count int, err error) {
 	return ptracePoke(PTRACE_POKEDATA, PTRACE_PEEKDATA, pid, addr, data)
 }
 
-func PtraceGetRegs(pid int, regsout *PtraceRegs) (errno int) {
+func PtraceGetRegs(pid int, regsout *PtraceRegs) (err error) {
 	return ptrace(PTRACE_GETREGS, pid, 0, uintptr(unsafe.Pointer(regsout)))
 }
 
-func PtraceSetRegs(pid int, regs *PtraceRegs) (errno int) {
+func PtraceSetRegs(pid int, regs *PtraceRegs) (err error) {
 	return ptrace(PTRACE_SETREGS, pid, 0, uintptr(unsafe.Pointer(regs)))
 }
 
-func PtraceSetOptions(pid int, options int) (errno int) {
+func PtraceSetOptions(pid int, options int) (err error) {
 	return ptrace(PTRACE_SETOPTIONS, pid, 0, uintptr(options))
 }
 
-func PtraceGetEventMsg(pid int) (msg uint, errno int) {
+func PtraceGetEventMsg(pid int) (msg uint, err error) {
 	var data _C_long
-	errno = ptrace(PTRACE_GETEVENTMSG, pid, 0, uintptr(unsafe.Pointer(&data)))
+	err = ptrace(PTRACE_GETEVENTMSG, pid, 0, uintptr(unsafe.Pointer(&data)))
 	msg = uint(data)
 	return
 }
 
-func PtraceCont(pid int, signal int) (errno int) {
+func PtraceCont(pid int, signal int) (err error) {
 	return ptrace(PTRACE_CONT, pid, 0, uintptr(signal))
 }
 
-func PtraceSingleStep(pid int) (errno int) { return ptrace(PTRACE_SINGLESTEP, pid, 0, 0) }
+func PtraceSyscall(pid int, signal int) (err error) {
+	return ptrace(PTRACE_SYSCALL, pid, 0, uintptr(signal))
+}
 
-func PtraceAttach(pid int) (errno int) { return ptrace(PTRACE_ATTACH, pid, 0, 0) }
+func PtraceSingleStep(pid int) (err error) { return ptrace(PTRACE_SINGLESTEP, pid, 0, 0) }
 
-func PtraceDetach(pid int) (errno int) { return ptrace(PTRACE_DETACH, pid, 0, 0) }
+func PtraceAttach(pid int) (err error) { return ptrace(PTRACE_ATTACH, pid, 0, 0) }
+
+func PtraceDetach(pid int) (err error) { return ptrace(PTRACE_DETACH, pid, 0, 0) }
+
+//sys	reboot(magic1 uint, magic2 uint, cmd int, arg string) (err error)
+
+func Reboot(cmd int) (err error) {
+	return reboot(LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2, cmd, "")
+}
+
+func clen(n []byte) int {
+	for i := 0; i < len(n); i++ {
+		if n[i] == 0 {
+			return i
+		}
+	}
+	return len(n)
+}
+
+func ReadDirent(fd int, buf []byte) (n int, err error) {
+	return Getdents(fd, buf)
+}
+
+func ParseDirent(buf []byte, max int, names []string) (consumed int, count int, newnames []string) {
+	origlen := len(buf)
+	count = 0
+	for max != 0 && len(buf) > 0 {
+		dirent := (*Dirent)(unsafe.Pointer(&buf[0]))
+		buf = buf[dirent.Reclen:]
+		if dirent.Ino == 0 { // File absent in directory.
+			continue
+		}
+		bytes := (*[10000]byte)(unsafe.Pointer(&dirent.Name[0]))
+		var name = string(bytes[0:clen(bytes[:])])
+		if name == "." || name == ".." { // Useless names
+			continue
+		}
+		max--
+		count++
+		names = append(names, name)
+	}
+	return origlen - len(buf), count, names
+}
+
+//sys	mount(source string, target string, fstype string, flags uintptr, data *byte) (err error)
+
+func Mount(source string, target string, fstype string, flags uintptr, data string) (err error) {
+	// Certain file systems get rather angry and EINVAL if you give
+	// them an empty string of data, rather than NULL.
+	if data == "" {
+		return mount(source, target, fstype, flags, nil)
+	}
+	datap, err := BytePtrFromString(data)
+	if err != nil {
+		return err
+	}
+	return mount(source, target, fstype, flags, datap)
+}
 
 // Sendto
 // Recvfrom
 // Socketpair
-// Getsockopt
 
 /*
  * Direct access
  */
-//sys	Access(path string, mode uint32) (errno int)
-//sys	Acct(path string) (errno int)
-//sys	Adjtimex(buf *Timex) (state int, errno int)
-//sys	Chdir(path string) (errno int)
-//sys	Chmod(path string, mode uint32) (errno int)
-//sys	Chroot(path string) (errno int)
-//sys	Close(fd int) (errno int)
-//sys	Creat(path string, mode uint32) (fd int, errno int)
-//sys	Dup(oldfd int) (fd int, errno int)
-//sys	Dup2(oldfd int, newfd int) (fd int, errno int)
-//sys	EpollCreate(size int) (fd int, errno int)
-//sys	EpollCtl(epfd int, op int, fd int, event *EpollEvent) (errno int)
-//sys	EpollWait(epfd int, events []EpollEvent, msec int) (n int, errno int)
+//sys	Access(path string, mode uint32) (err error)
+//sys	Acct(path string) (err error)
+//sys	Adjtimex(buf *Timex) (state int, err error)
+//sys	Chdir(path string) (err error)
+//sys	Chmod(path string, mode uint32) (err error)
+//sys	Chroot(path string) (err error)
+//sys	Close(fd int) (err error)
+//sys	Creat(path string, mode uint32) (fd int, err error)
+//sysnb	Dup(oldfd int) (fd int, err error)
+//sysnb	Dup2(oldfd int, newfd int) (err error)
+//sysnb	EpollCreate(size int) (fd int, err error)
+//sysnb	EpollCreate1(flag int) (fd int, err error)
+//sysnb	EpollCtl(epfd int, op int, fd int, event *EpollEvent) (err error)
+//sys	EpollWait(epfd int, events []EpollEvent, msec int) (n int, err error)
 //sys	Exit(code int) = SYS_EXIT_GROUP
-//sys	Faccessat(dirfd int, path string, mode uint32, flags int) (errno int)
-//sys	Fallocate(fd int, mode uint32, off int64, len int64) (errno int)
-//sys	Fchdir(fd int) (errno int)
-//sys	Fchmod(fd int, mode uint32) (errno int)
-//sys	Fchmodat(dirfd int, path string, mode uint32, flags int) (errno int)
-//sys	Fchownat(dirfd int, path string, uid int, gid int, flags int) (errno int)
-//sys	fcntl(fd int, cmd int, arg int) (val int, errno int)
-//sys	Fdatasync(fd int) (errno int)
-//sys	Fsync(fd int) (errno int)
-//sys	Getdents(fd int, buf []byte) (n int, errno int) = SYS_GETDENTS64
-//sys	Getpgid(pid int) (pgid int, errno int)
-//sys	Getpgrp() (pid int)
-//sys	Getpid() (pid int)
-//sys	Getppid() (ppid int)
-//sys	Getrlimit(resource int, rlim *Rlimit) (errno int)
-//sys	Getrusage(who int, rusage *Rusage) (errno int)
-//sys	Gettid() (tid int)
-//sys   InotifyAddWatch(fd int, pathname string, mask uint32) (watchdesc int, errno int)
-//sys   InotifyInit() (fd int, errno int)
-//sys   InotifyInit1(flags int) (fd int, errno int)
-//sys   InotifyRmWatch(fd int, watchdesc uint32) (success int, errno int)
-//sys	Kill(pid int, sig int) (errno int)
-//sys	Klogctl(typ int, buf []byte) (n int, errno int) = SYS_SYSLOG
-//sys	Link(oldpath string, newpath string) (errno int)
-//sys	Mkdir(path string, mode uint32) (errno int)
-//sys	Mkdirat(dirfd int, path string, mode uint32) (errno int)
-//sys	Mknod(path string, mode uint32, dev int) (errno int)
-//sys	Mknodat(dirfd int, path string, mode uint32, dev int) (errno int)
-//sys	Nanosleep(time *Timespec, leftover *Timespec) (errno int)
-//sys	Pause() (errno int)
-//sys	PivotRoot(newroot string, putold string) (errno int) = SYS_PIVOT_ROOT
-//sys	Read(fd int, p []byte) (n int, errno int)
-//sys	Readlink(path string, buf []byte) (n int, errno int)
-//sys	Rename(oldpath string, newpath string) (errno int)
-//sys	Renameat(olddirfd int, oldpath string, newdirfd int, newpath string) (errno int)
-//sys	Rmdir(path string) (errno int)
-//sys	Setdomainname(p []byte) (errno int)
-//sys	Sethostname(p []byte) (errno int)
-//sys	Setpgid(pid int, pgid int) (errno int)
-//sys	Setrlimit(resource int, rlim *Rlimit) (errno int)
-//sys	Setsid() (pid int, errno int)
-//sys	Settimeofday(tv *Timeval) (errno int)
-//sys	Setuid(uid int) (errno int)
-//sys	Symlink(oldpath string, newpath string) (errno int)
+//sys	Faccessat(dirfd int, path string, mode uint32, flags int) (err error)
+//sys	Fallocate(fd int, mode uint32, off int64, len int64) (err error)
+//sys	Fchdir(fd int) (err error)
+//sys	Fchmod(fd int, mode uint32) (err error)
+//sys	Fchmodat(dirfd int, path string, mode uint32, flags int) (err error)
+//sys	Fchownat(dirfd int, path string, uid int, gid int, flags int) (err error)
+//sys	fcntl(fd int, cmd int, arg int) (val int, err error)
+//sys	Fdatasync(fd int) (err error)
+//sys	Flock(fd int, how int) (err error)
+//sys	Fsync(fd int) (err error)
+//sys	Getdents(fd int, buf []byte) (n int, err error) = SYS_GETDENTS64
+//sysnb	Getpgid(pid int) (pgid int, err error)
+//sysnb	Getpgrp() (pid int)
+//sysnb	Getpid() (pid int)
+//sysnb	Getppid() (ppid int)
+//sysnb	Getrusage(who int, rusage *Rusage) (err error)
+//sysnb	Gettid() (tid int)
+//sys	Getxattr(path string, attr string, dest []byte) (sz int, err error)
+//sys	InotifyAddWatch(fd int, pathname string, mask uint32) (watchdesc int, err error)
+//sysnb	InotifyInit() (fd int, err error)
+//sysnb	InotifyInit1(flags int) (fd int, err error)
+//sysnb	InotifyRmWatch(fd int, watchdesc uint32) (success int, err error)
+//sysnb	Kill(pid int, sig Signal) (err error)
+//sys	Klogctl(typ int, buf []byte) (n int, err error) = SYS_SYSLOG
+//sys	Link(oldpath string, newpath string) (err error)
+//sys	Listxattr(path string, dest []byte) (sz int, err error)
+//sys	Mkdir(path string, mode uint32) (err error)
+//sys	Mkdirat(dirfd int, path string, mode uint32) (err error)
+//sys	Mknod(path string, mode uint32, dev int) (err error)
+//sys	Mknodat(dirfd int, path string, mode uint32, dev int) (err error)
+//sys	Nanosleep(time *Timespec, leftover *Timespec) (err error)
+//sys	Pause() (err error)
+//sys	PivotRoot(newroot string, putold string) (err error) = SYS_PIVOT_ROOT
+//sysnb prlimit(pid int, resource int, old *Rlimit, newlimit *Rlimit) (err error) = SYS_PRLIMIT64
+//sys	read(fd int, p []byte) (n int, err error)
+//sys	Readlink(path string, buf []byte) (n int, err error)
+//sys	Removexattr(path string, attr string) (err error)
+//sys	Rename(oldpath string, newpath string) (err error)
+//sys	Renameat(olddirfd int, oldpath string, newdirfd int, newpath string) (err error)
+//sys	Rmdir(path string) (err error)
+//sys	Setdomainname(p []byte) (err error)
+//sys	Sethostname(p []byte) (err error)
+//sysnb	Setpgid(pid int, pgid int) (err error)
+//sysnb	Setsid() (pid int, err error)
+//sysnb	Settimeofday(tv *Timeval) (err error)
+//sysnb	Setuid(uid int) (err error)
+//sys	Setxattr(path string, attr string, data []byte, flags int) (err error)
+//sys	Symlink(oldpath string, newpath string) (err error)
 //sys	Sync()
-//sys	Sysinfo(info *Sysinfo_t) (errno int)
-//sys	Tee(rfd int, wfd int, len int, flags int) (n int64, errno int)
-//sys	Tgkill(tgid int, tid int, sig int) (errno int)
-//sys	Times(tms *Tms) (ticks uintptr, errno int)
-//sys	Umask(mask int) (oldmask int)
-//sys	Uname(buf *Utsname) (errno int)
-//sys	Unlink(path string) (errno int)
-//sys	Unlinkat(dirfd int, path string) (errno int)
-//sys	Unshare(flags int) (errno int)
-//sys	Ustat(dev int, ubuf *Ustat_t) (errno int)
-//sys	Utime(path string, buf *Utimbuf) (errno int)
-//sys	Write(fd int, p []byte) (n int, errno int)
-//sys	exitThread(code int) (errno int) = SYS_EXIT
-//sys	read(fd int, p *byte, np int) (n int, errno int)
-//sys	write(fd int, p *byte, np int) (n int, errno int)
+//sysnb	Sysinfo(info *Sysinfo_t) (err error)
+//sys	Tee(rfd int, wfd int, len int, flags int) (n int64, err error)
+//sysnb	Tgkill(tgid int, tid int, sig Signal) (err error)
+//sysnb	Times(tms *Tms) (ticks uintptr, err error)
+//sysnb	Umask(mask int) (oldmask int)
+//sysnb	Uname(buf *Utsname) (err error)
+//sys	Unlink(path string) (err error)
+//sys	Unlinkat(dirfd int, path string) (err error)
+//sys	Unmount(target string, flags int) (err error) = SYS_UMOUNT2
+//sys	Unshare(flags int) (err error)
+//sys	Ustat(dev int, ubuf *Ustat_t) (err error)
+//sys	Utime(path string, buf *Utimbuf) (err error)
+//sys	write(fd int, p []byte) (n int, err error)
+//sys	exitThread(code int) (err error) = SYS_EXIT
+//sys	readlen(fd int, p *byte, np int) (n int, err error) = SYS_READ
+//sys	writelen(fd int, p *byte, np int) (n int, err error) = SYS_WRITE
+
+// mmap varies by architecture; see syscall_linux_*.go.
+//sys	munmap(addr uintptr, length uintptr) (err error)
+
+var mapper = &mmapper{
+	active: make(map[*byte][]byte),
+	mmap:   mmap,
+	munmap: munmap,
+}
+
+func Mmap(fd int, offset int64, length int, prot int, flags int) (data []byte, err error) {
+	return mapper.Mmap(fd, offset, length, prot, flags)
+}
+
+func Munmap(b []byte) (err error) {
+	return mapper.Munmap(b)
+}
+
+//sys	Madvise(b []byte, advice int) (err error)
+//sys	Mprotect(b []byte, prot int) (err error)
+//sys	Mlock(b []byte) (err error)
+//sys	Munlock(b []byte) (err error)
+//sys	Mlockall(flags int) (err error)
+//sys	Munlockall() (err error)
 
 /*
  * Unimplemented
@@ -775,7 +1009,6 @@ func PtraceDetach(pid int) (errno int) { return ptrace(PTRACE_DETACH, pid, 0, 0)
 // Fadvise64
 // Fgetxattr
 // Flistxattr
-// Flock
 // Fork
 // Fremovexattr
 // Fsetxattr
@@ -787,7 +1020,6 @@ func PtraceDetach(pid int) (errno int) { return ptrace(PTRACE_DETACH, pid, 0, 0)
 // Getitimer
 // Getpmsg
 // Getpriority
-// Getxattr
 // IoCancel
 // IoDestroy
 // IoGetevents
@@ -799,17 +1031,13 @@ func PtraceDetach(pid int) (errno int) { return ptrace(PTRACE_DETACH, pid, 0, 0)
 // KexecLoad
 // Keyctl
 // Lgetxattr
-// Listxattr
 // Llistxattr
 // LookupDcookie
 // Lremovexattr
 // Lsetxattr
-// Madvise
 // Mbind
 // MigratePages
 // Mincore
-// Mlock
-// Mmap
 // ModifyLdt
 // Mount
 // MovePages
@@ -826,9 +1054,6 @@ func PtraceDetach(pid int) (errno int) { return ptrace(PTRACE_DETACH, pid, 0, 0)
 // Msgrcv
 // Msgsnd
 // Msync
-// Munlock
-// Munlockall
-// Munmap
 // Newfstatat
 // Nfsservctl
 // Personality
@@ -842,9 +1067,7 @@ func PtraceDetach(pid int) (errno int) { return ptrace(PTRACE_DETACH, pid, 0, 0)
 // Quotactl
 // Readahead
 // Readv
-// Reboot
 // RemapFilePages
-// Removexattr
 // RequestKey
 // RestartSyscall
 // RtSigaction
@@ -868,13 +1091,11 @@ func PtraceDetach(pid int) (errno int) { return ptrace(PTRACE_DETACH, pid, 0, 0)
 // Semget
 // Semop
 // Semtimedop
-// Sendfile
 // SetMempolicy
 // SetRobustList
 // SetThreadArea
 // SetTidAddress
 // Setpriority
-// Setxattr
 // Shmat
 // Shmctl
 // Shmdt
@@ -900,5 +1121,4 @@ func PtraceDetach(pid int) (errno int) { return ptrace(PTRACE_DETACH, pid, 0, 0)
 // Vmsplice
 // Vserver
 // Waitid
-// Writev
 // _Sysctl

@@ -29,9 +29,10 @@
 // THE SOFTWARE.
 
 #define	EXTERN
+#include <u.h>
+#include <libc.h>
 #include "a.h"
 #include "y.tab.h"
-#include <ctype.h>
 
 enum
 {
@@ -43,7 +44,11 @@ enum
 int
 systemtype(int sys)
 {
+#ifdef _WIN32
+	return sys&Windows;
+#else
 	return sys&Plan9;
+#endif
 }
 
 int
@@ -56,7 +61,7 @@ void
 main(int argc, char *argv[])
 {
 	char *p;
-	int nout, nproc, i, c;
+	int c;
 
 	thechar = '8';
 	thestring = "386";
@@ -96,45 +101,9 @@ main(int argc, char *argv[])
 		print("usage: %ca [-options] file.s\n", thechar);
 		errorexit();
 	}
-	if(argc > 1 && systemtype(Windows)){
-		print("can't assemble multiple files on windows\n");
+	if(argc > 1){
+		print("can't assemble multiple files\n");
 		errorexit();
-	}
-	if(argc > 1 && !systemtype(Windows)) {
-		nproc = 1;
-		if(p = getenv("NPROC"))
-			nproc = atol(p);	/* */
-		c = 0;
-		nout = 0;
-		for(;;) {
-			Waitmsg *w;
-
-			while(nout < nproc && argc > 0) {
-				i = fork();
-				if(i < 0) {
-					fprint(2, "fork: %r\n");
-					errorexit();
-				}
-				if(i == 0) {
-					print("%s:\n", *argv);
-					if(assemble(*argv))
-						errorexit();
-					exits(0);
-				}
-				nout++;
-				argc--;
-				argv++;
-			}
-			w = wait();
-			if(w == nil) {
-				if(c)
-					errorexit();
-				exits(0);
-			}
-			if(w->msg[0])
-				c++;
-			nout--;
-		}
 	}
 	if(assemble(argv[0]))
 		errorexit();
@@ -144,7 +113,7 @@ main(int argc, char *argv[])
 int
 assemble(char *file)
 {
-	char *ofile, incfile[20], *p;
+	char *ofile, *p;
 	int i, of;
 
 	ofile = alloc(strlen(file)+3); // +3 for .x\0 (x=thechar)
@@ -168,15 +137,6 @@ assemble(char *file)
 			p[2] = 0;
 		} else
 			outfile = "/dev/null";
-	}
-	p = getenv("INCLUDE");
-	if(p) {
-		setinclude(p);
-	} else {
-		if(systemtype(Plan9)) {
-			sprint(incfile,"/%s/include", thestring);
-			setinclude(strdup(incfile));
-		}
 	}
 
 	of = create(outfile, OWRITE, 0664);
@@ -250,6 +210,15 @@ struct
 	"F6",		LFREG,	D_F0+6,
 	"F7",		LFREG,	D_F0+7,
 
+	"X0",		LXREG,	D_X0+0,
+	"X1",		LXREG,	D_X0+1,
+	"X2",		LXREG,	D_X0+2,
+	"X3",		LXREG,	D_X0+3,
+	"X4",		LXREG,	D_X0+4,
+	"X5",		LXREG,	D_X0+5,
+	"X6",		LXREG,	D_X0+6,
+	"X7",		LXREG,	D_X0+7,
+
 	"CS",		LSREG,	D_CS,
 	"SS",		LSREG,	D_SS,
 	"DS",		LSREG,	D_DS,
@@ -311,6 +280,7 @@ struct
 	"BSFW",		LTYPE3,	ABSFW,
 	"BSRL",		LTYPE3,	ABSRL,
 	"BSRW",		LTYPE3,	ABSRW,
+	"BSWAPL",	LTYPE1,	ABSWAPL,
 	"BTCL",		LTYPE3,	ABTCL,
 	"BTCW",		LTYPE3,	ABTCW,
 	"BTL",		LTYPE3,	ABTL,
@@ -332,6 +302,7 @@ struct
 	"CMPSB",	LTYPE0,	ACMPSB,
 	"CMPSL",	LTYPE0,	ACMPSL,
 	"CMPSW",	LTYPE0,	ACMPSW,
+	"CMPXCHG8B",	LTYPE1,	ACMPXCHG8B,
 	"CMPXCHGB",	LTYPE3,	ACMPXCHGB,
 	"CMPXCHGL",	LTYPE3,	ACMPXCHGL,
 	"CMPXCHGW",	LTYPE3,	ACMPXCHGW,
@@ -352,8 +323,8 @@ struct
 	"IDIVL",	LTYPE2,	AIDIVL,
 	"IDIVW",	LTYPE2,	AIDIVW,
 	"IMULB",	LTYPE2,	AIMULB,
-	"IMULL",	LTYPE2,	AIMULL,
-	"IMULW",	LTYPE2,	AIMULW,
+	"IMULL",	LTYPEI,	AIMULL,
+	"IMULW",	LTYPEI,	AIMULW,
 	"INB",		LTYPE0,	AINB,
 	"INL",		LTYPE0,	AINL,
 	"INW",		LTYPE0,	AINW,
@@ -414,7 +385,8 @@ struct
 	"JG",		LTYPER,	AJGT,	/* alternate */
 	"JNLE",		LTYPER,	AJGT,	/* alternate */
 
-	"JCXZ",		LTYPER,	AJCXZ,
+	"JCXZL",	LTYPER,	AJCXZL,
+	"JCXZW",	LTYPER,	AJCXZW,
 	"JMP",		LTYPEC,	AJMP,
 	"LAHF",		LTYPE0,	ALAHF,
 	"LARL",		LTYPE3,	ALARL,
@@ -464,6 +436,7 @@ struct
 	"OUTSB",	LTYPE0,	AOUTSB,
 	"OUTSL",	LTYPE0,	AOUTSL,
 	"OUTSW",	LTYPE0,	AOUTSW,
+	"PAUSE",	LTYPEN,	APAUSE,
 	"POPAL",	LTYPE0,	APOPAL,
 	"POPAW",	LTYPE0,	APOPAW,
 	"POPFL",	LTYPE0,	APOPFL,
@@ -482,6 +455,7 @@ struct
 	"RCRB",		LTYPE3,	ARCRB,
 	"RCRL",		LTYPE3,	ARCRL,
 	"RCRW",		LTYPE3,	ARCRW,
+	"RDTSC",	LTYPE0,	ARDTSC,
 	"REP",		LTYPE0,	AREP,
 	"REPN",		LTYPE0,	AREPN,
 	"RET",		LTYPE0,	ARET,
@@ -546,6 +520,9 @@ struct
 	"VERW",		LTYPE2,	AVERW,
 	"WAIT",		LTYPE0,	AWAIT,
 	"WORD",		LTYPE2,	AWORD,
+	"XADDB",	LTYPE3,	AXADDB,
+	"XADDL",	LTYPE3,	AXADDL,
+	"XADDW",	LTYPE3,	AXADDW,
 	"XCHGB",	LTYPE3,	AXCHGB,
 	"XCHGL",	LTYPE3,	AXCHGL,
 	"XCHGW",	LTYPE3,	AXCHGW,
@@ -696,6 +673,124 @@ struct
 	"FXTRACT",	LTYPE0, AFXTRACT,
 	"FYL2X",	LTYPE0, AFYL2X,
 	"FYL2XP1",	LTYPE0, AFYL2XP1,
+	"LFENCE",	LTYPE0, ALFENCE,
+	"MFENCE",	LTYPE0, AMFENCE,
+	"SFENCE",	LTYPE0, ASFENCE,
+	"EMMS",		LTYPE0, AEMMS,
+	"PREFETCHT0",		LTYPE2,	APREFETCHT0,
+	"PREFETCHT1",		LTYPE2,	APREFETCHT1,
+	"PREFETCHT2",		LTYPE2,	APREFETCHT2,
+	"PREFETCHNTA",		LTYPE2,	APREFETCHNTA,
+	"UNDEF",	LTYPE0,	AUNDEF,
+
+	"ADDPD",	LTYPE3,	AADDPD,
+	"ADDPS",	LTYPE3,	AADDPS,
+	"ADDSD",	LTYPE3,	AADDSD,
+	"ADDSS",	LTYPE3,	AADDSS,
+	"ANDNPD",	LTYPE3,	AANDNPD,
+	"ANDNPS",	LTYPE3,	AANDNPS,
+	"ANDPD",	LTYPE3,	AANDPD,
+	"ANDPS",	LTYPE3,	AANDPS,
+	"CMPPD",	LTYPEXC,ACMPPD,
+	"CMPPS",	LTYPEXC,ACMPPS,
+	"CMPSD",	LTYPEXC,ACMPSD,
+	"CMPSS",	LTYPEXC,ACMPSS,
+	"COMISD",	LTYPE3,	ACOMISD,
+	"COMISS",	LTYPE3,	ACOMISS,
+	"CVTPL2PD",	LTYPE3,	ACVTPL2PD,
+	"CVTPL2PS",	LTYPE3,	ACVTPL2PS,
+	"CVTPD2PL",	LTYPE3,	ACVTPD2PL,
+	"CVTPD2PS",	LTYPE3,	ACVTPD2PS,
+	"CVTPS2PL",	LTYPE3,	ACVTPS2PL,
+	"CVTPS2PD",	LTYPE3,	ACVTPS2PD,
+	"CVTSD2SL",	LTYPE3,	ACVTSD2SL,
+	"CVTSD2SS",	LTYPE3,	ACVTSD2SS,
+	"CVTSL2SD",	LTYPE3,	ACVTSL2SD,
+	"CVTSL2SS",	LTYPE3,	ACVTSL2SS,
+	"CVTSS2SD",	LTYPE3,	ACVTSS2SD,
+	"CVTSS2SL",	LTYPE3,	ACVTSS2SL,
+	"CVTTPD2PL",	LTYPE3,	ACVTTPD2PL,
+	"CVTTPS2PL",	LTYPE3,	ACVTTPS2PL,
+	"CVTTSD2SL",	LTYPE3,	ACVTTSD2SL,
+	"CVTTSS2SL",	LTYPE3,	ACVTTSS2SL,
+	"DIVPD",	LTYPE3,	ADIVPD,
+	"DIVPS",	LTYPE3,	ADIVPS,
+	"DIVSD",	LTYPE3,	ADIVSD,
+	"DIVSS",	LTYPE3,	ADIVSS,
+	"MASKMOVOU",	LTYPE3,	AMASKMOVOU,
+	"MASKMOVDQU",	LTYPE3,	AMASKMOVOU,	/* syn */
+	"MAXPD",	LTYPE3,	AMAXPD,
+	"MAXPS",	LTYPE3,	AMAXPS,
+	"MAXSD",	LTYPE3,	AMAXSD,
+	"MAXSS",	LTYPE3,	AMAXSS,
+	"MINPD",	LTYPE3,	AMINPD,
+	"MINPS",	LTYPE3,	AMINPS,
+	"MINSD",	LTYPE3,	AMINSD,
+	"MINSS",	LTYPE3,	AMINSS,
+	"MOVAPD",	LTYPE3,	AMOVAPD,
+	"MOVAPS",	LTYPE3,	AMOVAPS,
+	"MOVO",		LTYPE3,	AMOVO,
+	"MOVOA",	LTYPE3,	AMOVO,	/* syn */
+	"MOVOU",	LTYPE3,	AMOVOU,
+	"MOVHLPS",	LTYPE3,	AMOVHLPS,
+	"MOVHPD",	LTYPE3,	AMOVHPD,
+	"MOVHPS",	LTYPE3,	AMOVHPS,
+	"MOVLHPS",	LTYPE3,	AMOVLHPS,
+	"MOVLPD",	LTYPE3,	AMOVLPD,
+	"MOVLPS",	LTYPE3,	AMOVLPS,
+	"MOVMSKPD",	LTYPE3,	AMOVMSKPD,
+	"MOVMSKPS",	LTYPE3,	AMOVMSKPS,
+	"MOVNTO",	LTYPE3,	AMOVNTO,
+	"MOVNTDQ",	LTYPE3,	AMOVNTO,	/* syn */
+	"MOVNTPD",	LTYPE3,	AMOVNTPD,
+	"MOVNTPS",	LTYPE3,	AMOVNTPS,
+	"MOVSD",	LTYPE3,	AMOVSD,
+	"MOVSS",	LTYPE3,	AMOVSS,
+	"MOVUPD",	LTYPE3,	AMOVUPD,
+	"MOVUPS",	LTYPE3,	AMOVUPS,
+	"MULPD",	LTYPE3,	AMULPD,
+	"MULPS",	LTYPE3,	AMULPS,
+	"MULSD",	LTYPE3,	AMULSD,
+	"MULSS",	LTYPE3,	AMULSS,
+	"ORPD",		LTYPE3,	AORPD,
+	"ORPS",		LTYPE3,	AORPS,
+	"PADDQ",	LTYPE3,	APADDQ,
+	"PMAXSW",	LTYPE3,	APMAXSW,
+	"PMAXUB",	LTYPE3,	APMAXUB,
+	"PMINSW",	LTYPE3,	APMINSW,
+	"PMINUB",	LTYPE3,	APMINUB,
+	"PSADBW",	LTYPE3,	APSADBW,
+	"PSUBB",	LTYPE3,	APSUBB,
+	"PSUBL",	LTYPE3,	APSUBL,
+	"PSUBQ",	LTYPE3,	APSUBQ,
+	"PSUBSB",	LTYPE3,	APSUBSB,
+	"PSUBSW",	LTYPE3,	APSUBSW,
+	"PSUBUSB",	LTYPE3,	APSUBUSB,
+	"PSUBUSW",	LTYPE3,	APSUBUSW,
+	"PSUBW",	LTYPE3,	APSUBW,
+	"PUNPCKHQDQ",	LTYPE3,	APUNPCKHQDQ,
+	"PUNPCKLQDQ",	LTYPE3,	APUNPCKLQDQ,
+	"RCPPS",	LTYPE3,	ARCPPS,
+	"RCPSS",	LTYPE3,	ARCPSS,
+	"RSQRTPS",	LTYPE3,	ARSQRTPS,
+	"RSQRTSS",	LTYPE3,	ARSQRTSS,
+	"SQRTPD",	LTYPE3,	ASQRTPD,
+	"SQRTPS",	LTYPE3,	ASQRTPS,
+	"SQRTSD",	LTYPE3,	ASQRTSD,
+	"SQRTSS",	LTYPE3,	ASQRTSS,
+	"SUBPD",	LTYPE3,	ASUBPD,
+	"SUBPS",	LTYPE3,	ASUBPS,
+	"SUBSD",	LTYPE3,	ASUBSD,
+	"SUBSS",	LTYPE3,	ASUBSS,
+	"UCOMISD",	LTYPE3,	AUCOMISD,
+	"UCOMISS",	LTYPE3,	AUCOMISS,
+	"UNPCKHPD",	LTYPE3,	AUNPCKHPD,
+	"UNPCKHPS",	LTYPE3,	AUNPCKHPS,
+	"UNPCKLPD",	LTYPE3,	AUNPCKLPD,
+	"UNPCKLPS",	LTYPE3,	AUNPCKLPS,
+	"XORPD",	LTYPE3,	AXORPD,
+	"XORPS",	LTYPE3,	AXORPS,
+	"USEFIELD",	LTYPEN, AUSEFIELD,
 
 	0
 };
@@ -944,23 +1039,46 @@ outhist(void)
 	Hist *h;
 	char *p, *q, *op, c;
 	int n;
+	char *tofree;
+	static int first = 1;
+	static char *goroot, *goroot_final;
+
+	if(first) {
+		// Decide whether we need to rewrite paths from $GOROOT to $GOROOT_FINAL.
+		first = 0;
+		goroot = getenv("GOROOT");
+		goroot_final = getenv("GOROOT_FINAL");
+		if(goroot == nil)
+			goroot = "";
+		if(goroot_final == nil)
+			goroot_final = goroot;
+		if(strcmp(goroot, goroot_final) == 0) {
+			goroot = nil;
+			goroot_final = nil;
+		}
+	}
+
+	tofree = nil;
 
 	g = nullgen;
 	c = pathchar();
 	for(h = hist; h != H; h = h->link) {
 		p = h->name;
-		op = 0;
-		/* on windows skip drive specifier in pathname */
-		if(systemtype(Windows) && p && p[1] == ':'){
-			p += 2;
-			c = *p;
+		if(p != nil && goroot != nil) {
+			n = strlen(goroot);
+			if(strncmp(p, goroot, strlen(goroot)) == 0 && p[n] == '/') {
+				tofree = smprint("%s%s", goroot_final, p+n);
+				p = tofree;
+			}
 		}
-		if(p && p[0] != c && h->offset == 0 && pathname){
-			/* on windows skip drive specifier in pathname */
+		op = 0;
+		if(systemtype(Windows) && p && p[1] == ':'){
+			c = p[2];
+		} else if(p && p[0] != c && h->offset == 0 && pathname){
 			if(systemtype(Windows) && pathname[1] == ':') {
 				op = p;
-				p = pathname+2;
-				c = *p;
+				p = pathname;
+				c = p[2];
 			} else if(pathname[0] == c){
 				op = p;
 				p = pathname;
@@ -1004,6 +1122,11 @@ outhist(void)
 		Bputc(&obuf, h->line>>24);
 		zaddr(&nullgen, 0);
 		zaddr(&g, 0);
+
+		if(tofree) {
+			free(tofree);
+			tofree = nil;
+		}
 	}
 }
 

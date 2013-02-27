@@ -2,7 +2,7 @@
 
 /*
 Copyright (c) 2003-2007 Russ Cox, Tom Bergan, Austin Clements,
-                        Massachusetts Institute of Technology
+	Massachusetts Institute of Technology
 Portions Copyright (c) 2009 The Go Authors. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining
@@ -35,9 +35,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <libc.h>
 #include "tree.h"
 
-#define TreeNode TreeNode
-#define Tree Tree
-
 enum
 {
 	Red = 0,
@@ -55,6 +52,8 @@ rwTreeNode(TreeNode *p, int color, TreeNode *left, void *key, void *value, TreeN
 {
 	if(p == nil)
 		p = malloc(sizeof *p);
+	if(p == nil)
+		sysfatal("out of memory");
 	p->color = color;
 	p->left = left;
 	p->key = key;

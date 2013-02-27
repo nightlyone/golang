@@ -29,9 +29,10 @@
 // THE SOFTWARE.
 
 #define	EXTERN
+#include <u.h>
+#include <libc.h>
 #include "a.h"
 #include "y.tab.h"
-#include <ctype.h>
 
 enum
 {
@@ -43,14 +44,18 @@ enum
 int
 systemtype(int sys)
 {
+#ifdef _WIN32
+	return sys&Windows;
+#else
 	return sys&Plan9;
+#endif
 }
 
 void
 main(int argc, char *argv[])
 {
 	char *p;
-	int nout, nproc, i, c;
+	int c;
 
 	thechar = '5';
 	thestring = "arm";
@@ -94,45 +99,9 @@ main(int argc, char *argv[])
 		print("usage: %ca [-options] file.s\n", thechar);
 		errorexit();
 	}
-	if(argc > 1 && systemtype(Windows)){
-		print("can't assemble multiple files on windows\n");
+	if(argc > 1){
+		print("can't assemble multiple files\n");
 		errorexit();
-	}
-	if(argc > 1 && !systemtype(Windows)) {
-		nproc = 1;
-		if(p = getenv("NPROC"))
-			nproc = atol(p);	/* */
-		c = 0;
-		nout = 0;
-		for(;;) {
-			Waitmsg *w;
-
-			while(nout < nproc && argc > 0) {
-				i = fork();
-				if(i < 0) {
-					fprint(2, "fork: %r\n");
-					errorexit();
-				}
-				if(i == 0) {
-					print("%s:\n", *argv);
-					if(assemble(*argv))
-						errorexit();
-					exits(0);
-				}
-				nout++;
-				argc--;
-				argv++;
-			}
-			w = wait();
-			if(w == nil) {
-				if(c)
-					errorexit();
-				exits(0);
-			}
-			if(w->msg[0])
-				c++;
-			nout--;
-		}
 	}
 	if(assemble(argv[0]))
 		errorexit();
@@ -142,7 +111,7 @@ main(int argc, char *argv[])
 int
 assemble(char *file)
 {
-	char *ofile, incfile[20], *p;
+	char *ofile, *p;
 	int i, of;
 
 	ofile = alloc(strlen(file)+3); // +3 for .x\0 (x=thechar)
@@ -166,15 +135,6 @@ assemble(char *file)
 			p[2] = 0;
 		} else
 			outfile = "/dev/null";
-	}
-	p = getenv("INCLUDE");
-	if(p) {
-		setinclude(p);
-	} else {
-		if(systemtype(Plan9)) {
-			sprint(incfile,"/%s/include", thestring);
-			setinclude(strdup(incfile));
-		}
 	}
 
 	of = create(outfile, OWRITE, 0664);
@@ -364,11 +324,11 @@ struct
 	"MOVWF",		LTYPE3, AMOVWF,
 
 	"LDREX",		LTYPE3, ALDREX,
+	"LDREXD",		LTYPE3, ALDREXD,
 	"STREX",		LTYPE9, ASTREX,
+	"STREXD",		LTYPE9, ASTREXD,
 
 /*
-	"ABSF",		LTYPEI, AABSF,
-	"ABSD",		LTYPEI, AABSD,
 	"NEGF",		LTYPEI, ANEGF,
 	"NEGD",		LTYPEI, ANEGD,
 	"SQTF",		LTYPEI,	ASQTF,
@@ -381,6 +341,10 @@ struct
 	"NRMD",		LTYPEI,	ANRMD,
 */
 
+	"ABSF",		LTYPEI, AABSF,
+	"ABSD",		LTYPEI, AABSD,
+	"SQRTF",	LTYPEI, ASQRTF,
+	"SQRTD",	LTYPEI, ASQRTD,
 	"CMPF",		LTYPEL, ACMPF,
 	"CMPD",		LTYPEL, ACMPD,
 	"ADDF",		LTYPEK,	AADDF,
@@ -439,6 +403,18 @@ struct
 
 	"MCR",		LTYPEJ, 0,
 	"MRC",		LTYPEJ, 1,
+
+	"PLD",		LTYPEPLD, APLD,
+	"UNDEF",	LTYPEE,	AUNDEF,
+	"CLZ",		LTYPE2, ACLZ,
+
+	"MULWT",	LTYPE1, AMULWT,
+	"MULWB",	LTYPE1, AMULWB,
+	"MULAWT",	LTYPEN, AMULAWT,
+	"MULAWB",	LTYPEN, AMULAWB,
+
+	"USEFIELD",	LTYPEN, AUSEFIELD,
+
 	0
 };
 
@@ -529,6 +505,7 @@ zaddr(Gen *a, int s)
 	Bputc(&obuf, a->reg);
 	Bputc(&obuf, s);
 	Bputc(&obuf, a->name);
+	Bputc(&obuf, 0);
 	switch(a->type) {
 	default:
 		print("unknown type %d\n", a->type);
@@ -542,6 +519,7 @@ zaddr(Gen *a, int s)
 		break;
 
 	case D_REGREG:
+	case D_REGREG2:
 		Bputc(&obuf, a->offset);
 		break;
 
@@ -677,23 +655,45 @@ outhist(void)
 	Hist *h;
 	char *p, *q, *op, c;
 	int n;
-
+ 	char *tofree;
+ 	static int first = 1;
+ 	static char *goroot, *goroot_final;
+ 
+ 	if(first) {
+ 		// Decide whether we need to rewrite paths from $GOROOT to $GOROOT_FINAL.
+ 		first = 0;
+ 		goroot = getenv("GOROOT");
+ 		goroot_final = getenv("GOROOT_FINAL");
+ 		if(goroot == nil)
+ 			goroot = "";
+ 		if(goroot_final == nil)
+ 			goroot_final = goroot;
+ 		if(strcmp(goroot, goroot_final) == 0) {
+ 			goroot = nil;
+ 			goroot_final = nil;
+ 		}
+ 	}
+ 
+ 	tofree = nil;
 	g = nullgen;
 	c = '/';
 	for(h = hist; h != H; h = h->link) {
 		p = h->name;
+ 		if(p != nil && goroot != nil) {
+ 			n = strlen(goroot);
+ 			if(strncmp(p, goroot, strlen(goroot)) == 0 && p[n] == '/') {
+ 				tofree = smprint("%s%s", goroot_final, p+n);
+ 				p = tofree;
+ 			}
+ 		}
 		op = 0;
-		/* on windows skip drive specifier in pathname */
 		if(systemtype(Windows) && p && p[1] == ':'){
-			p += 2;
-			c = *p;
-		}
-		if(p && p[0] != c && h->offset == 0 && pathname){
-			/* on windows skip drive specifier in pathname */
+			c = p[2];
+		} else if(p && p[0] != c && h->offset == 0 && pathname){
 			if(systemtype(Windows) && pathname[1] == ':') {
 				op = p;
-				p = pathname+2;
-				c = *p;
+				p = pathname;
+				c = p[2];
 			} else if(pathname[0] == c){
 				op = p;
 				p = pathname;
@@ -737,6 +737,11 @@ outhist(void)
 		Bputc(&obuf, h->line>>24);
 		zaddr(&nullgen, 0);
 		zaddr(&g, 0);
+
+		if(tofree) {
+			free(tofree);
+			tofree = nil;
+		}
 	}
 }
 

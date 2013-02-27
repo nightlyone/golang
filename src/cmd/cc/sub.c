@@ -28,6 +28,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include	<u.h>
 #include	"cc.h"
 
 Node*
@@ -155,7 +156,10 @@ typ(int et, Type *d)
 	t->link = d;
 	t->down = T;
 	t->sym = S;
-	t->width = ewidth[et];
+	if(et < NTYPE)
+		t->width = ewidth[et];
+	else
+		t->width = -1; // for TDOT or TOLD in prototype
 	t->offset = 0;
 	t->shift = 0;
 	t->nbits = 0;
@@ -843,12 +847,6 @@ simplifyshift(Node *n)
 	c2 = n->left->left->right->vconst;
 	c3 = n->left->right->vconst;
 
-/*
-	if(debug['h'])
-		print("%.3o %d %d %d #%.ux\n",
-			(s1<<3)|s2, c1, c2, topbit(c3), c3);
-*/
-
 	o = n->op;
 	switch((s1<<3)|s2) {
 	case 000:	/* (((e <<u c2) & c3) <<u c1) */
@@ -1493,6 +1491,7 @@ Init	onamesinit[] =
 	OPOSTINC,	0,	"POSTINC",
 	OPREDEC,	0,	"PREDEC",
 	OPREINC,	0,	"PREINC",
+	OPREFETCH,		0,	"PREFETCH",
 	OPROTO,		0,	"PROTO",
 	OREGISTER,	0,	"REGISTER",
 	ORETURN,	0,	"RETURN",
@@ -1516,6 +1515,7 @@ Init	onamesinit[] =
 	OINDEX,		0,	"INDEX",
 	OFAS,		0,	"FAS",
 	OREGPAIR,	0,	"REGPAIR",
+	OROTL,		0,	"ROTL",
 	OEND,		0,	"END",
 	-1,		0,	0,
 };
@@ -1534,92 +1534,92 @@ uchar	logrel[12] =
 	OEQ, ONE, OLS, OLS, OLO, OLO, OHS, OHS, OHI, OHI,
 };
 
-uchar	typei[NTYPE];
+uchar	typei[NALLTYPES];
 int	typeiinit[] =
 {
 	TCHAR, TUCHAR, TSHORT, TUSHORT, TINT, TUINT, TLONG, TULONG, TVLONG, TUVLONG, -1,
 };
-uchar	typeu[NTYPE];
+uchar	typeu[NALLTYPES];
 int	typeuinit[] =
 {
 	TUCHAR, TUSHORT, TUINT, TULONG, TUVLONG, TIND, -1,
 };
 
-uchar	typesuv[NTYPE];
+uchar	typesuv[NALLTYPES];
 int	typesuvinit[] =
 {
 	TVLONG, TUVLONG, TSTRUCT, TUNION, -1,
 };
 
-uchar	typeilp[NTYPE];
+uchar	typeilp[NALLTYPES];
 int	typeilpinit[] =
 {
 	TINT, TUINT, TLONG, TULONG, TIND, -1
 };
 
-uchar	typechl[NTYPE];
-uchar	typechlv[NTYPE];
-uchar	typechlvp[NTYPE];
+uchar	typechl[NALLTYPES];
+uchar	typechlv[NALLTYPES];
+uchar	typechlvp[NALLTYPES];
 int	typechlinit[] =
 {
 	TCHAR, TUCHAR, TSHORT, TUSHORT, TINT, TUINT, TLONG, TULONG, -1,
 };
 
-uchar	typechlp[NTYPE];
+uchar	typechlp[NALLTYPES];
 int	typechlpinit[] =
 {
 	TCHAR, TUCHAR, TSHORT, TUSHORT, TINT, TUINT, TLONG, TULONG, TIND, -1,
 };
 
-uchar	typechlpfd[NTYPE];
+uchar	typechlpfd[NALLTYPES];
 int	typechlpfdinit[] =
 {
 	TCHAR, TUCHAR, TSHORT, TUSHORT, TINT, TUINT, TLONG, TULONG, TFLOAT, TDOUBLE, TIND, -1,
 };
 
-uchar	typec[NTYPE];
+uchar	typec[NALLTYPES];
 int	typecinit[] =
 {
 	TCHAR, TUCHAR, -1
 };
 
-uchar	typeh[NTYPE];
+uchar	typeh[NALLTYPES];
 int	typehinit[] =
 {
 	TSHORT, TUSHORT, -1,
 };
 
-uchar	typeil[NTYPE];
+uchar	typeil[NALLTYPES];
 int	typeilinit[] =
 {
 	TINT, TUINT, TLONG, TULONG, -1,
 };
 
-uchar	typev[NTYPE];
+uchar	typev[NALLTYPES];
 int	typevinit[] =
 {
 	TVLONG,	TUVLONG, -1,
 };
 
-uchar	typefd[NTYPE];
+uchar	typefd[NALLTYPES];
 int	typefdinit[] =
 {
 	TFLOAT, TDOUBLE, -1,
 };
 
-uchar	typeaf[NTYPE];
+uchar	typeaf[NALLTYPES];
 int	typeafinit[] =
 {
 	TFUNC, TARRAY, -1,
 };
 
-uchar	typesu[NTYPE];
+uchar	typesu[NALLTYPES];
 int	typesuinit[] =
 {
 	TSTRUCT, TUNION, -1,
 };
 
-int32	tasign[NTYPE];
+int32	tasign[NALLTYPES];
 Init	tasigninit[] =
 {
 	TCHAR,		BNUMBER,	0,
@@ -1640,7 +1640,7 @@ Init	tasigninit[] =
 	-1,		0,		0,
 };
 
-int32	tasadd[NTYPE];
+int32	tasadd[NALLTYPES];
 Init	tasaddinit[] =
 {
 	TCHAR,		BNUMBER,	0,
@@ -1659,7 +1659,7 @@ Init	tasaddinit[] =
 	-1,		0,		0,
 };
 
-int32	tcast[NTYPE];
+int32	tcast[NALLTYPES];
 Init	tcastinit[] =
 {
 	TCHAR,		BNUMBER|BIND|BVOID,	0,
@@ -1681,7 +1681,7 @@ Init	tcastinit[] =
 	-1,		0,			0,
 };
 
-int32	tadd[NTYPE];
+int32	tadd[NALLTYPES];
 Init	taddinit[] =
 {
 	TCHAR,		BNUMBER|BIND,	0,
@@ -1700,7 +1700,7 @@ Init	taddinit[] =
 	-1,		0,		0,
 };
 
-int32	tsub[NTYPE];
+int32	tsub[NALLTYPES];
 Init	tsubinit[] =
 {
 	TCHAR,		BNUMBER,	0,
@@ -1719,7 +1719,7 @@ Init	tsubinit[] =
 	-1,		0,		0,
 };
 
-int32	tmul[NTYPE];
+int32	tmul[NALLTYPES];
 Init	tmulinit[] =
 {
 	TCHAR,		BNUMBER,	0,
@@ -1737,7 +1737,7 @@ Init	tmulinit[] =
 	-1,		0,		0,
 };
 
-int32	tand[NTYPE];
+int32	tand[NALLTYPES];
 Init	tandinit[] =
 {
 	TCHAR,		BINTEGER,	0,
@@ -1753,7 +1753,7 @@ Init	tandinit[] =
 	-1,		0,		0,
 };
 
-int32	trel[NTYPE];
+int32	trel[NALLTYPES];
 Init	trelinit[] =
 {
 	TCHAR,		BNUMBER,	0,

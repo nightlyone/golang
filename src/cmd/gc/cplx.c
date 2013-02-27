@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 
 static	void	subnode(Node *nr, Node *ni, Node *nc);
@@ -11,6 +13,19 @@ static	void	minus(Node *nl, Node *res);
 	void	complexmul(Node*, Node*, Node*);
 
 #define	CASE(a,b)	(((a)<<16)|((b)<<0))
+
+static int
+overlap(Node *f, Node *t)
+{
+	// check whether f and t could be overlapping stack references.
+	// not exact, because it's hard to check for the stack register
+	// in portable code.  close enough: worst case we will allocate
+	// an extra temporary and the registerizer will clean it up.
+	return f->op == OINDREG &&
+		t->op == OINDREG &&
+		f->xoffset+f->type->width >= t->xoffset &&
+		t->xoffset+t->type->width >= f->xoffset;
+}
 
 /*
  * generate:
@@ -43,9 +58,10 @@ complexmove(Node *f, Node *t)
 	case CASE(TCOMPLEX64,TCOMPLEX128):
 	case CASE(TCOMPLEX128,TCOMPLEX64):
 	case CASE(TCOMPLEX128,TCOMPLEX128):
-		// complex to complex move/convert
-		// make from addable
-		if(!f->addable) {
+		// complex to complex move/convert.
+		// make f addable.
+		// also use temporary if possible stack overlap.
+		if(!f->addable || overlap(f, t)) {
 			tempname(&n1, f->type);
 			complexmove(f, &n1);
 			f = &n1;
@@ -117,6 +133,9 @@ complexgen(Node *n, Node *res)
 		dump("\ncomplexgen-n", n);
 		dump("complexgen-res", res);
 	}
+	
+	while(n->op == OCONVNOP)
+		n = n->left;
 
 	// pick off float/complex opcodes
 	switch(n->op) {
@@ -185,6 +204,8 @@ complexgen(Node *n, Node *res)
 	case OIND:
 	case ONAME:	// PHEAP or PPARAMREF var
 	case OCALLFUNC:
+	case OCALLMETH:
+	case OCALLINTER:
 		igen(n, &n1, res);
 		complexmove(&n1, res);
 		regfree(&n1);
@@ -250,7 +271,7 @@ complexgen(Node *n, Node *res)
 }
 
 void
-complexbool(int op, Node *nl, Node *nr, int true, Prog *to)
+complexbool(int op, Node *nl, Node *nr, int true, int likely, Prog *to)
 {
 	Node tnl, tnr;
 	Node n1, n2, n3, n4;
@@ -302,7 +323,7 @@ complexbool(int op, Node *nl, Node *nr, int true, Prog *to)
 	if(op == ONE)
 		true = !true;
 
-	bgen(&na, true, to);
+	bgen(&na, true, likely, to);
 }
 
 void

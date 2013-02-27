@@ -32,6 +32,7 @@ enum {
 };
 static Import *ihash[NIHASH];
 static int nimport;
+static void imported(char *pkg, char *import);
 
 static int
 hashstr(char *name)
@@ -68,6 +69,7 @@ ilookup(char *name)
 static void loadpkgdata(char*, char*, char*, int);
 static void loaddynimport(char*, char*, char*, int);
 static void loaddynexport(char*, char*, char*, int);
+static void loaddynlinker(char*, char*, char*, int);
 static int parsemethod(char**, char*, char**);
 static int parsepkgdata(char*, char*, char**, char*, char**, char**, char**);
 
@@ -135,6 +137,7 @@ ldpkg(Biobuf *f, char *pkg, int64 len, char *filename, int whence)
 		if(debug['u'] && whence != ArchiveObj &&
 		   (p0+6 > p1 || memcmp(p0, " safe\n", 6) != 0)) {
 			fprint(2, "%s: load of unsafe package %s\n", argv0, filename);
+			nerrors++;
 			errorexit();
 		}
 		if(p0 < p1) {
@@ -146,8 +149,11 @@ ldpkg(Biobuf *f, char *pkg, int64 len, char *filename, int whence)
 					;
 			}
 		}
-		if(strcmp(pkg, "main") == 0 && strcmp(name, "main") != 0)
+		if(strcmp(pkg, "main") == 0 && strcmp(name, "main") != 0) {
 			fprint(2, "%s: %s: not package main (package %s)\n", argv0, filename, name);
+			nerrors++;
+			errorexit();
+		}
 		loadpkgdata(filename, pkg, p0, p1 - p0);
 	}
 
@@ -199,7 +205,7 @@ ldpkg(Biobuf *f, char *pkg, int64 len, char *filename, int whence)
 	if(p0 != nil) {
 		p0 = strchr(p0+1, '\n');
 		if(p0 == nil) {
-			fprint(2, "%s: found $$ // dynexporg but no newline in %s\n", argv0, filename);
+			fprint(2, "%s: found $$ // dynexport but no newline in %s\n", argv0, filename);
 			if(debug['u'])
 				errorexit();
 			return;
@@ -208,12 +214,33 @@ ldpkg(Biobuf *f, char *pkg, int64 len, char *filename, int whence)
 		if(p1 == nil)
 			p1 = strstr(p0, "\n!\n");
 		if(p1 == nil) {
-			fprint(2, "%s: cannot find end of // dynexporg section in %s\n", argv0, filename);
+			fprint(2, "%s: cannot find end of // dynexport section in %s\n", argv0, filename);
 			if(debug['u'])
 				errorexit();
 			return;
 		}
 		loaddynexport(filename, pkg, p0 + 1, p1 - (p0+1));
+	}
+
+	p0 = strstr(p1, "\n$$  // dynlinker");
+	if(p0 != nil) {
+		p0 = strchr(p0+1, '\n');
+		if(p0 == nil) {
+			fprint(2, "%s: found $$ // dynlinker but no newline in %s\n", argv0, filename);
+			if(debug['u'])
+				errorexit();
+			return;
+		}
+		p1 = strstr(p0, "\n$$");
+		if(p1 == nil)
+			p1 = strstr(p0, "\n!\n");
+		if(p1 == nil) {
+			fprint(2, "%s: cannot find end of // dynlinker section in %s\n", argv0, filename);
+			if(debug['u'])
+				errorexit();
+			return;
+		}
+		loaddynlinker(filename, pkg, p0 + 1, p1 - (p0+1));
 	}
 }
 
@@ -230,7 +257,7 @@ loadpkgdata(char *file, char *pkg, char *data, int len)
 		x = ilookup(name);
 		if(x->prefix == nil) {
 			x->prefix = prefix;
-			x->def = def;
+			x->def = strdup(def);
 			x->file = file;
 		} else if(strcmp(x->prefix, prefix) != 0) {
 			fprint(2, "%s: conflicting definitions for %s\n", argv0, name);
@@ -243,7 +270,10 @@ loadpkgdata(char *file, char *pkg, char *data, int len)
 			fprint(2, "%s:\t%s %s %s\n", file, prefix, name, def);
 			nerrors++;
 		}
+		free(name);
+		free(def);
 	}
+	free(file);
 }
 
 // replace all "". with pkg.
@@ -259,7 +289,7 @@ expandpkg(char *t0, char *pkg)
 		n++;
 
 	if(n == 0)
-		return t0;
+		return strdup(t0);
 
 	// use malloc, not mal, so that caller can free
 	w0 = malloc(strlen(t0) + strlen(pkg)*n);
@@ -307,12 +337,23 @@ loop:
 		p += 6;
 	else if(strncmp(p, "import ", 7) == 0) {
 		p += 7;
+		while(p < ep && *p != ' ')
+			p++;
+		p++;
+		name = p;
 		while(p < ep && *p != '\n')
 			p++;
+		if(p >= ep) {
+			fprint(2, "%s: %s: confused in import line\n", argv0, file);
+			nerrors++;
+			return -1;
+		}
+		*p++ = '\0';
+		imported(pkg, name);
 		goto loop;
 	}
 	else {
-		fprint(2, "%s: confused in pkg data near <<%.40s>>\n", argv0, prefix);
+		fprint(2, "%s: %s: confused in pkg data near <<%.40s>>\n", argv0, file, prefix);
 		nerrors++;
 		return -1;
 	}
@@ -390,10 +431,16 @@ parsemethod(char **pp, char *ep, char **methp)
 	if(p == ep)
 		return 0;
 
+	// might be a comment about the method
+	if(p + 2 < ep && strncmp(p, "//", 2) == 0)
+		goto useline;
+	
 	// if it says "func (", it's a method
-	if(p + 6 >= ep || strncmp(p, "func (", 6) != 0)
-		return 0;
+	if(p + 6 < ep && strncmp(p, "func (", 6) == 0)
+		goto useline;
+	return 0;
 
+useline:
 	// definition to end of line
 	*methp = p;
 	while(p < ep && *p != '\n')
@@ -411,11 +458,11 @@ parsemethod(char **pp, char *ep, char **methp)
 static void
 loaddynimport(char *file, char *pkg, char *p, int n)
 {
-	char *pend, *next, *name, *def, *p0, *lib;
+	char *pend, *next, *name, *def, *p0, *lib, *q;
 	Sym *s;
 
+	USED(file);
 	pend = p + n;
-	p0 = p;
 	for(; p<pend; p=next) {
 		next = strchr(p, '\n');
 		if(next == nil)
@@ -444,25 +491,38 @@ loaddynimport(char *file, char *pkg, char *p, int n)
 		*strchr(name, ' ') = 0;
 		*strchr(def, ' ') = 0;
 		
+		if(debug['d']) {
+			fprint(2, "%s: %s: cannot use dynamic imports with -d flag\n", argv0, file);
+			nerrors++;
+			return;
+		}
+		
 		if(strcmp(name, "_") == 0 && strcmp(def, "_") == 0) {
 			// allow #pragma dynimport _ _ "foo.so"
 			// to force a link of foo.so.
+			havedynamic = 1;
 			adddynlib(lib);
 			continue;
 		}
 
 		name = expandpkg(name, pkg);
+		q = strchr(def, '#');
+		if(q)
+			*q++ = '\0';
 		s = lookup(name, 0);
+		free(name);
 		if(s->type == 0 || s->type == SXREF) {
 			s->dynimplib = lib;
 			s->dynimpname = def;
+			s->dynimpvers = q;
 			s->type = SDYNIMPORT;
+			havedynamic = 1;
 		}
 	}
 	return;
 
 err:
-	fprint(2, "%s: invalid dynimport line: %s\n", argv0, p0);
+	fprint(2, "%s: %s: invalid dynimport line: %s\n", argv0, file, p0);
 	nerrors++;
 }
 
@@ -472,8 +532,8 @@ loaddynexport(char *file, char *pkg, char *p, int n)
 	char *pend, *next, *local, *elocal, *remote, *p0;
 	Sym *s;
 
+	USED(file);
 	pend = p + n;
-	p0 = p;
 	for(; p<pend; p=next) {
 		next = strchr(p, '\n');
 		if(next == nil)
@@ -519,48 +579,95 @@ err:
 	nerrors++;
 }
 
-static int markdepth;
+static void
+loaddynlinker(char *file, char *pkg, char *p, int n)
+{
+	char *pend, *next, *dynlinker, *p0;
+
+	USED(file);
+	USED(pkg);
+	pend = p + n;
+	for(; p<pend; p=next) {
+		next = strchr(p, '\n');
+		if(next == nil)
+			next = "";
+		else
+			*next++ = '\0';
+		p0 = p;
+		if(strncmp(p, "dynlinker ", 10) != 0)
+			goto err;
+		p += 10;
+		dynlinker = p;
+
+		if(*dynlinker == '\0')
+			goto err;
+		if(!debug['I']) { // not overrided by cmdline
+			if(interpreter != nil && strcmp(interpreter, dynlinker) != 0) {
+				fprint(2, "%s: conflict dynlinker: %s and %s\n", argv0, interpreter, dynlinker);
+				nerrors++;
+				return;
+			}
+			free(interpreter);
+			interpreter = strdup(dynlinker);
+		}
+	}
+	return;
+
+err:
+	fprint(2, "%s: invalid dynlinker line: %s\n", argv0, p0);
+	nerrors++;
+}
+
+static Sym *markq;
+static Sym *emarkq;
 
 static void
-marktext(Sym *s)
+mark1(Sym *s, Sym *parent)
 {
-	Auto *a;
-	Prog *p;
-
-	if(s == S)
+	if(s == S || s->reachable)
 		return;
-	markdepth++;
-	if(debug['v'] > 1)
-		Bprint(&bso, "%d marktext %s\n", markdepth, s->name);
-	for(a=s->autom; a; a=a->link)
-		mark(a->gotype);
-	for(p=s->text; p != P; p=p->link) {
-		if(p->from.sym)
-			mark(p->from.sym);
-		if(p->to.sym)
-			mark(p->to.sym);
-	}
-	markdepth--;
+	if(strncmp(s->name, "go.weak.", 8) == 0)
+		return;
+	s->reachable = 1;
+	s->reachparent = parent;
+	if(markq == nil)
+		markq = s;
+	else
+		emarkq->queue = s;
+	emarkq = s;
 }
 
 void
 mark(Sym *s)
 {
-	int i;
+	mark1(s, nil);
+}
 
-	if(s == S || s->reachable)
-		return;
-	s->reachable = 1;
-	if(s->text)
-		marktext(s);
-	for(i=0; i<s->nr; i++)
-		mark(s->r[i].sym);
-	if(s->gotype)
-		mark(s->gotype);
-	if(s->sub)
-		mark(s->sub);
-	if(s->outer)
-		mark(s->outer);
+static void
+markflood(void)
+{
+	Auto *a;
+	Prog *p;
+	Sym *s;
+	int i;
+	
+	for(s=markq; s!=S; s=s->queue) {
+		if(s->text) {
+			if(debug['v'] > 1)
+				Bprint(&bso, "marktext %s\n", s->name);
+			for(a=s->autom; a; a=a->link)
+				mark1(a->gotype, s);
+			for(p=s->text; p != P; p=p->link) {
+				mark1(p->from.sym, s);
+				mark1(p->to.sym, s);
+			}
+		}
+		for(i=0; i<s->nr; i++)
+			mark1(s->r[i].sym, s);
+		mark1(s->gotype, s);
+		mark1(s->sub, s);
+		mark1(s->outer, s);
+	}
 }
 
 static char*
@@ -617,19 +724,30 @@ void
 deadcode(void)
 {
 	int i;
-	Sym *s, *last;
+	Sym *s, *last, *p;
 	Auto *z;
+	Fmt fmt;
 
 	if(debug['v'])
 		Bprint(&bso, "%5.2f deadcode\n", cputime());
 
 	mark(lookup(INITENTRY, 0));
+	if(flag_shared)
+		mark(lookup(LIBINITENTRY, 0));
 	for(i=0; i<nelem(morename); i++)
 		mark(lookup(morename[i], 0));
 
 	for(i=0; i<ndynexp; i++)
 		mark(dynexp[i]);
+
+	markflood();
 	
+	// keep each beginning with 'typelink.' if the symbol it points at is being kept.
+	for(s = allsym; s != S; s = s->allsym) {
+		if(strncmp(s->name, "go.typelink.", 12) == 0)
+			s->reachable = s->nr==1 && s->r[0].sym->reachable;
+	}
+
 	// remove dead text but keep file information (z symbols).
 	last = nil;
 	z = nil;
@@ -654,6 +772,59 @@ deadcode(void)
 		textp = nil;
 	else
 		last->next = nil;
+	
+	for(s = allsym; s != S; s = s->allsym)
+		if(strncmp(s->name, "go.weak.", 8) == 0) {
+			s->special = 1;  // do not lay out in data segment
+			s->reachable = 1;
+			s->hide = 1;
+		}
+	
+	// record field tracking references
+	fmtstrinit(&fmt);
+	for(s = allsym; s != S; s = s->allsym) {
+		if(strncmp(s->name, "go.track.", 9) == 0) {
+			s->special = 1;  // do not lay out in data segment
+			s->hide = 1;
+			if(s->reachable) {
+				fmtprint(&fmt, "%s", s->name+9);
+				for(p=s->reachparent; p; p=p->reachparent)
+					fmtprint(&fmt, "\t%s", p->name);
+				fmtprint(&fmt, "\n");
+			}
+			s->type = SCONST;
+			s->value = 0;
+		}
+	}
+	if(tracksym == nil)
+		return;
+	s = lookup(tracksym, 0);
+	if(!s->reachable)
+		return;
+	addstrdata(tracksym, fmtstrflush(&fmt));
+}
+
+void
+doweak(void)
+{
+	Sym *s, *t;
+
+	// resolve weak references only if
+	// target symbol will be in binary anyway.
+	for(s = allsym; s != S; s = s->allsym) {
+		if(strncmp(s->name, "go.weak.", 8) == 0) {
+			t = rlookup(s->name+8, s->version);
+			if(t && t->type != 0 && t->reachable) {
+				s->value = t->value;
+				s->type = t->type;
+				s->outer = t;
+			} else {
+				s->type = SCONST;
+				s->value = 0;
+			}
+			continue;
+		}
+	}
 }
 
 void
@@ -663,4 +834,173 @@ addexport(void)
 	
 	for(i=0; i<ndynexp; i++)
 		adddynsym(dynexp[i]);
+}
+
+/* %Z from gc, for quoting import paths */
+int
+Zconv(Fmt *fp)
+{
+	Rune r;
+	char *s, *se;
+	int n;
+
+	s = va_arg(fp->args, char*);
+	if(s == nil)
+		return fmtstrcpy(fp, "<nil>");
+
+	se = s + strlen(s);
+	while(s < se) {
+		n = chartorune(&r, s);
+		s += n;
+		switch(r) {
+		case Runeerror:
+			if(n == 1) {
+				fmtprint(fp, "\\x%02x", (uchar)*(s-1));
+				break;
+			}
+			// fall through
+		default:
+			if(r < ' ') {
+				fmtprint(fp, "\\x%02x", r);
+				break;
+			}
+			fmtrune(fp, r);
+			break;
+		case '\t':
+			fmtstrcpy(fp, "\\t");
+			break;
+		case '\n':
+			fmtstrcpy(fp, "\\n");
+			break;
+		case '\"':
+		case '\\':
+			fmtrune(fp, '\\');
+			fmtrune(fp, r);
+			break;
+		}
+	}
+	return 0;
+}
+
+
+typedef struct Pkg Pkg;
+struct Pkg
+{
+	uchar mark;
+	uchar checked;
+	Pkg *next;
+	char *path;
+	Pkg **impby;
+	int nimpby;
+	int mimpby;
+	Pkg *all;
+};
+
+static Pkg *phash[1024];
+static Pkg *pkgall;
+
+static Pkg*
+getpkg(char *path)
+{
+	Pkg *p;
+	int h;
+	
+	h = hashstr(path) % nelem(phash);
+	for(p=phash[h]; p; p=p->next)
+		if(strcmp(p->path, path) == 0)
+			return p;
+	p = mal(sizeof *p);
+	p->path = strdup(path);
+	p->next = phash[h];
+	phash[h] = p;
+	p->all = pkgall;
+	pkgall = p;
+	return p;
+}
+
+static void
+imported(char *pkg, char *import)
+{
+	Pkg *p, *i;
+	
+	// everyone imports runtime, even runtime.
+	if(strcmp(import, "\"runtime\"") == 0)
+		return;
+
+	pkg = smprint("\"%Z\"", pkg);  // turn pkg path into quoted form, freed below
+	p = getpkg(pkg);
+	i = getpkg(import);
+	if(i->nimpby >= i->mimpby) {
+		i->mimpby *= 2;
+		if(i->mimpby == 0)
+			i->mimpby = 16;
+		i->impby = realloc(i->impby, i->mimpby*sizeof i->impby[0]);
+	}
+	i->impby[i->nimpby++] = p;
+	free(pkg);
+}
+
+static Pkg*
+cycle(Pkg *p)
+{
+	int i;
+	Pkg *bad;
+
+	if(p->checked)
+		return 0;
+
+	if(p->mark) {
+		nerrors++;
+		print("import cycle:\n");
+		print("\t%s\n", p->path);
+		return p;
+	}
+	p->mark = 1;
+	for(i=0; i<p->nimpby; i++) {
+		if((bad = cycle(p->impby[i])) != nil) {
+			p->mark = 0;
+			p->checked = 1;
+			print("\timports %s\n", p->path);
+			if(bad == p)
+				return nil;
+			return bad;
+		}
+	}
+	p->checked = 1;
+	p->mark = 0;
+	return 0;
+}
+
+void
+importcycles(void)
+{
+	Pkg *p;
+	
+	for(p=pkgall; p; p=p->all)
+		cycle(p);
+}
+
+static int
+scmp(const void *p1, const void *p2)
+{
+	Sym *s1, *s2;
+
+	s1 = *(Sym**)p1;
+	s2 = *(Sym**)p2;
+	return strcmp(s1->dynimpname, s2->dynimpname);
+}
+void
+sortdynexp(void)
+{
+	int i;
+
+	// On Mac OS X Mountain Lion, we must sort exported symbols
+	// So we sort them here and pre-allocate dynid for them
+	// See http://golang.org/issue/4029
+	if(HEADTYPE != Hdarwin)
+		return;
+	qsort(dynexp, ndynexp, sizeof dynexp[0], scmp);
+	for(i=0; i<ndynexp; i++) {
+		dynexp[i]->dynid = -i-100; // also known to [68]l/asm.c:^adddynsym
+	}
 }

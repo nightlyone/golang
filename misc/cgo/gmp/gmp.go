@@ -86,9 +86,8 @@ explicitly in Go to pointers to arrays, as they do (implicitly) in C.
 
 Garbage collection is the big problem.  It is fine for the Go world to
 have pointers into the C world and to free those pointers when they
-are no longer needed.  To help, the garbage collector calls an
-object's destroy() method prior to collecting it.  C pointers can be
-wrapped by Go objects with appropriate destroy methods.
+are no longer needed.  To help, the Go code can define Go objects
+holding the C pointers and use runtime.SetFinalizer on those Go objects.
 
 It is much more difficult for the C world to have pointers into the Go
 world, because the Go garbage collector is unaware of the memory
@@ -99,8 +98,20 @@ Go to hang on to a reference to the pointer until C is done with it.
 */
 package gmp
 
-// #include <gmp.h>
-// #include <stdlib.h>
+/*
+#cgo LDFLAGS: -lgmp
+#include <gmp.h>
+#include <stdlib.h>
+
+// gmp 5.0.0+ changed the type of the 3rd argument to mp_bitcnt_t,
+// so, to support older versions, we wrap these two functions.
+void _mpz_mul_2exp(mpz_ptr a, mpz_ptr b, unsigned long n) {
+	mpz_mul_2exp(a, b, n);
+}
+void _mpz_div_2exp(mpz_ptr a, mpz_ptr b, unsigned long n) {
+	mpz_div_2exp(a, b, n);
+}
+*/
 import "C"
 
 import (
@@ -180,15 +191,15 @@ func (z *Int) SetInt64(x int64) *Int {
 // SetString interprets s as a number in the given base
 // and sets z to that value.  The base must be in the range [2,36].
 // SetString returns an error if s cannot be parsed or the base is invalid.
-func (z *Int) SetString(s string, base int) os.Error {
+func (z *Int) SetString(s string, base int) error {
 	z.doinit()
 	if base < 2 || base > 36 {
-		return os.EINVAL
+		return os.ErrInvalid
 	}
 	p := C.CString(s)
 	defer C.free(unsafe.Pointer(p))
 	if C.mpz_set_str(&z.i[0], p, C.int(base)) < 0 {
-		return os.EINVAL
+		return os.ErrInvalid
 	}
 	return nil
 }
@@ -211,7 +222,6 @@ func (z *Int) destroy() {
 	}
 	z.init = false
 }
-
 
 /*
  * arithmetic
@@ -267,7 +277,7 @@ func (z *Int) Mod(x, y *Int) *Int {
 func (z *Int) Lsh(x *Int, s uint) *Int {
 	x.doinit()
 	z.doinit()
-	C.mpz_mul_2exp(&z.i[0], &x.i[0], C.ulong(s))
+	C._mpz_mul_2exp(&z.i[0], &x.i[0], C.ulong(s))
 	return z
 }
 
@@ -275,7 +285,7 @@ func (z *Int) Lsh(x *Int, s uint) *Int {
 func (z *Int) Rsh(x *Int, s uint) *Int {
 	x.doinit()
 	z.doinit()
-	C.mpz_div_2exp(&z.i[0], &x.i[0], C.ulong(s))
+	C._mpz_div_2exp(&z.i[0], &x.i[0], C.ulong(s))
 	return z
 }
 
@@ -301,7 +311,6 @@ func (z *Int) Int64() int64 {
 	return int64(C.mpz_get_si(&z.i[0]))
 }
 
-
 // Neg sets z = -x and returns z.
 func (z *Int) Neg(x *Int) *Int {
 	x.doinit()
@@ -317,7 +326,6 @@ func (z *Int) Abs(x *Int) *Int {
 	C.mpz_abs(&z.i[0], &x.i[0])
 	return z
 }
-
 
 /*
  * functions without a clear receiver

@@ -9,6 +9,26 @@
 
 static void vprintf(int8*, byte*);
 
+// write to goroutine-local buffer if diverting output,
+// or else standard error.
+static void
+gwrite(void *v, int32 n)
+{
+	if(g == nil || g->writebuf == nil) {
+		runtime·write(2, v, n);
+		return;
+	}
+
+	if(g->writenbuf == 0)
+		return;
+
+	if(n > g->writenbuf)
+		n = g->writenbuf;
+	runtime·memmove(g->writebuf, v, n);
+	g->writebuf += n;
+	g->writenbuf -= n;
+}
+
 void
 runtime·dump(byte *p, int32 n)
 {
@@ -29,7 +49,7 @@ runtime·dump(byte *p, int32 n)
 void
 runtime·prints(int8 *s)
 {
-	runtime·write(2, s, runtime·findnull((byte*)s));
+	gwrite(s, runtime·findnull((byte*)s));
 }
 
 #pragma textflag 7
@@ -42,122 +62,121 @@ runtime·printf(int8 *s, ...)
 	vprintf(s, arg);
 }
 
-static byte*
-vrnd(byte *p, int32 x)
-{
-	if((uint32)(uintptr)p&(x-1))
-		p += x - ((uint32)(uintptr)p&(x-1));
-	return p;
-}
-
 // Very simple printf.  Only for debugging prints.
 // Do not add to this without checking with Rob.
 static void
-vprintf(int8 *s, byte *arg)
+vprintf(int8 *s, byte *base)
 {
 	int8 *p, *lp;
-	byte *narg;
+	uintptr arg, narg;
+	byte *v;
 
-//	lock(&debuglock);
+	//runtime·lock(&debuglock);
 
 	lp = p = s;
+	arg = 0;
 	for(; *p; p++) {
 		if(*p != '%')
 			continue;
 		if(p > lp)
-			runtime·write(2, lp, p-lp);
+			gwrite(lp, p-lp);
 		p++;
-		narg = nil;
+		narg = 0;
 		switch(*p) {
 		case 't':
+		case 'c':
 			narg = arg + 1;
 			break;
 		case 'd':	// 32-bit
 		case 'x':
-			arg = vrnd(arg, 4);
+			arg = ROUND(arg, 4);
 			narg = arg + 4;
 			break;
 		case 'D':	// 64-bit
 		case 'U':
 		case 'X':
 		case 'f':
-			arg = vrnd(arg, sizeof(uintptr));
+			arg = ROUND(arg, sizeof(uintptr));
 			narg = arg + 8;
 			break;
 		case 'C':
-			arg = vrnd(arg, sizeof(uintptr));
+			arg = ROUND(arg, sizeof(uintptr));
 			narg = arg + 16;
 			break;
 		case 'p':	// pointer-sized
 		case 's':
-			arg = vrnd(arg, sizeof(uintptr));
+			arg = ROUND(arg, sizeof(uintptr));
 			narg = arg + sizeof(uintptr);
 			break;
 		case 'S':	// pointer-aligned but bigger
-			arg = vrnd(arg, sizeof(uintptr));
+			arg = ROUND(arg, sizeof(uintptr));
 			narg = arg + sizeof(String);
 			break;
 		case 'a':	// pointer-aligned but bigger
-			arg = vrnd(arg, sizeof(uintptr));
+			arg = ROUND(arg, sizeof(uintptr));
 			narg = arg + sizeof(Slice);
 			break;
 		case 'i':	// pointer-aligned but bigger
 		case 'e':
-			arg = vrnd(arg, sizeof(uintptr));
+			arg = ROUND(arg, sizeof(uintptr));
 			narg = arg + sizeof(Eface);
 			break;
 		}
+		v = base+arg;
 		switch(*p) {
 		case 'a':
-			runtime·printslice(*(Slice*)arg);
+			runtime·printslice(*(Slice*)v);
+			break;
+		case 'c':
+			runtime·printbyte(*(int8*)v);
 			break;
 		case 'd':
-			runtime·printint(*(int32*)arg);
+			runtime·printint(*(int32*)v);
 			break;
 		case 'D':
-			runtime·printint(*(int64*)arg);
+			runtime·printint(*(int64*)v);
 			break;
 		case 'e':
-			runtime·printeface(*(Eface*)arg);
+			runtime·printeface(*(Eface*)v);
 			break;
 		case 'f':
-			runtime·printfloat(*(float64*)arg);
+			runtime·printfloat(*(float64*)v);
 			break;
 		case 'C':
-			runtime·printcomplex(*(Complex128*)arg);
+			runtime·printcomplex(*(Complex128*)v);
 			break;
 		case 'i':
-			runtime·printiface(*(Iface*)arg);
+			runtime·printiface(*(Iface*)v);
 			break;
 		case 'p':
-			runtime·printpointer(*(void**)arg);
+			runtime·printpointer(*(void**)v);
 			break;
 		case 's':
-			runtime·prints(*(int8**)arg);
+			runtime·prints(*(int8**)v);
 			break;
 		case 'S':
-			runtime·printstring(*(String*)arg);
+			runtime·printstring(*(String*)v);
 			break;
 		case 't':
-			runtime·printbool(*(bool*)arg);
+			runtime·printbool(*(bool*)v);
 			break;
 		case 'U':
-			runtime·printuint(*(uint64*)arg);
+			runtime·printuint(*(uint64*)v);
 			break;
 		case 'x':
-			runtime·printhex(*(uint32*)arg);
+			runtime·printhex(*(uint32*)v);
 			break;
 		case 'X':
-			runtime·printhex(*(uint64*)arg);
+			runtime·printhex(*(uint64*)v);
 			break;
 		}
 		arg = narg;
 		lp = p+1;
 	}
 	if(p > lp)
-		runtime·write(2, lp, p-lp);
+		gwrite(lp, p-lp);
 
-//	unlock(&debuglock);
+	//runtime·unlock(&debuglock);
 }
 
 #pragma textflag 7
@@ -181,10 +200,16 @@ void
 runtime·printbool(bool v)
 {
 	if(v) {
-		runtime·write(2, (byte*)"true", 4);
+		gwrite((byte*)"true", 4);
 		return;
 	}
-	runtime·write(2, (byte*)"false", 5);
+	gwrite((byte*)"false", 5);
+}
+
+void
+runtime·printbyte(int8 c)
+{
+	gwrite(&c, 1);
 }
 
 void
@@ -194,16 +219,16 @@ runtime·printfloat(float64 v)
 	int32 e, s, i, n;
 	float64 h;
 
-	if(runtime·isNaN(v)) {
-		runtime·write(2, "NaN", 3);
+	if(ISNAN(v)) {
+		gwrite("NaN", 3);
 		return;
 	}
-	if(runtime·isInf(v, 1)) {
-		runtime·write(2, "+Inf", 4);
+	if(v == runtime·posinf) {
+		gwrite("+Inf", 4);
 		return;
 	}
-	if(runtime·isInf(v, -1)) {
-		runtime·write(2, "-Inf", 4);
+	if(v == runtime·neginf) {
+		gwrite("-Inf", 4);
 		return;
 	}
 
@@ -262,16 +287,16 @@ runtime·printfloat(float64 v)
 	buf[n+4] = (e/100) + '0';
 	buf[n+5] = (e/10)%10 + '0';
 	buf[n+6] = (e%10) + '0';
-	runtime·write(2, buf, n+7);
+	gwrite(buf, n+7);
 }
 
 void
 runtime·printcomplex(Complex128 v)
 {
-	runtime·write(2, "(", 1);
+	gwrite("(", 1);
 	runtime·printfloat(v.real);
 	runtime·printfloat(v.imag);
-	runtime·write(2, "i)", 2);
+	gwrite("i)", 2);
 }
 
 void
@@ -286,14 +311,14 @@ runtime·printuint(uint64 v)
 			break;
 		v = v/10;
 	}
-	runtime·write(2, buf+i, nelem(buf)-i);
+	gwrite(buf+i, nelem(buf)-i);
 }
 
 void
 runtime·printint(int64 v)
 {
 	if(v < 0) {
-		runtime·write(2, "-", 1);
+		gwrite("-", 1);
 		v = -v;
 	}
 	runtime·printuint(v);
@@ -313,7 +338,7 @@ runtime·printhex(uint64 v)
 		buf[--i] = '0';
 	buf[--i] = 'x';
 	buf[--i] = '0';
-	runtime·write(2, buf+i, nelem(buf)-i);
+	gwrite(buf+i, nelem(buf)-i);
 }
 
 void
@@ -325,26 +350,26 @@ runtime·printpointer(void *p)
 void
 runtime·printstring(String v)
 {
-	extern int32 runtime·maxstring;
+	extern uint32 runtime·maxstring;
 
 	if(v.len > runtime·maxstring) {
-		runtime·write(2, "[invalid string]", 16);
+		gwrite("[string too long]", 17);
 		return;
 	}
 	if(v.len > 0)
-		runtime·write(2, v.str, v.len);
+		gwrite(v.str, v.len);
 }
 
 void
 runtime·printsp(void)
 {
-	runtime·write(2, " ", 1);
+	gwrite(" ", 1);
 }
 
 void
 runtime·printnl(void)
 {
-	runtime·write(2, "\n", 1);
+	gwrite("\n", 1);
 }
 
 void
@@ -353,4 +378,4 @@ runtime·typestring(Eface e, String s)
 	s = *e.type->string;
 	FLUSH(&s);
 }
-	
+

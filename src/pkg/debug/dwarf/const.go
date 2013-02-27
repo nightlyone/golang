@@ -178,7 +178,7 @@ func (a Attr) GoString() string {
 			return "dwarf.Attr" + s
 		}
 	}
-	return "dwarf.Attr(" + strconv.Itoa64(int64(a)) + ")"
+	return "dwarf.Attr(" + strconv.FormatInt(int64(a), 10) + ")"
 }
 
 // A format is a DWARF data encoding format.
@@ -207,6 +207,7 @@ const (
 	formRef8        format = 0x14
 	formRefUdata    format = 0x15
 	formIndirect    format = 0x16
+	formFlagPresent format = 0x19
 )
 
 // A Tag is the classification (the type) of an Entry.
@@ -347,7 +348,7 @@ func (t Tag) GoString() string {
 			return "dwarf.Tag" + s
 		}
 	}
-	return "dwarf.Tag(" + strconv.Itoa64(int64(t)) + ")"
+	return "dwarf.Tag(" + strconv.FormatInt(int64(t), 10) + ")"
 }
 
 // Location expression operators.

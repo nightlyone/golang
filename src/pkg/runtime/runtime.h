@@ -19,9 +19,13 @@ typedef	double			float64;
 #ifdef _64BIT
 typedef	uint64		uintptr;
 typedef	int64		intptr;
+typedef	int64		intgo; // Go's int
+typedef	uint64		uintgo; // Go's uint
 #else
 typedef	uint32		uintptr;
-typedef int32		intptr;
+typedef	int32		intptr;
+typedef	int32		intgo; // Go's int
+typedef	uint32		uintgo; // Go's uint
 #endif
 
 /*
@@ -43,45 +47,58 @@ typedef int32		intptr;
  */
 typedef	uint8			bool;
 typedef	uint8			byte;
-typedef	struct	Alg		Alg;
 typedef	struct	Func		Func;
 typedef	struct	G		G;
 typedef	struct	Gobuf		Gobuf;
-typedef	struct	Lock		Lock;
+typedef	union	Lock		Lock;
 typedef	struct	M		M;
+typedef struct	P		P;
 typedef	struct	Mem		Mem;
 typedef	union	Note		Note;
 typedef	struct	Slice		Slice;
 typedef	struct	Stktop		Stktop;
 typedef	struct	String		String;
-typedef	struct	Usema		Usema;
+typedef	struct	FuncVal		FuncVal;
 typedef	struct	SigTab		SigTab;
 typedef	struct	MCache		MCache;
+typedef	struct	FixAlloc	FixAlloc;
 typedef	struct	Iface		Iface;
 typedef	struct	Itab		Itab;
+typedef	struct	InterfaceType	InterfaceType;
 typedef	struct	Eface		Eface;
 typedef	struct	Type		Type;
+typedef	struct	ChanType		ChanType;
+typedef	struct	MapType		MapType;
 typedef	struct	Defer		Defer;
+typedef	struct	DeferChunk	DeferChunk;
 typedef	struct	Panic		Panic;
 typedef	struct	Hmap		Hmap;
 typedef	struct	Hchan		Hchan;
 typedef	struct	Complex64	Complex64;
 typedef	struct	Complex128	Complex128;
+typedef	struct	WinCall		WinCall;
+typedef	struct	SEH		SEH;
+typedef	struct	Timers		Timers;
+typedef	struct	Timer		Timer;
+typedef	struct	GCStats		GCStats;
+typedef	struct	LFNode		LFNode;
+typedef	struct	ParFor		ParFor;
+typedef	struct	ParForThread	ParForThread;
+typedef	struct	CgoMal		CgoMal;
 
 /*
- * per-cpu declaration.
+ * Per-CPU declaration.
+ *
  * "extern register" is a special storage class implemented by 6c, 8c, etc.
- * on machines with lots of registers, it allocates a register that will not be
- * used in generated code.  on the x86, it allocates a slot indexed by a
- * segment register.
+ * On the ARM, it is an actual register; elsewhere it is a slot in thread-
+ * local storage indexed by a segment register. See zasmhdr in
+ * src/cmd/dist/buildruntime.c for details, and be aware that the linker may
+ * make further OS-specific changes to the compiler's output. For example,
+ * 6l/linux rewrites 0(GS) as -16(FS).
  *
- * amd64: allocated downwards from R15
- * x86: allocated upwards from 0(GS)
- * arm: allocated downwards from R10
- *
- * every C file linked into a Go program must include runtime.h
- * so that the C compiler knows to avoid other uses of these registers.
- * the Go compilers know to avoid them.
+ * Every C file linked into a Go program must include runtime.h so that the
+ * C compiler (6c, 8c, etc.) knows to avoid other uses of these dedicated
+ * registers. The Go compiler (6g, 8g, etc.) knows to avoid them.
  */
 extern	register	G*	g;
 extern	register	M*	m;
@@ -103,45 +120,46 @@ enum
 	Gwaiting,
 	Gmoribund,
 	Gdead,
-	Grecovery,
 };
 enum
 {
 	true	= 1,
 	false	= 0,
 };
+enum
+{
+	PtrSize = sizeof(void*),
+};
+enum
+{
+	// Per-M stack segment cache size.
+	StackCacheSize = 32,
+	// Global <-> per-M stack segment cache transfer batch size.
+	StackCacheBatch = 16,
+};
 
 /*
  * structures
  */
-struct	Lock
+union	Lock
 {
-	uint32	key;
-#ifdef __WINDOWS__
-	void*	event;
-#else
-	uint32	sema;	// for OS X
-#endif
-};
-struct	Usema
-{
-	uint32	u;
-	uint32	k;
+	uint32	key;	// futex-based impl
+	M*	waitm;	// linked list of waiting M's (sema-based impl)
 };
 union	Note
 {
-	struct {	// Linux
-		Lock	lock;
-	};
-	struct {	// OS X
-		int32	wakeup;
-		Usema	sema;
-	};
+	uint32	key;	// futex-based impl
+	M*	waitm;	// waiting M (sema-based impl)
 };
 struct String
 {
 	byte*	str;
-	int32	len;
+	intgo	len;
+};
+struct FuncVal
+{
+	void	(*fn)(void);
+	// variable-size, fn-specific data here
 };
 struct Iface
 {
@@ -167,39 +185,63 @@ struct Complex128
 struct	Slice
 {				// must not move anything
 	byte*	array;		// actual data
-	uint32	len;		// number of elements
-	uint32	cap;		// allocated number of elements
+	uintgo	len;		// number of elements
+	uintgo	cap;		// allocated number of elements
 };
 struct	Gobuf
 {
 	// The offsets of these fields are known to (hard-coded in) libmach.
-	byte*	sp;
+	uintptr	sp;
 	byte*	pc;
 	G*	g;
 };
+struct	GCStats
+{
+	// the struct must consist of only uint64's,
+	// because it is casted to uint64[].
+	uint64	nhandoff;
+	uint64	nhandoffcnt;
+	uint64	nprocyield;
+	uint64	nosyield;
+	uint64	nsleep;
+};
 struct	G
 {
-	byte*	stackguard;	// cannot move - also known to linker, libmach, libcgo
-	byte*	stackbase;	// cannot move - also known to libmach, libcgo
+	uintptr	stackguard;	// cannot move - also known to linker, libmach, runtime/cgo
+	uintptr	stackbase;	// cannot move - also known to libmach, runtime/cgo
 	Defer*	defer;
 	Panic*	panic;
 	Gobuf	sched;
-	byte*	stack0;
-	byte*	entry;		// initial function
+	uintptr	gcstack;		// if status==Gsyscall, gcstack = stackbase to use during gc
+	uintptr	gcsp;		// if status==Gsyscall, gcsp = sched.sp to use during gc
+	uintptr	gcguard;		// if status==Gsyscall, gcguard = stackguard to use during gc
+	uintptr	stack0;
+	FuncVal*	fnstart;		// initial function
 	G*	alllink;	// on allg
 	void*	param;		// passed parameter on wakeup
 	int16	status;
-	int32	goid;
+	int64	goid;
 	uint32	selgen;		// valid sudog pointer
+	int8*	waitreason;	// if status==Gwaiting
 	G*	schedlink;
 	bool	readyonstop;
 	bool	ispanic;
+	bool	issystem;
+	int8	raceignore; // ignore race detection events
 	M*	m;		// for debuggers, but offset not hard-coded
 	M*	lockedm;
+	M*	idlem;
 	int32	sig;
+	int32	writenbuf;
+	byte*	writebuf;
+	DeferChunk	*dchunk;
+	DeferChunk	*dchunknext;
 	uintptr	sigcode0;
 	uintptr	sigcode1;
 	uintptr	sigpc;
+	uintptr	gopc;	// pc of go statement that created this goroutine
+	uintptr	racectx;
+	uintptr	end[];
 };
 struct	M
 {
@@ -216,28 +258,89 @@ struct	M
 	uint64	procid;		// for debuggers, but offset not hard-coded
 	G*	gsignal;	// signal-handling G
 	uint32	tls[8];		// thread-local storage (for 386 extern register)
-	Gobuf	sched;	// scheduling stack
 	G*	curg;		// current running goroutine
 	int32	id;
 	int32	mallocing;
+	int32	throwing;
 	int32	gcing;
 	int32	locks;
 	int32	nomemprof;
 	int32	waitnextg;
+	int32	dying;
+	int32	profilehz;
+	int32	helpgc;
+	uint32	fastrand;
+	uint64	ncgocall;	// number of cgo calls in total
+	int32	ncgo;		// number of cgo calls currently in progress
+	CgoMal*	cgomal;
 	Note	havenextg;
 	G*	nextg;
 	M*	alllink;	// on allm
 	M*	schedlink;
 	uint32	machport;	// Return address for Mach IPC (OS X)
 	MCache	*mcache;
+	int32	stackinuse;
+	uint32	stackcachepos;
+	uint32	stackcachecnt;
+	void*	stackcache[StackCacheSize];
 	G*	lockedg;
+	G*	idleg;
+	uintptr	createstack[32];	// Stack that created this thread.
 	uint32	freglo[16];	// D[i] lsb and F[i]
 	uint32	freghi[16];	// D[i] msb and F[i+16]
 	uint32	fflag;		// floating point compare flags
-#ifdef __WINDOWS__
-	void*	sehframe;
+	uint32	locked;	// tracking for LockOSThread
+	M*	nextwaitm;	// next M waiting for lock
+	uintptr	waitsema;	// semaphore for parking on locks
+	uint32	waitsemacount;
+	uint32	waitsemalock;
+	GCStats	gcstats;
+	bool	racecall;
+	bool	needextram;
+	void*	racepc;
+	uint32	moreframesize_minalloc;
+
+	uintptr	settype_buf[1024];
+	uintptr	settype_bufsize;
+
+#ifdef GOOS_windows
+	void*	thread;		// thread handle
 #endif
+#ifdef GOOS_plan9
+	int8*		notesig;
+#endif
+	SEH*	seh;
+	uintptr	end[];
 };
+
+struct P
+{
+	Lock;
+
+	P*	link;
+
+	// Queue of runnable goroutines.
+	G**	runq;
+	int32	runqhead;
+	int32	runqtail;
+	int32	runqsize;
+
+	// Available G's (status == Gdead)
+	G*	gfree;
+	int32	gfreecnt;
+
+	byte	pad[64];
+};
+
+// The m->locked word holds a single bit saying whether
+// external calls to LockOSThread are in effect, and then a counter
+// of the internal nesting depth of lockOSThread / unlockOSThread.
+enum
+{
+	LockExternal = 1,
+	LockInternal = 2,
+};
+
 struct	Stktop
 {
 	// The offsets of these fields are known to (hard-coded in) libmach.
@@ -250,13 +353,6 @@ struct	Stktop
 	uintptr	free;	// if free>0, call stackfree using free as size
 	bool	panic;	// is this frame the top of a panic?
 };
-struct	Alg
-{
-	uintptr	(*hash)(uint32, void*);
-	uint32	(*equal)(uint32, void*, void*);
-	void	(*print)(uint32, void*);
-	void	(*copy)(uint32, void*, void*);
-};
 struct	SigTab
 {
 	int32	flags;
@@ -264,11 +360,11 @@ struct	SigTab
 };
 enum
 {
-	SigCatch = 1<<0,
-	SigIgnore = 1<<1,
-	SigRestart = 1<<2,
-	SigQueue = 1<<3,
-	SigPanic = 1<<4,
+	SigNotify = 1<<0,	// let signal.Notify have signal, even if from kernel
+	SigKill = 1<<1,		// if signal.Notify doesn't take it, exit quietly
+	SigThrow = 1<<2,	// if signal.Notify doesn't take it, exit loudly
+	SigPanic = 1<<3,	// if the signal is from the kernel, panic
+	SigDefault = 1<<4,	// if the signal isn't explicitly requested, don't monitor it
 };
 
 // NOTE(rsc): keep in sync with extern.go:/type.Func.
@@ -283,11 +379,37 @@ struct	Func
 	uintptr	pc0;	// starting pc, ln for table
 	int32	ln0;
 	int32	frame;	// stack frame size
-	int32	args;	// number of 32-bit in/out args
-	int32	locals;	// number of 32-bit locals
+	int32	args;	// in/out args size
+	int32	locals;	// locals size
 };
 
-#ifdef __WINDOWS__
+// layout of Itab known to compilers
+struct	Itab
+{
+	InterfaceType*	inter;
+	Type*	type;
+	Itab*	link;
+	int32	bad;
+	int32	unused;
+	void	(*fun[])(void);
+};
+
+struct	WinCall
+{
+	void	(*fn)(void*);
+	uintptr	n;	// number of parameters
+	void*	args;	// parameters
+	uintptr	r1;	// return values
+	uintptr	r2;
+	uintptr	err;	// error number
+};
+struct	SEH
+{
+	void*	prev;
+	void*	handler;
+};
+
+#ifdef GOOS_windows
 enum {
    Windows = 1
 };
@@ -297,33 +419,154 @@ enum {
 };
 #endif
 
+struct	Timers
+{
+	Lock;
+	G	*timerproc;
+	bool		sleeping;
+	bool		rescheduling;
+	Note	waitnote;
+	Timer	**t;
+	int32	len;
+	int32	cap;
+};
+
+// Package time knows the layout of this structure.
+// If this struct changes, adjust ../time/sleep.go:/runtimeTimer.
+struct	Timer
+{
+	int32	i;		// heap index
+
+	// Timer wakes up at when, and then at when+period, ... (period > 0 only)
+	// each time calling f(now, arg) in the timer goroutine, so f must be
+	// a well-behaved function and not block.
+	int64	when;
+	int64	period;
+	FuncVal	*fv;
+	Eface	arg;
+};
+
+// Lock-free stack node.
+struct LFNode
+{
+	LFNode	*next;
+	uintptr	pushcnt;
+};
+
+// Parallel for descriptor.
+struct ParFor
+{
+	void (*body)(ParFor*, uint32);	// executed for each element
+	uint32 done;			// number of idle threads
+	uint32 nthr;			// total number of threads
+	uint32 nthrmax;			// maximum number of threads
+	uint32 thrseq;			// thread id sequencer
+	uint32 cnt;			// iteration space [0, cnt)
+	void *ctx;			// arbitrary user context
+	bool wait;			// if true, wait while all threads finish processing,
+					// otherwise parfor may return while other threads are still working
+	ParForThread *thr;		// array of thread descriptors
+	// stats
+	uint64 nsteal;
+	uint64 nstealcnt;
+	uint64 nprocyield;
+	uint64 nosyield;
+	uint64 nsleep;
+};
+
+// Track memory allocated by code not written in Go during a cgo call,
+// so that the garbage collector can see them.
+struct CgoMal
+{
+	CgoMal	*next;
+	byte	*alloc;
+};
+
 /*
  * defined macros
- *    you need super-goru privilege
+ *    you need super-gopher-guru privilege
  *    to add this list.
  */
 #define	nelem(x)	(sizeof(x)/sizeof((x)[0]))
 #define	nil		((void*)0)
 #define	offsetof(s,m)	(uint32)(&(((s*)0)->m))
+#define	ROUND(x, n)	(((x)+(n)-1)&~((n)-1)) /* all-caps to mark as macro: it evaluates n twice */
 
 /*
  * known to compiler
  */
-enum
-{
-	AMEM,
-	ANOEQ,
-	ASTRING,
-	AINTER,
-	ANILINTER,
-	AMEMWORD,
-	Amax
-};
-
-
 enum {
 	Structrnd = sizeof(uintptr)
 };
+
+/*
+ * type algorithms - known to compiler
+ */
+enum
+{
+	AMEM,
+	AMEM0,
+	AMEM8,
+	AMEM16,
+	AMEM32,
+	AMEM64,
+	AMEM128,
+	ANOEQ,
+	ANOEQ0,
+	ANOEQ8,
+	ANOEQ16,
+	ANOEQ32,
+	ANOEQ64,
+	ANOEQ128,
+	ASTRING,
+	AINTER,
+	ANILINTER,
+	ASLICE,
+	AFLOAT32,
+	AFLOAT64,
+	ACPLX64,
+	ACPLX128,
+	Amax
+};
+typedef	struct	Alg		Alg;
+struct	Alg
+{
+	void	(*hash)(uintptr*, uintptr, void*);
+	void	(*equal)(bool*, uintptr, void*, void*);
+	void	(*print)(uintptr, void*);
+	void	(*copy)(uintptr, void*, void*);
+};
+
+extern	Alg	runtime·algarray[Amax];
+
+void	runtime·memhash(uintptr*, uintptr, void*);
+void	runtime·nohash(uintptr*, uintptr, void*);
+void	runtime·strhash(uintptr*, uintptr, void*);
+void	runtime·interhash(uintptr*, uintptr, void*);
+void	runtime·nilinterhash(uintptr*, uintptr, void*);
+
+void	runtime·memequal(bool*, uintptr, void*, void*);
+void	runtime·noequal(bool*, uintptr, void*, void*);
+void	runtime·strequal(bool*, uintptr, void*, void*);
+void	runtime·interequal(bool*, uintptr, void*, void*);
+void	runtime·nilinterequal(bool*, uintptr, void*, void*);
+
+void	runtime·memprint(uintptr, void*);
+void	runtime·strprint(uintptr, void*);
+void	runtime·interprint(uintptr, void*);
+void	runtime·nilinterprint(uintptr, void*);
+
+void	runtime·memcopy(uintptr, void*, void*);
+void	runtime·memcopy8(uintptr, void*, void*);
+void	runtime·memcopy16(uintptr, void*, void*);
+void	runtime·memcopy32(uintptr, void*, void*);
+void	runtime·memcopy64(uintptr, void*, void*);
+void	runtime·memcopy128(uintptr, void*, void*);
+void	runtime·memcopy(uintptr, void*, void*);
+void	runtime·strcopy(uintptr, void*, void*);
+void	runtime·algslicecopy(uintptr, void*, void*);
+void	runtime·intercopy(uintptr, void*, void*);
+void	runtime·nilintercopy(uintptr, void*, void*);
 
 /*
  * deferred subroutine calls
@@ -331,11 +574,19 @@ enum {
 struct Defer
 {
 	int32	siz;
+	bool	special; // not part of defer frame
+	bool	free; // if special, free when done
 	byte*	argp;  // where args were copied from
 	byte*	pc;
-	byte*	fn;
+	FuncVal*	fn;
 	Defer*	link;
-	byte	args[8];	// padded to actual size
+	void*	args[1];	// padded to actual size
+};
+
+struct DeferChunk
+{
+	DeferChunk	*prev;
+	uintptr	off;
 };
 
 /*
@@ -352,21 +603,27 @@ struct Panic
 /*
  * external data
  */
-extern	Alg	runtime·algarray[Amax];
 extern	String	runtime·emptystring;
-G*	runtime·allg;
-M*	runtime·allm;
-int32	runtime·goidgen;
+extern	uintptr runtime·zerobase;
+extern	G*	runtime·allg;
+extern	G*	runtime·lastg;
+extern	M*	runtime·allm;
 extern	int32	runtime·gomaxprocs;
-extern	int32	runtime·panicking;
+extern	bool	runtime·singleproc;
+extern	uint32	runtime·panicking;
 extern	int32	runtime·gcwaiting;		// gc is waiting to run
-int8*	runtime·goos;
+extern	int8*	runtime·goos;
+extern	int32	runtime·ncpu;
 extern	bool	runtime·iscgo;
+extern 	void	(*runtime·sysargs)(int32, uint8**);
+extern	uint32	runtime·maxstring;
+extern	uint32	runtime·Hchansize;
 
 /*
  * common functions and data
  */
 int32	runtime·strcmp(byte*, byte*);
+byte*	runtime·strstr(byte*, byte*);
 int32	runtime·findnull(byte*);
 int32	runtime·findnullw(uint16*);
 void	runtime·dump(byte*, int32);
@@ -379,8 +636,9 @@ int32	runtime·charntorune(int32*, uint8*, int32);
 #define FLUSH(x)	USED(x)
 
 void	runtime·gogo(Gobuf*, uintptr);
-void	runtime·gogocall(Gobuf*, void(*)(void));
-uintptr	runtime·gosave(Gobuf*);
+void	runtime·gogocall(Gobuf*, void(*)(void), uintptr);
+void	runtime·gogocallfn(Gobuf*, FuncVal*);
+void	runtime·gosave(Gobuf*);
 void	runtime·lessstack(void);
 void	runtime·goargs(void);
 void	runtime·goenvs(void);
@@ -388,73 +646,103 @@ void	runtime·goenvs_unix(void);
 void*	runtime·getu(void);
 void	runtime·throw(int8*);
 void	runtime·panicstring(int8*);
-uint32	runtime·rnd(uint32, uint32);
 void	runtime·prints(int8*);
 void	runtime·printf(int8*, ...);
 byte*	runtime·mchr(byte*, byte, byte*);
-void	runtime·mcpy(byte*, byte*, uint32);
 int32	runtime·mcmp(byte*, byte*, uint32);
 void	runtime·memmove(void*, void*, uint32);
 void*	runtime·mal(uintptr);
 String	runtime·catstring(String, String);
 String	runtime·gostring(byte*);
-String  runtime·gostringn(byte*, int32);
+String  runtime·gostringn(byte*, intgo);
+Slice	runtime·gobytes(byte*, intgo);
 String	runtime·gostringnocopy(byte*);
 String	runtime·gostringw(uint16*);
-void	runtime·initsig(int32);
+void	runtime·initsig(void);
+void	runtime·sigenable(uint32 sig);
 int32	runtime·gotraceback(void);
+void	runtime·goroutineheader(G*);
 void	runtime·traceback(uint8 *pc, uint8 *sp, uint8 *lr, G* gp);
 void	runtime·tracebackothers(G*);
 int32	runtime·write(int32, void*, int32);
+int32	runtime·mincore(void*, uintptr, byte*);
 bool	runtime·cas(uint32*, uint32, uint32);
+bool	runtime·cas64(uint64*, uint64*, uint64);
 bool	runtime·casp(void**, void*, void*);
+// Don't confuse with XADD x86 instruction,
+// this one is actually 'addx', that is, add-and-fetch.
 uint32	runtime·xadd(uint32 volatile*, int32);
-void	runtime·jmpdefer(byte*, void*);
+uint64	runtime·xadd64(uint64 volatile*, int64);
+uint32	runtime·xchg(uint32 volatile*, uint32);
+uint32	runtime·atomicload(uint32 volatile*);
+void	runtime·atomicstore(uint32 volatile*, uint32);
+void	runtime·atomicstore64(uint64 volatile*, uint64);
+uint64	runtime·atomicload64(uint64 volatile*);
+void*	runtime·atomicloadp(void* volatile*);
+void	runtime·atomicstorep(void* volatile*, void*);
+void	runtime·jmpdefer(FuncVal*, void*);
 void	runtime·exit1(int32);
 void	runtime·ready(G*);
 byte*	runtime·getenv(int8*);
 int32	runtime·atoi(byte*);
-void	runtime·newosproc(M *m, G *g, void *stk, void (*fn)(void));
-void	runtime·signalstack(byte*, int32);
+void	runtime·newosproc(M *mp, G *gp, void *stk, void (*fn)(void));
 G*	runtime·malg(int32);
+void	runtime·asminit(void);
+void	runtime·mpreinit(M*);
 void	runtime·minit(void);
+void	runtime·unminit(void);
+void	runtime·signalstack(byte*, int32);
 Func*	runtime·findfunc(uintptr);
 int32	runtime·funcline(Func*, uintptr);
 void*	runtime·stackalloc(uint32);
 void	runtime·stackfree(void*, uintptr);
 MCache*	runtime·allocmcache(void);
+void	runtime·freemcache(MCache*);
 void	runtime·mallocinit(void);
+void	runtime·mprofinit(void);
 bool	runtime·ifaceeq_c(Iface, Iface);
 bool	runtime·efaceeq_c(Eface, Eface);
-uintptr	runtime·ifacehash(Iface);
-uintptr	runtime·efacehash(Eface);
-uintptr	runtime·nohash(uint32, void*);
-uint32	runtime·noequal(uint32, void*, void*);
+uintptr	runtime·ifacehash(Iface, uintptr);
+uintptr	runtime·efacehash(Eface, uintptr);
 void*	runtime·malloc(uintptr size);
 void	runtime·free(void *v);
-void	runtime·addfinalizer(void*, void(*fn)(void*), int32);
-void	runtime·walkfintab(void (*fn)(void*));
+bool	runtime·addfinalizer(void*, FuncVal *fn, uintptr);
 void	runtime·runpanic(Panic*);
 void*	runtime·getcallersp(void*);
 int32	runtime·mcount(void);
+int32	runtime·gcount(void);
+void	runtime·mcall(void(*)(G*));
+uint32	runtime·fastrand1(void);
 
+void runtime·setmg(M*, G*);
+void runtime·newextram(void);
 void	runtime·exit(int32);
 void	runtime·breakpoint(void);
 void	runtime·gosched(void);
+void	runtime·park(void(*)(Lock*), Lock*, int8*);
+void	runtime·tsleep(int64, int8*);
+M*	runtime·newm(void);
 void	runtime·goexit(void);
-void	runtime·runcgo(void (*fn)(void*), void*);
-void	runtime·runcgocallback(G*, void*, void (*fn)());
+void	runtime·asmcgocall(void (*fn)(void*), void*);
 void	runtime·entersyscall(void);
+void	runtime·entersyscallblock(void);
 void	runtime·exitsyscall(void);
-void	runtime·startcgocallback(G*);
-void	runtime·endcgocallback(G*);
-G*	runtime·newproc1(byte*, byte*, int32, int32);
-void	runtime·siginit(void);
+G*	runtime·newproc1(FuncVal*, byte*, int32, int32, void*);
 bool	runtime·sigsend(int32 sig);
-void	runtime·gettime(int64*, int32*);
 int32	runtime·callers(int32, uintptr*, int32);
+int32	runtime·gentraceback(byte*, byte*, byte*, G*, int32, uintptr*, int32);
 int64	runtime·nanotime(void);
 void	runtime·dopanic(int32);
+void	runtime·startpanic(void);
+void	runtime·unwindstack(G*, byte*);
+void	runtime·sigprof(uint8 *pc, uint8 *sp, uint8 *lr, G *gp);
+void	runtime·resetcpuprofiler(int32);
+void	runtime·setcpuprofilerate(void(*)(uintptr*, int32), int32);
+void	runtime·usleep(uint32);
+int64	runtime·cputicks(void);
+int64	runtime·tickspersecond(void);
+void	runtime·blockevent(int64, int32);
+extern int64 runtime·blockprofilerate;
 
 #pragma	varargck	argpos	runtime·printf	1
 #pragma	varargck	type	"d"	int32
@@ -471,10 +759,9 @@ void	runtime·dopanic(int32);
 #pragma	varargck	type	"s"	uint8*
 #pragma	varargck	type	"S"	String
 
-// TODO(rsc): Remove. These are only temporary,
-// for the mark and sweep collector.
 void	runtime·stoptheworld(void);
 void	runtime·starttheworld(void);
+extern uint32 runtime·worldsema;
 
 /*
  * mutual exclusion locks.  in the uncontended case,
@@ -484,20 +771,61 @@ void	runtime·starttheworld(void);
  */
 void	runtime·lock(Lock*);
 void	runtime·unlock(Lock*);
-void	runtime·destroylock(Lock*);
 
 /*
  * sleep and wakeup on one-time events.
  * before any calls to notesleep or notewakeup,
  * must call noteclear to initialize the Note.
- * then, any number of threads can call notesleep
+ * then, exactly one thread can call notesleep
  * and exactly one thread can call notewakeup (once).
- * once notewakeup has been called, all the notesleeps
- * will return.  future notesleeps will return immediately.
+ * once notewakeup has been called, the notesleep
+ * will return.  future notesleep will return immediately.
+ * subsequent noteclear must be called only after
+ * previous notesleep has returned, e.g. it's disallowed
+ * to call noteclear straight after notewakeup.
+ *
+ * notetsleep is like notesleep but wakes up after
+ * a given number of nanoseconds even if the event
+ * has not yet happened.  if a goroutine uses notetsleep to
+ * wake up early, it must wait to call noteclear until it
+ * can be sure that no other goroutine is calling
+ * notewakeup.
  */
 void	runtime·noteclear(Note*);
 void	runtime·notesleep(Note*);
 void	runtime·notewakeup(Note*);
+void	runtime·notetsleep(Note*, int64);
+
+/*
+ * low-level synchronization for implementing the above
+ */
+uintptr	runtime·semacreate(void);
+int32	runtime·semasleep(int64);
+void	runtime·semawakeup(M*);
+// or
+void	runtime·futexsleep(uint32*, uint32, int64);
+void	runtime·futexwakeup(uint32*, uint32);
+
+/*
+ * Lock-free stack.
+ * Initialize uint64 head to 0, compare with 0 to test for emptiness.
+ * The stack does not keep pointers to nodes,
+ * so they can be garbage collected if there are no other pointers to nodes.
+ */
+void	runtime·lfstackpush(uint64 *head, LFNode *node);
+LFNode*	runtime·lfstackpop(uint64 *head);
+
+/*
+ * Parallel for over [0, n).
+ * body() is executed for each iteration.
+ * nthr - total number of worker threads.
+ * ctx - arbitrary user context.
+ * if wait=true, threads return from parfor() when all work is done;
+ * otherwise, threads can return while other threads are still finishing processing.
+ */
+ParFor*	runtime·parforalloc(uint32 nthrmax);
+void	runtime·parforsetup(ParFor *desc, uint32 nthr, uint32 n, void *ctx, bool wait, void (*body)(ParFor*, uint32));
+void	runtime·parfordo(ParFor *desc);
 
 /*
  * This is consistent across Linux and BSD.
@@ -509,8 +837,12 @@ void	runtime·notewakeup(Note*);
 /*
  * low level C-called
  */
+// for mmap, we only pass the lower 32 bits of file offset to the 
+// assembly routine; the higher bits (if required), should be provided
+// by the assembly routine as 0.
 uint8*	runtime·mmap(byte*, uintptr, int32, int32, int32, uint32);
-void	runtime·munmap(uint8*, uintptr);
+void	runtime·munmap(byte*, uintptr);
+void	runtime·madvise(byte*, uintptr, int32);
 void	runtime·memclr(byte*, uintptr);
 void	runtime·setcallerpc(void*, void*);
 void*	runtime·getcallerpc(void*);
@@ -519,6 +851,7 @@ void*	runtime·getcallerpc(void*);
  * runtime go-called
  */
 void	runtime·printbool(bool);
+void	runtime·printbyte(int8);
 void	runtime·printfloat(float64);
 void	runtime·printint(int64);
 void	runtime·printiface(Iface);
@@ -530,7 +863,7 @@ void	runtime·printuint(uint64);
 void	runtime·printhex(uint64);
 void	runtime·printslice(Slice);
 void	runtime·printcomplex(Complex128);
-void	reflect·call(byte*, byte*, uint32);
+void	reflect·call(FuncVal*, byte*, uint32);
 void	runtime·panic(Eface);
 void	runtime·panicindex(void);
 void	runtime·panicslice(void);
@@ -538,9 +871,8 @@ void	runtime·panicslice(void);
 /*
  * runtime c-called (but written in Go)
  */
-void	runtime·newError(String, Eface*);
 void	runtime·printany(Eface);
-void	runtime·newTypeAssertionError(Type*, Type*, Type*, String*, String*, String*, String*, Eface*);
+void	runtime·newTypeAssertionError(String*, String*, String*, String*, Eface*);
 void	runtime·newErrorString(String, Eface*);
 void	runtime·fadd64c(uint64, uint64, uint64*);
 void	runtime·fsub64c(uint64, uint64, uint64*);
@@ -569,104 +901,48 @@ float64	runtime·ldexp(float64 d, int32 e);
 float64	runtime·modf(float64 d, float64 *ip);
 void	runtime·semacquire(uint32*);
 void	runtime·semrelease(uint32*);
-String	runtime·signame(int32 sig);
 int32	runtime·gomaxprocsfunc(int32 n);
+void	runtime·procyield(uint32);
+void	runtime·osyield(void);
+void	runtime·lockOSThread(void);
+void	runtime·unlockOSThread(void);
 
-void	runtime·mapassign(Hmap*, byte*, byte*);
-void	runtime·mapaccess(Hmap*, byte*, byte*, bool*);
-struct hash_iter*	runtime·newmapiterinit(Hmap*);
+void	runtime·mapassign(MapType*, Hmap*, byte*, byte*);
+void	runtime·mapaccess(MapType*, Hmap*, byte*, byte*, bool*);
 void	runtime·mapiternext(struct hash_iter*);
 bool	runtime·mapiterkey(struct hash_iter*, void*);
 void	runtime·mapiterkeyvalue(struct hash_iter*, void*, void*);
-Hmap*	runtime·makemap_c(Type*, Type*, int64);
+Hmap*	runtime·makemap_c(MapType*, int64);
 
-Hchan*	runtime·makechan_c(Type*, int64);
-void	runtime·chansend(Hchan*, void*, bool*);
-void	runtime·chanrecv(Hchan*, void*, bool*, bool*);
-void	runtime·chanclose(Hchan*);
-bool	runtime·chanclosed(Hchan*);
-int32	runtime·chanlen(Hchan*);
-int32	runtime·chancap(Hchan*);
+Hchan*	runtime·makechan_c(ChanType*, int64);
+void	runtime·chansend(ChanType*, Hchan*, byte*, bool*, void*);
+void	runtime·chanrecv(ChanType*, Hchan*, byte*, bool*, bool*);
+bool	runtime·showframe(Func*, bool);
 
-void	runtime·ifaceE2I(struct InterfaceType*, Eface, Iface*);
+void	runtime·ifaceE2I(InterfaceType*, Eface, Iface*);
 
-/*
- * Stack layout parameters.
- * Known to linkers.
- *
- * The per-goroutine g->stackguard is set to point
- * StackGuard bytes above the bottom of the stack.
- * Each function compares its stack pointer against
- * g->stackguard to check for overflow.  To cut one
- * instruction from the check sequence for functions
- * with tiny frames, the stack is allowed to protrude
- * StackSmall bytes below the stack guard.  Functions
- * with large frames don't bother with the check and
- * always call morestack.  The sequences are
- * (for amd64, others are similar):
- *
- * 	guard = g->stackguard
- * 	frame = function's stack frame size
- * 	argsize = size of function arguments (call + return)
- *
- * 	stack frame size <= StackSmall:
- * 		CMPQ guard, SP
- * 		JHI 3(PC)
- * 		MOVQ m->morearg, $(argsize << 32)
- * 		CALL morestack(SB)
- *
- * 	stack frame size > StackSmall but < StackBig
- * 		LEAQ (frame-StackSmall)(SP), R0
- * 		CMPQ guard, R0
- * 		JHI 3(PC)
- * 		MOVQ m->morearg, $(argsize << 32)
- * 		CALL morestack(SB)
- *
- * 	stack frame size >= StackBig:
- * 		MOVQ m->morearg, $((argsize << 32) | frame)
- * 		CALL morestack(SB)
- *
- * The bottom StackGuard - StackSmall bytes are important:
- * there has to be enough room to execute functions that
- * refuse to check for stack overflow, either because they
- * need to be adjacent to the actual caller's frame (deferproc)
- * or because they handle the imminent stack overflow (morestack).
- *
- * For example, deferproc might call malloc, which does one
- * of the above checks (without allocating a full frame),
- * which might trigger a call to morestack.  This sequence
- * needs to fit in the bottom section of the stack.  On amd64,
- * morestack's frame is 40 bytes, and deferproc's frame is 56 bytes.
- * That fits well within the StackGuard - StackSmall = 128 bytes
- * at the bottom.  There may be other sequences lurking or yet to
- * be written that require more stack.  Morestack checks to make
- * sure the stack has not completely overflowed and should catch
- * such sequences.
- */
+uintptr	runtime·memlimit(void);
+
+// If appropriate, ask the operating system to control whether this
+// thread should receive profiling signals.  This is only necessary on OS X.
+// An operating system should not deliver a profiling signal to a
+// thread that is not actually executing (what good is that?), but that's
+// what OS X prefers to do.  When profiling is turned on, we mask
+// away the profiling signal when threads go to sleep, so that OS X
+// is forced to deliver the signal to a thread that's actually running.
+// This is a no-op on other systems.
+void	runtime·setprof(bool);
+
+// float.c
+extern float64 runtime·nan;
+extern float64 runtime·posinf;
+extern float64 runtime·neginf;
+extern uint64 ·nan;
+extern uint64 ·posinf;
+extern uint64 ·neginf;
+#define ISNAN(f) ((f) != (f))
+
 enum
 {
-#ifdef __WINDOWS__
-	// need enough room in guard area for exception handler.
-	// use larger stacks to compensate for larger stack guard.
-	StackSmall = 256,
-	StackGuard = 2048,
-	StackBig   = 8192,
-	StackExtra = StackGuard,
-#else
-	// byte offset of stack guard (g->stackguard) above bottom of stack.
-	StackGuard = 256,
-
-	// checked frames are allowed to protrude below the guard by
-	// this many bytes.  this saves an instruction in the checking
-	// sequence when the stack frame is tiny.
-	StackSmall = 128,
-
-	// extra space in the frame (beyond the function for which
-	// the frame is allocated) is assumed not to be much bigger
-	// than this amount.  it may not be used efficiently if it is.
-	StackBig = 4096,
-
-	// extra room over frame size when allocating a stack.
-	StackExtra = 1024,
-#endif
+	UseSpanType = 1,
 };

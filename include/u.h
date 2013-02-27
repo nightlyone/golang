@@ -69,6 +69,7 @@ extern "C" {
 #include <math.h>
 #include <ctype.h>	/* for tolower */
 #include <signal.h>
+#include <time.h>
 
 /*
  * OS-specific crap
@@ -192,6 +193,8 @@ typedef u64int uint64;
 #undef _NEEDUSHORT
 #undef _NEEDUINT
 #undef _NEEDULONG
+
+#define getcallerpc(x)	__builtin_return_address(0)
 
 #ifndef SIGBUS
 #define SIGBUS SIGSEGV /* close enough */

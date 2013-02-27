@@ -33,6 +33,21 @@
 void
 swit1(C1 *q, int nc, int32 def, Node *n)
 {
+	Node nreg;
+
+	regalloc(&nreg, n, Z);
+	if(typev[n->type->etype])
+		nreg.type = types[TVLONG];
+	else
+		nreg.type = types[TLONG];
+	cgen(n, &nreg);
+	swit2(q, nc, def, &nreg);
+	regfree(&nreg);
+}
+
+void
+swit2(C1 *q, int nc, int32 def, Node *n)
+{
 	C1 *r;
 	int i;
 	Prog *sp;
@@ -58,12 +73,12 @@ swit1(C1 *q, int nc, int32 def, Node *n)
 	gbranch(OGOTO);
 	p->as = AJEQ;
 	patch(p, r->label);
-	swit1(q, i, def, n);
+	swit2(q, i, def, n);
 
 	if(debug['W'])
 		print("case < %.8llux\n", r->val);
 	patch(sp, pc);
-	swit1(r+1, nc-i-1, def, n);
+	swit2(r+1, nc-i-1, def, n);
 }
 
 void
@@ -238,12 +253,16 @@ outcode(void)
 		Bprint(&b, "\n");
 		Bprint(&b, "$$  // exports\n\n");
 		Bprint(&b, "$$  // local types\n\n");
-		Bprint(&b, "$$  // dynimport\n", thestring);
+		Bprint(&b, "$$  // dynimport\n");
 		for(i=0; i<ndynimp; i++)
 			Bprint(&b, "dynimport %s %s %s\n", dynimp[i].local, dynimp[i].remote, dynimp[i].path);
-		Bprint(&b, "\n$$  // dynexport\n", thestring);
+		Bprint(&b, "\n$$  // dynexport\n");
 		for(i=0; i<ndynexp; i++)
 			Bprint(&b, "dynexport %s %s\n", dynexp[i].local, dynexp[i].remote);
+		Bprint(&b, "\n$$  // dynlinker\n");
+		if(dynlinker != nil) {
+			Bprint(&b, "dynlinker %s\n", dynlinker);
+		}
 		Bprint(&b, "\n$$\n\n");
 	}
 	Bprint(&b, "!\n");
@@ -324,24 +343,46 @@ outhist(Biobuf *b)
 	char *p, *q, *op, c;
 	Prog pg;
 	int n;
+	char *tofree;
+	static int first = 1;
+	static char *goroot, *goroot_final;
 
+	if(first) {
+		// Decide whether we need to rewrite paths from $GOROOT to $GOROOT_FINAL.
+		first = 0;
+		goroot = getenv("GOROOT");
+		goroot_final = getenv("GOROOT_FINAL");
+		if(goroot == nil)
+			goroot = "";
+		if(goroot_final == nil)
+			goroot_final = goroot;
+		if(strcmp(goroot, goroot_final) == 0) {
+			goroot = nil;
+			goroot_final = nil;
+		}
+	}
+
+	tofree = nil;
 	pg = zprog;
 	pg.as = AHISTORY;
 	c = pathchar();
 	for(h = hist; h != H; h = h->link) {
 		p = h->name;
-		op = 0;
-		/* on windows skip drive specifier in pathname */
-		if(systemtype(Windows) && p && p[1] == ':'){
-			p += 2;
-			c = *p;
+		if(p != nil && goroot != nil) {
+			n = strlen(goroot);
+			if(strncmp(p, goroot, strlen(goroot)) == 0 && p[n] == '/') {
+				tofree = smprint("%s%s", goroot_final, p+n);
+				p = tofree;
+			}
 		}
-		if(p && p[0] != c && h->offset == 0 && pathname){
-			/* on windows skip drive specifier in pathname */
+		op = 0;
+		if(systemtype(Windows) && p && p[1] == ':'){
+			c = p[2];
+		} else if(p && p[0] != c && h->offset == 0 && pathname){
 			if(systemtype(Windows) && pathname[1] == ':') {
 				op = p;
-				p = pathname+2;
-				c = *p;
+				p = pathname;
+				c = p[2];
 			} else if(pathname[0] == c){
 				op = p;
 				p = pathname;
@@ -389,6 +430,11 @@ outhist(Biobuf *b)
 		Bputc(b, pg.lineno>>24);
 		zaddr(b, &pg.from, 0);
 		zaddr(b, &pg.to, 0);
+
+		if(tofree) {
+			free(tofree);
+			tofree = nil;
+		}
 	}
 }
 
@@ -580,8 +626,8 @@ align(int32 i, Type *t, int op, int32 *maxalign)
 int32
 maxround(int32 max, int32 v)
 {
-	v += SZ_VLONG-1;
+	v = xround(v, SZ_VLONG);
 	if(v > max)
-		max = xround(v, SZ_VLONG);
+		return v;
 	return max;
 }

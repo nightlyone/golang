@@ -1,4 +1,4 @@
-// $G $D/$F.go && $L $F.$A && ./$A.out || echo BUG: bug196
+// run
 
 // Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
@@ -13,12 +13,11 @@ var i int
 func multi() (int, int) { return 1, 2 }
 
 func xxx() {
-	//TODO(rsc): uncomment when this syntax is valid for receive+check closed
-	//	var c chan int
-	//	x, ok := <-c
+	var c chan int
+	x, ok := <-c
 
 	var m map[int]int
-	x, ok := m[1]
+	x, ok = m[1]
 
 	var i interface{}
 	var xx int

@@ -65,7 +65,7 @@ Pconv(Fmt *fp)
 	switch(a) {
 	default:
 		fmtprint(fp, "(%d)", p->line);
-		if(p->reg == NREG)
+		if(p->reg == NREG && p->as != AGLOBL)
 			fmtprint(fp, "	%A%C	%D,%D",
 				a, p->scond, &p->from, &p->to);
 		else
@@ -98,6 +98,10 @@ Pconv(Fmt *fp)
 		fmtprint(fp, "(%d)	DWORD	%D %D", p->line, &p->from, &p->to);
 		break;
 	}
+	
+	if(p->spadj)
+		fmtprint(fp, "  (spadj%+d)", p->spadj);
+
 	return 0;
 }
 
@@ -157,7 +161,7 @@ int
 Dconv(Fmt *fp)
 {
 	char str[STRINGSZ];
-	char *op;
+	const char *op;
 	Adr *a;
 	int32 v;
 
@@ -187,7 +191,7 @@ Dconv(Fmt *fp)
 
 	case D_SHIFT:
 		v = a->offset;
-		op = "<<>>->@>" + (((v>>5) & 3) << 1);
+		op = &"<<>>->@>"[(((v>>5) & 3) << 1)];
 		if(v & (1<<4))
 			snprint(str, sizeof str, "R%d%c%cR%d", v&15, op[0], op[1], (v>>8)&15);
 		else
@@ -217,6 +221,12 @@ Dconv(Fmt *fp)
 
 	case D_REGREG:
 		snprint(str, sizeof str, "(R%d,R%d)", a->reg, (int)a->offset);
+		if(a->name != D_NONE || a->sym != S)
+			snprint(str, sizeof str, "%N(R%d)(REG)", a, a->reg);
+		break;
+
+	case D_REGREG2:
+		snprint(str, sizeof str, "R%d,R%d", a->reg, (int)a->offset);
 		if(a->name != D_NONE || a->sym != S)
 			snprint(str, sizeof str, "%N(R%d)(REG)", a, a->reg);
 		break;
@@ -408,7 +418,6 @@ static char*
 cnames[] =
 {
 	[C_ADDR]	= "C_ADDR",
-	[C_BCON]	= "C_BCON",
 	[C_FAUTO]	= "C_FAUTO",
 	[C_ZFCON]	= "C_SFCON",
 	[C_SFCON]	= "C_SFCON",
@@ -416,11 +425,7 @@ cnames[] =
 	[C_FCR]		= "C_FCR",
 	[C_FOREG]	= "C_FOREG",
 	[C_FREG]	= "C_FREG",
-	[C_GACON]	= "C_GACON",
-	[C_GBRA]	= "C_GBRA",
-	[C_GCON]	= "C_GCON",
 	[C_GOK]		= "C_GOK",
-	[C_GOREG]	= "C_GOREG",
 	[C_HAUTO]	= "C_HAUTO",
 	[C_HFAUTO]	= "C_HFAUTO",
 	[C_HFOREG]	= "C_HFOREG",
@@ -430,18 +435,18 @@ cnames[] =
 	[C_LAUTO]	= "C_LAUTO",
 	[C_LBRA]	= "C_LBRA",
 	[C_LCON]	= "C_LCON",
+	[C_LCONADDR]	= "C_LCONADDR",
 	[C_LOREG]	= "C_LOREG",
 	[C_NCON]	= "C_NCON",
 	[C_NONE]	= "C_NONE",
-	[C_OFFPC]	= "C_OFFPC",
 	[C_PC]		= "C_PC",
 	[C_PSR]		= "C_PSR",
 	[C_RACON]	= "C_RACON",
 	[C_RCON]	= "C_RCON",
 	[C_REG]		= "C_REG",
 	[C_REGREG]	= "C_REGREG",
+	[C_REGREG2]	= "C_REGREG2",
 	[C_ROREG]	= "C_ROREG",
-	[C_SACON]	= "C_SACON",
 	[C_SAUTO]	= "C_SAUTO",
 	[C_SBRA]	= "C_SBRA",
 	[C_SCON]	= "C_SCON",

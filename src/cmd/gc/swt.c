@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include	<u.h>
+#include	<libc.h>
 #include	"go.h"
 
 enum
@@ -115,12 +117,15 @@ exprcmp(Case *c1, Case *c2)
 	n1 = c1->node->left;
 	n2 = c2->node->left;
 
+	// sort by type (for switches on interface)
 	ct = n1->val.ctype;
-	if(ct != n2->val.ctype) {
-		// invalid program, but return a sort
-		// order so that we can give a better
-		// error later.
+	if(ct != n2->val.ctype)
 		return ct - n2->val.ctype;
+	if(!eqtype(n1->type, n2->type)) {
+		if(n1->type->vargen > n2->type->vargen)
+			return +1;
+		else
+			return -1;
 	}
 
 	// sort by constant value
@@ -130,6 +135,7 @@ exprcmp(Case *c1, Case *c2)
 		n = mpcmpfltflt(n1->val.u.fval, n2->val.u.fval);
 		break;
 	case CTINT:
+	case CTRUNE:
 		n = mpcmpfixfix(n1->val.u.xval, n2->val.u.xval);
 		break;
 	case CTSTR:
@@ -250,26 +256,25 @@ newlabel(void)
 static void
 casebody(Node *sw, Node *typeswvar)
 {
-	Node *os, *oc, *n, *c, *last;
+	Node *n, *c, *last;
 	Node *def;
 	NodeList *cas, *stat, *l, *lc;
 	Node *go, *br;
 	int32 lno, needvar;
 
-	lno = setlineno(sw);
 	if(sw->list == nil)
 		return;
+
+	lno = setlineno(sw);
 
 	cas = nil;	// cases
 	stat = nil;	// statements
 	def = N;	// defaults
-	os = N;		// last statement
-	oc = N;		// last case
 	br = nod(OBREAK, N, N);
 
 	for(l=sw->list; l; l=l->next) {
 		n = l->n;
-		lno = setlineno(n);
+		setlineno(n);
 		if(n->op != OXCASE)
 			fatal("casebody %O", n->op);
 		n->op = OCASE;
@@ -377,9 +382,11 @@ mkcaselist(Node *sw, int arg)
 		case Strue:
 		case Sfalse:
 			c->type = Texprvar;
+			c->hash = typehash(n->left->type);
 			switch(consttype(n->left)) {
 			case CTFLT:
 			case CTINT:
+			case CTRUNE:
 			case CTSTR:
 				c->type = Texprconst;
 			}
@@ -440,6 +447,10 @@ exprbsw(Case *c0, int ncase, int arg)
 			n = c0->node;
 			lno = setlineno(n);
 
+			if(assignop(n->left->type, exprname->type, nil) == OCONVIFACE ||
+			   assignop(exprname->type, n->left->type, nil) == OCONVIFACE)
+				goto snorm;
+
 			switch(arg) {
 			case Strue:
 				a = nod(OIF, N, N);
@@ -455,6 +466,7 @@ exprbsw(Case *c0, int ncase, int arg)
 				break;
 
 			default:
+			snorm:
 				a = nod(OIF, N, N);
 				a->ntest = nod(OEQ, exprname, n->left);	// if name == val
 				typecheck(&a->ntest, Erv);
@@ -515,10 +527,11 @@ exprswitch(Node *sw)
 	exprname = N;
 	cas = nil;
 	if(arg != Strue && arg != Sfalse) {
-		exprname = nod(OXXX, N, N);
-		tempname(exprname, sw->ntest->type);
+		exprname = temp(sw->ntest->type);
 		cas = list1(nod(OAS, exprname, sw->ntest));
 		typechecklist(cas, Etop);
+	} else {
+		exprname = nodbool(arg == Strue);
 	}
 
 	c0 = mkcaselist(sw, arg);
@@ -539,7 +552,7 @@ loop:
 	}
 
 	// deal with the variables one-at-a-time
-	if(c0->type != Texprconst) {
+	if(!okforcmp[t->etype] || c0->type != Texprconst) {
 		a = exprbsw(c0, 1, arg);
 		cas = list(cas, a);
 		c0 = c0->link;
@@ -673,20 +686,17 @@ typeswitch(Node *sw)
 	 * predeclare temporary variables
 	 * and the boolean var
 	 */
-	facename = nod(OXXX, N, N);
-	tempname(facename, sw->ntest->right->type);
+	facename = temp(sw->ntest->right->type);
 	a = nod(OAS, facename, sw->ntest->right);
 	typecheck(&a, Etop);
 	cas = list(cas, a);
 
 	casebody(sw, facename);
 
-	boolname = nod(OXXX, N, N);
-	tempname(boolname, types[TBOOL]);
+	boolname = temp(types[TBOOL]);
 	typecheck(&boolname, Erv);
 
-	hashname = nod(OXXX, N, N);
-	tempname(hashname, types[TUINT32]);
+	hashname = temp(types[TUINT32]);
 	typecheck(&hashname, Erv);
 
 	t = sw->ntest->right->type;
@@ -788,13 +798,11 @@ typeswitch(Node *sw)
 void
 walkswitch(Node *sw)
 {
-
 	/*
 	 * reorder the body into (OLIST, cases, statements)
 	 * cases have OGOTO into statements.
 	 * both have inserted OBREAK statements
 	 */
-	walkstmtlist(sw->ninit);
 	if(sw->ntest == N) {
 		sw->ntest = nodbool(1);
 		typecheck(&sw->ntest, Erv);
@@ -814,14 +822,16 @@ walkswitch(Node *sw)
 void
 typecheckswitch(Node *n)
 {
-	int top, lno;
-	Type *t;
+	int top, lno, ptr;
+	char *nilonly;
+	Type *t, *badtype, *missing, *have;
 	NodeList *l, *ll;
 	Node *ncase, *nvar;
 	Node *def;
 
 	lno = lineno;
 	typechecklist(n->ninit, Etop);
+	nilonly = nil;
 
 	if(n->ntest != N && n->ntest->op == OTYPESW) {
 		// type switch
@@ -829,7 +839,7 @@ typecheckswitch(Node *n)
 		typecheck(&n->ntest->right, Erv);
 		t = n->ntest->right->type;
 		if(t != T && t->etype != TINTER)
-			yyerror("cannot type switch on non-interface value %+N", n->ntest->right);
+			yyerror("cannot type switch on non-interface value %lN", n->ntest->right);
 	} else {
 		// value switch
 		top = Erv;
@@ -839,6 +849,20 @@ typecheckswitch(Node *n)
 			t = n->ntest->type;
 		} else
 			t = types[TBOOL];
+		if(t) {
+			if(!okforeq[t->etype])
+				yyerror("cannot switch on %lN", n->ntest);
+			else if(t->etype == TARRAY && !isfixedarray(t))
+				nilonly = "slice";
+			else if(t->etype == TARRAY && isfixedarray(t) && algtype1(t, nil) == ANOEQ)
+				yyerror("cannot switch on %lN", n->ntest);
+			else if(t->etype == TSTRUCT && algtype1(t, &badtype) == ANOEQ)
+				yyerror("cannot switch on %lN (struct containing %T cannot be compared)", n->ntest, badtype);
+			else if(t->etype == TFUNC)
+				nilonly = "func";
+			else if(t->etype == TMAP)
+				nilonly = "map";
+		}
 	}
 	n->type = t;
 
@@ -858,19 +882,38 @@ typecheckswitch(Node *n)
 				typecheck(&ll->n, Erv | Etype);
 				if(ll->n->type == T || t == T)
 					continue;
+				setlineno(ncase);
 				switch(top) {
 				case Erv:	// expression switch
 					defaultlit(&ll->n, t);
 					if(ll->n->op == OTYPE)
 						yyerror("type %T is not an expression", ll->n->type);
-					else if(ll->n->type != T && !eqtype(ll->n->type, t))
-						yyerror("case %+N in %T switch", ll->n, t);
+					else if(ll->n->type != T && !assignop(ll->n->type, t, nil) && !assignop(t, ll->n->type, nil)) {
+						if(n->ntest)
+							yyerror("invalid case %N in switch on %N (mismatched types %T and %T)", ll->n, n->ntest, ll->n->type, t);
+						else
+							yyerror("invalid case %N in switch (mismatched types %T and bool)", ll->n, ll->n->type);
+					} else if(nilonly && !isconst(ll->n, CTNIL)) {
+						yyerror("invalid case %N in switch (can only compare %s %N to nil)", ll->n, nilonly, n->ntest);
+					}
 					break;
 				case Etype:	// type switch
-					if(ll->n->op == OLITERAL && istype(ll->n->type, TNIL))
+					if(ll->n->op == OLITERAL && istype(ll->n->type, TNIL)) {
 						;
-					else if(ll->n->op != OTYPE && ll->n->type != T)
-						yyerror("%#N is not a type", ll->n);
+					} else if(ll->n->op != OTYPE && ll->n->type != T) {  // should this be ||?
+						yyerror("%lN is not a type", ll->n);
+						// reset to original type
+						ll->n = n->ntest->right;
+					} else if(ll->n->type->etype != TINTER && t->etype == TINTER && !implements(ll->n->type, t, &missing, &have, &ptr)) {
+						if(have && !missing->broke && !have->broke)
+							yyerror("impossible type switch case: %lN cannot have dynamic type %T"
+								" (wrong type for %S method)\n\thave %S%hT\n\twant %S%hT",
+								n->ntest->right, ll->n->type, missing->sym, have->sym, have->type,
+								missing->sym, missing->type);
+						else if(!missing->broke)
+							yyerror("impossible type switch case: %lN cannot have dynamic type %T"
+								" (missing %S method)", n->ntest->right, ll->n->type, missing->sym);
+					}
 					break;
 				}
 			}

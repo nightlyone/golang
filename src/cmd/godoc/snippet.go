@@ -11,17 +11,15 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/token"
-	"fmt"
 )
-
 
 type Snippet struct {
 	Line int
-	Text []byte
+	Text string // HTML-escaped
 }
-
 
 func newSnippet(fset *token.FileSet, decl ast.Decl, id *ast.Ident) *Snippet {
 	// TODO instead of pretty-printing the node, should use the original source instead
@@ -32,9 +30,8 @@ func newSnippet(fset *token.FileSet, decl ast.Decl, id *ast.Ident) *Snippet {
 	buf2.WriteString("<pre>")
 	FormatText(&buf2, buf1.Bytes(), -1, true, id.Name, nil)
 	buf2.WriteString("</pre>")
-	return &Snippet{fset.Position(id.Pos()).Line, buf2.Bytes()}
+	return &Snippet{fset.Position(id.Pos()).Line, buf2.String()}
 }
-
 
 func findSpec(list []ast.Spec, id *ast.Ident) ast.Spec {
 	for _, spec := range list {
@@ -58,7 +55,6 @@ func findSpec(list []ast.Spec, id *ast.Ident) ast.Spec {
 	return nil
 }
 
-
 func genSnippet(fset *token.FileSet, d *ast.GenDecl, id *ast.Ident) *Snippet {
 	s := findSpec(d.Specs, id)
 	if s == nil {
@@ -66,11 +62,17 @@ func genSnippet(fset *token.FileSet, d *ast.GenDecl, id *ast.Ident) *Snippet {
 	}
 
 	// only use the spec containing the id for the snippet
-	dd := &ast.GenDecl{d.Doc, d.Pos(), d.Tok, d.Lparen, []ast.Spec{s}, d.Rparen}
+	dd := &ast.GenDecl{
+		Doc:    d.Doc,
+		TokPos: d.Pos(),
+		Tok:    d.Tok,
+		Lparen: d.Lparen,
+		Specs:  []ast.Spec{s},
+		Rparen: d.Rparen,
+	}
 
 	return newSnippet(fset, dd, id)
 }
-
 
 func funcSnippet(fset *token.FileSet, d *ast.FuncDecl, id *ast.Ident) *Snippet {
 	if d.Name != id {
@@ -78,11 +80,15 @@ func funcSnippet(fset *token.FileSet, d *ast.FuncDecl, id *ast.Ident) *Snippet {
 	}
 
 	// only use the function signature for the snippet
-	dd := &ast.FuncDecl{d.Doc, d.Recv, d.Name, d.Type, nil}
+	dd := &ast.FuncDecl{
+		Doc:  d.Doc,
+		Recv: d.Recv,
+		Name: d.Name,
+		Type: d.Type,
+	}
 
 	return newSnippet(fset, dd, id)
 }
-
 
 // NewSnippet creates a text snippet from a declaration decl containing an
 // identifier id. Parts of the declaration not containing the identifier
@@ -100,10 +106,7 @@ func NewSnippet(fset *token.FileSet, decl ast.Decl, id *ast.Ident) (s *Snippet) 
 	if s == nil {
 		var buf bytes.Buffer
 		fmt.Fprintf(&buf, `<span class="alert">could not generate a snippet for <span class="highlight">%s</span></span>`, id.Name)
-		s = &Snippet{
-			fset.Position(id.Pos()).Line,
-			buf.Bytes(),
-		}
+		s = &Snippet{fset.Position(id.Pos()).Line, buf.String()}
 	}
 	return
 }

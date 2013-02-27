@@ -5,11 +5,11 @@
 package main
 
 import (
-	"exec"
 	"fmt"
 	"go/token"
 	"io/ioutil"
 	"os"
+	"os/exec"
 )
 
 // run runs the command argv, feeding in stdin on standard input.
@@ -18,25 +18,24 @@ import (
 func run(stdin []byte, argv []string) (stdout, stderr []byte, ok bool) {
 	cmd, err := exec.LookPath(argv[0])
 	if err != nil {
-		fatal("exec %s: %s", argv[0], err)
+		fatalf("exec %s: %s", argv[0], err)
 	}
 	r0, w0, err := os.Pipe()
 	if err != nil {
-		fatal("%s", err)
+		fatalf("%s", err)
 	}
 	r1, w1, err := os.Pipe()
 	if err != nil {
-		fatal("%s", err)
+		fatalf("%s", err)
 	}
 	r2, w2, err := os.Pipe()
 	if err != nil {
-		fatal("%s", err)
+		fatalf("%s", err)
 	}
-	p, err := os.StartProcess(cmd, argv, os.Environ(), "", []*os.File{r0, w1, w2})
+	p, err := os.StartProcess(cmd, argv, &os.ProcAttr{Files: []*os.File{r0, w1, w2}})
 	if err != nil {
-		fatal("%s", err)
+		fatalf("%s", err)
 	}
-	defer p.Release()
 	r0.Close()
 	w1.Close()
 	w2.Close()
@@ -56,23 +55,31 @@ func run(stdin []byte, argv []string) (stdout, stderr []byte, ok bool) {
 	<-c
 	<-c
 
-	w, err := p.Wait(0)
+	state, err := p.Wait()
 	if err != nil {
-		fatal("%s", err)
+		fatalf("%s", err)
 	}
-	ok = w.Exited() && w.ExitStatus() == 0
+	ok = state.Success()
 	return
 }
 
+func lineno(pos token.Pos) string {
+	return fset.Position(pos).String()
+}
+
 // Die with an error message.
-func fatal(msg string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, msg+"\n", args...)
+func fatalf(msg string, args ...interface{}) {
+	// If we've already printed other errors, they might have
+	// caused the fatal condition.  Assume they're enough.
+	if nerrors == 0 {
+		fmt.Fprintf(os.Stderr, msg+"\n", args...)
+	}
 	os.Exit(2)
 }
 
 var nerrors int
 
-func error(pos token.Pos, msg string, args ...interface{}) {
+func error_(pos token.Pos, msg string, args ...interface{}) {
 	nerrors++
 	if pos.IsValid() {
 		fmt.Fprintf(os.Stderr, "%s: ", fset.Position(pos).String())
@@ -95,15 +102,15 @@ func isName(s string) bool {
 }
 
 func creat(name string) *os.File {
-	f, err := os.Open(name, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0666)
+	f, err := os.Create(name)
 	if err != nil {
-		fatal("%s", err)
+		fatalf("%s", err)
 	}
 	return f
 }
 
-func slashToUnderscore(c int) int {
-	if c == '/' {
+func slashToUnderscore(c rune) rune {
+	if c == '/' || c == '\\' || c == ':' {
 		c = '_'
 	}
 	return c

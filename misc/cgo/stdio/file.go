@@ -1,3 +1,5 @@
+// skip
+
 // Copyright 2009 The Go Authors.  All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -23,12 +25,9 @@ import "unsafe"
 
 type File C.FILE
 
-var Stdout = (*File)(C.stdout)
-var Stderr = (*File)(C.stderr)
-
 // Test reference to library symbol.
 // Stdout and stderr are too special to be a reliable test.
-var myerr = C.sys_errlist
+//var  = C.environ
 
 func (f *File) WriteString(s string) {
 	p := C.CString(s)
@@ -42,3 +41,4 @@ func (f *File) Flush() {
 }
 
 var Greeting = C.GoString(C.greeting)
+var Gbytes = C.GoBytes(unsafe.Pointer(C.greeting), C.int(len(Greeting)))

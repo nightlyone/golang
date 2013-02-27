@@ -1,61 +1,47 @@
 QUERY
-	{Query}
+	{{.Query}}
 
-{.section Alert}
-{@}
+{{with .Alert}}{{.}}
+{{end}}{{/* .Alert */}}{{/*
 
-{.end}
-{.section Alt}
-DID YOU MEAN
-{.repeated section Alts}
-	{@}
-{.end}
+---------------------------------------
 
-{.end}
-{.section Hit}
-{.section Decls}
-PACKAGE-LEVEL DECLARATIONS
+*/}}{{with .Alt}}DID YOU MEAN
 
-{.repeated section @}
-package {Pak.Name}
-{.repeated section Files}
-{.repeated section Groups}
-{.repeated section Infos}
-	{File.Path|url-src}:{@|infoLine}
-{.end}
-{.end}
-{.end}
+{{range .Alts}}	{{.}}
+{{end}}
+{{end}}{{/* .Alt */}}{{/*
 
-{.end}
-{.end}
-{.section Others}
-LOCAL DECLARATIONS AND USES
+---------------------------------------
 
-{.repeated section @}
-package {Pak.Name}
-{.repeated section Files}
-{.repeated section Groups}
-{.repeated section Infos}
-	{File.Path|url-src}:{@|infoLine}
-{.end}
-{.end}
-{.end}
+*/}}{{with .Pak}}PACKAGE {{$.Query}}
 
-{.end}
-{.end}
-{.end}
-{.section Textual}
-{.section Complete}
-{Found} TEXTUAL OCCURENCES
-{.or}
-MORE THAN {Found} TEXTUAL OCCURENCES
-{.end}
+{{range .}}	{{pkgLink .Pak.Path}}
+{{end}}
+{{end}}{{/* .Pak */}}{{/*
 
-{.repeated section @}
-{Lines|numlines}	{Filename|url-src}
-{.end}
-{.section Complete}
-{.or}
-...	...
-{.end}
-{.end}
+---------------------------------------
+
+*/}}{{with .Hit}}{{with .Decls}}PACKAGE-LEVEL DECLARATIONS
+
+{{range .}}package {{.Pak.Name}}
+{{range $file := .Files}}{{range .Groups}}{{range .}}	{{srcLink $file.File.Path}}:{{infoLine .}}{{end}}
+{{end}}{{end}}{{/* .Files */}}
+{{end}}{{end}}{{/* .Decls */}}{{/*
+
+---------------------------------------
+
+*/}}{{with .Others}}LOCAL DECLARATIONS AND USES
+
+{{range .}}package {{.Pak.Name}}
+{{range $file := .Files}}{{range .Groups}}{{range .}}	{{srcLink $file.File.Path}}:{{infoLine .}}
+{{end}}{{end}}{{end}}{{/* .Files */}}
+{{end}}{{end}}{{/* .Others */}}{{end}}{{/* .Hit */}}{{/*
+
+---------------------------------------
+
+*/}}{{if .Textual}}{{if .Complete}}{{.Found}} TEXTUAL OCCURRENCES{{else}}MORE THAN {{.Found}} TEXTUAL OCCURRENCES{{end}}
+
+{{range .Textual}}{{len .Lines}}	{{srcLink .Filename}}
+{{end}}{{if not .Complete}}...	...
+{{end}}{{end}}

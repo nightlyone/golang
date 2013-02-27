@@ -602,6 +602,12 @@ copyu(Prog *p, Adr *v, Adr *s)
 	case ACMPL:	/* read only */
 	case ACMPW:
 	case ACMPB:
+	
+	case APREFETCHT0:
+	case APREFETCHT1:
+	case APREFETCHT2:
+	case APREFETCHNTA:
+
 
 	case AFCOMB:
 	case AFCOMBP:
@@ -713,7 +719,7 @@ copyu(Prog *p, Adr *v, Adr *s)
 		return 3;
 
 	case ACALL:	/* funny */
-		if(REGARG >= 0 && v->type == REGARG)
+		if(REGARG >= 0 && v->type == (uchar)REGARG)
 			return 2;
 
 		if(s != A) {

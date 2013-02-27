@@ -2,15 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#include <u.h>
-#include <libc.h>
+#ifndef	EXTERN
+#define	EXTERN	extern
+#endif
 
 #include "../gc/go.h"
 #include "../8l/8.out.h"
-
-#ifndef	EXTERN
-#define EXTERN	extern
-#endif
 
 typedef	struct	Addr	Addr;
 
@@ -19,18 +16,21 @@ struct	Addr
 	int32	offset;
 	int32	offset2;
 
-	double	dval;
-	Prog*	branch;
-	char	sval[NSNAME];
+	union {
+		double	dval;
+		vlong	vval;
+		Prog*	branch;
+		char	sval[NSNAME];
+	} u;
 
 	Sym*	gotype;
 	Sym*	sym;
+	Node*	node;
 	int	width;
 	uchar	type;
 	uchar	index;
 	uchar	etype;
 	uchar	scale;	/* doubles as width in DATA op */
-	uchar	pun;	/* dont register variable */
 };
 #define	A	((Addr*)0)
 
@@ -45,6 +45,8 @@ struct	Prog
 	void*	reg;		// pointer to containing Reg struct
 };
 
+#define TEXTFLAG from.scale
+
 // foptoas flags
 enum
 {
@@ -53,15 +55,12 @@ enum
 	Fpop2 = 1<<2,
 };
 
-EXTERN	Biobuf*	bout;
 EXTERN	int32	dynloc;
 EXTERN	uchar	reg[D_NONE];
 EXTERN	int32	pcloc;		// instruction counter
 EXTERN	Strlit	emptystring;
 extern	char*	anames[];
-EXTERN	Hist*	hist;
 EXTERN	Prog	zprog;
-EXTERN	Node*	curfn;
 EXTERN	Node*	newproc;
 EXTERN	Node*	deferproc;
 EXTERN	Node*	deferreturn;
@@ -86,37 +85,38 @@ void	cgen_proc(Node*, int);
 void	cgen_callret(Node*, Node*);
 void	cgen_div(int, Node*, Node*, Node*);
 void	cgen_bmul(int, Node*, Node*, Node*);
-void	cgen_shift(int, Node*, Node*, Node*);
+void	cgen_hmul(Node*, Node*, Node*);
+void	cgen_shift(int, int, Node*, Node*, Node*);
+void	cgen_float(Node*, Node*);
+void	bgen_float(Node *n, int true, int likely, Prog *to);
 void	cgen_dcl(Node*);
 int	needconvert(Type*, Type*);
 void	genconv(Type*, Type*);
 void	allocparams(void);
-void	checklabels();
+void	checklabels(void);
 void	ginscall(Node*, int);
 
 /*
  * cgen.c
  */
 void	agen(Node*, Node*);
-void	agenr(Node *n, Node *a, Node *res);
 void	igen(Node*, Node*, Node*);
 vlong	fieldoffset(Type*, Node*);
-void	bgen(Node*, int, Prog*);
-void	sgen(Node*, Node*, int32);
+void	sgen(Node*, Node*, int64);
 void	gmove(Node*, Node*);
 Prog*	gins(int, Node*, Node*);
 int	samaddr(Node*, Node*);
 void	naddr(Node*, Addr*, int);
 void	cgen_aret(Node*, Node*);
-int	cgen_inline(Node*, Node*);
 Node*	ncon(uint32);
 void	mgen(Node*, Node*, Node*);
 void	mfree(Node*);
+int	componentgen(Node*, Node*);
 
 /*
  * cgen64.c
  */
-void	cmp64(Node*, Node*, int, Prog*);
+void	cmp64(Node*, Node*, int, int, Prog*);
 void	cgen64(Node*, Node*);
 
 /*
@@ -124,16 +124,13 @@ void	cgen64(Node*, Node*);
  */
 void	clearp(Prog*);
 void	proglist(void);
-Prog*	gbranch(int, Type*);
+Prog*	gbranch(int, Type*, int);
 Prog*	prog(int);
-void	gaddoffset(Node*);
 void	gconv(int, int);
 int	conv2pt(Type*);
 vlong	convvtox(vlong, int);
 void	fnparam(Type*, int, int);
 Prog*	gop(int, Node*, Node*, Node*);
-void	setconst(Addr*, vlong);
-void	setaddr(Addr*, Node*);
 int	optoas(int, Type*);
 int	foptoas(int, Type*, int);
 void	ginit(void);
@@ -145,18 +142,17 @@ void	nodreg(Node*, Type*, int);
 void	nodindreg(Node*, Type*, int);
 void	nodconst(Node*, Type*, int64);
 void	gconreg(int, vlong, int);
-void	datagostring(Strlit*, Addr*);
-void	datastring(char*, int, Addr*);
 void	buildtxt(void);
 Plist*	newplist(void);
 int	isfat(Type*);
 void	sudoclean(void);
 int	sudoaddable(int, Node*, Addr*);
 int	dotaddable(Node*, Node*);
-void	afunclit(Addr*);
+void	afunclit(Addr*, Node*);
 void	split64(Node*, Node*, Node*);
 void	splitclean(void);
 void	nswap(Node*, Node*);
+void	gtrack(Sym*);
 
 /*
  * cplx.c
@@ -164,13 +160,12 @@ void	nswap(Node*, Node*);
 int	complexop(Node*, Node*);
 void	complexmove(Node*, Node*);
 void	complexgen(Node*, Node*);
-void	complexbool(int, Node*, Node*, int, Prog*);
 
 /*
  * gobj.c
  */
-void	data(void);
-void	text(void);
+void	datastring(char*, int, Addr*);
+void	datagostring(Strlit*, Addr*);
 
 /*
  * list.c
@@ -184,3 +179,5 @@ void	listinit(void);
 
 void	zaddr(Biobuf*, Addr*, int, int);
 
+#pragma	varargck	type	"D"	Addr*
+#pragma	varargck	type	"lD"	Addr*

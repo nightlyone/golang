@@ -13,16 +13,18 @@ import (
 	"debug/elf"
 	"debug/macho"
 	"debug/pe"
+	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 var debugDefine = flag.Bool("debug-define", false, "print relevant #defines")
@@ -58,6 +60,9 @@ func cname(s string) string {
 	if strings.HasPrefix(s, "enum_") {
 		return "enum " + s[len("enum_"):]
 	}
+	if strings.HasPrefix(s, "sizeof_") {
+		return "sizeof(" + cname(s[len("sizeof_"):]) + ")"
+	}
 	return s
 }
 
@@ -65,21 +70,21 @@ func cname(s string) string {
 // preamble. Multiple occurrences are concatenated with a separating space,
 // even across files.
 func (p *Package) ParseFlags(f *File, srcfile string) {
-	linesIn := strings.Split(f.Preamble, "\n", -1)
+	linesIn := strings.Split(f.Preamble, "\n")
 	linesOut := make([]string, 0, len(linesIn))
 
 NextLine:
 	for _, line := range linesIn {
 		l := strings.TrimSpace(line)
-		if len(l) < 5 || l[:4] != "#cgo" || !unicode.IsSpace(int(l[4])) {
+		if len(l) < 5 || l[:4] != "#cgo" || !unicode.IsSpace(rune(l[4])) {
 			linesOut = append(linesOut, line)
 			continue
 		}
 
 		l = strings.TrimSpace(l[4:])
-		fields := strings.Split(l, ":", 2)
+		fields := strings.SplitN(l, ":", 2)
 		if len(fields) != 2 {
-			fatal("%s: bad #cgo line: %s", srcfile, line)
+			fatalf("%s: bad #cgo line: %s", srcfile, line)
 		}
 
 		var k string
@@ -90,35 +95,89 @@ NextLine:
 		case 2:
 			k = kf[1]
 			switch kf[0] {
-			case runtime.GOOS:
-			case runtime.GOARCH:
-			case runtime.GOOS + "/" + runtime.GOARCH:
+			case goos:
+			case goarch:
+			case goos + "/" + goarch:
 			default:
 				continue NextLine
 			}
 		default:
-			fatal("%s: bad #cgo option: %s", srcfile, fields[0])
+			fatalf("%s: bad #cgo option: %s", srcfile, fields[0])
 		}
 
-		if k != "CFLAGS" && k != "LDFLAGS" {
-			fatal("%s: unsupported #cgo option %s", srcfile, k)
-		}
-
-		v := strings.TrimSpace(fields[1])
-		args, err := splitQuoted(v)
+		args, err := splitQuoted(fields[1])
 		if err != nil {
-			fatal("%s: bad #cgo option %s: %s", srcfile, k, err.String())
+			fatalf("%s: bad #cgo option %s: %s", srcfile, k, err)
 		}
-		if oldv, ok := p.CgoFlags[k]; ok {
-			p.CgoFlags[k] = oldv + " " + v
-		} else {
-			p.CgoFlags[k] = v
+		for _, arg := range args {
+			if !safeName(arg) {
+				fatalf("%s: #cgo option %s is unsafe: %s", srcfile, k, arg)
+			}
 		}
-		if k == "CFLAGS" {
-			p.GccOptions = append(p.GccOptions, args...)
+
+		switch k {
+
+		case "CFLAGS", "LDFLAGS":
+			p.addToFlag(k, args)
+
+		case "pkg-config":
+			cflags, ldflags, err := pkgConfig(args)
+			if err != nil {
+				fatalf("%s: bad #cgo option %s: %s", srcfile, k, err)
+			}
+			p.addToFlag("CFLAGS", cflags)
+			p.addToFlag("LDFLAGS", ldflags)
+
+		default:
+			fatalf("%s: unsupported #cgo option %s", srcfile, k)
+
 		}
 	}
 	f.Preamble = strings.Join(linesOut, "\n")
+}
+
+// addToFlag appends args to flag.  All flags are later written out onto the
+// _cgo_flags file for the build system to use.
+func (p *Package) addToFlag(flag string, args []string) {
+	if oldv, ok := p.CgoFlags[flag]; ok {
+		p.CgoFlags[flag] = oldv + " " + strings.Join(args, " ")
+	} else {
+		p.CgoFlags[flag] = strings.Join(args, " ")
+	}
+	if flag == "CFLAGS" {
+		// We'll also need these when preprocessing for dwarf information.
+		p.GccOptions = append(p.GccOptions, args...)
+	}
+}
+
+// pkgConfig runs pkg-config and extracts --libs and --cflags information
+// for packages.
+func pkgConfig(packages []string) (cflags, ldflags []string, err error) {
+	for _, name := range packages {
+		if len(name) == 0 || name[0] == '-' {
+			return nil, nil, errors.New(fmt.Sprintf("invalid name: %q", name))
+		}
+	}
+
+	args := append([]string{"pkg-config", "--cflags"}, packages...)
+	stdout, stderr, ok := run(nil, args)
+	if !ok {
+		os.Stderr.Write(stderr)
+		return nil, nil, errors.New("pkg-config failed")
+	}
+	cflags, err = splitQuoted(string(stdout))
+	if err != nil {
+		return
+	}
+
+	args = append([]string{"pkg-config", "--libs"}, packages...)
+	stdout, stderr, ok = run(nil, args)
+	if !ok {
+		os.Stderr.Write(stderr)
+		return nil, nil, errors.New("pkg-config failed")
+	}
+	ldflags, err = splitQuoted(string(stdout))
+	return
 }
 
 // splitQuoted splits the string s around each instance of one or more consecutive
@@ -137,30 +196,30 @@ NextLine:
 //
 //     []string{"a", "b:c d", "ef", `g"`}
 //
-func splitQuoted(s string) (r []string, err os.Error) {
+func splitQuoted(s string) (r []string, err error) {
 	var args []string
-	arg := make([]int, len(s))
+	arg := make([]rune, len(s))
 	escaped := false
 	quoted := false
-	quote := 0
+	quote := '\x00'
 	i := 0
-	for _, rune := range s {
+	for _, r := range s {
 		switch {
 		case escaped:
 			escaped = false
-		case rune == '\\':
+		case r == '\\':
 			escaped = true
 			continue
 		case quote != 0:
-			if rune == quote {
+			if r == quote {
 				quote = 0
 				continue
 			}
-		case rune == '"' || rune == '\'':
+		case r == '"' || r == '\'':
 			quoted = true
-			quote = rune
+			quote = r
 			continue
-		case unicode.IsSpace(rune):
+		case unicode.IsSpace(r):
 			if quoted || i > 0 {
 				quoted = false
 				args = append(args, string(arg[:i]))
@@ -168,18 +227,32 @@ func splitQuoted(s string) (r []string, err os.Error) {
 			}
 			continue
 		}
-		arg[i] = rune
+		arg[i] = r
 		i++
 	}
 	if quoted || i > 0 {
 		args = append(args, string(arg[:i]))
 	}
 	if quote != 0 {
-		err = os.ErrorString("unclosed quote")
+		err = errors.New("unclosed quote")
 	} else if escaped {
-		err = os.ErrorString("unfinished escaping")
+		err = errors.New("unfinished escaping")
 	}
 	return args, err
+}
+
+var safeBytes = []byte(`+-.,/0123456789:=ABCDEFGHIJKLMNOPQRSTUVWXYZ\_abcdefghijklmnopqrstuvwxyz`)
+
+func safeName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x80 && bytes.IndexByte(safeBytes, c) < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // Translate rewrites f.AST, the original Go input, to remove
@@ -206,7 +279,7 @@ func (p *Package) loadDefines(f *File) {
 	b.WriteString(f.Preamble)
 	stdout := p.gccDefines(b.Bytes())
 
-	for _, line := range strings.Split(stdout, "\n", -1) {
+	for _, line := range strings.Split(stdout, "\n") {
 		if len(line) < 9 || line[0:7] != "#define" {
 			continue
 		}
@@ -271,14 +344,22 @@ func (p *Package) guessKinds(f *File) []*Name {
 			if _, err := strconv.Atoi(n.Define); err == nil {
 				ok = true
 			} else if n.Define[0] == '"' || n.Define[0] == '\'' {
-				_, err := parser.ParseExpr(fset, "", n.Define)
-				if err == nil {
+				if _, err := parser.ParseExpr(n.Define); err == nil {
 					ok = true
 				}
 			}
 			if ok {
 				n.Kind = "const"
-				n.Const = n.Define
+				// Turn decimal into hex, just for consistency
+				// with enum-derived constants.  Otherwise
+				// in the cgo -godefs output half the constants
+				// are in hex and half are in whatever the #define used.
+				i, err := strconv.ParseInt(n.Define, 0, 64)
+				if err == nil {
+					n.Const = fmt.Sprintf("%#x", i)
+				} else {
+					n.Const = n.Define
+				}
 				continue
 			}
 
@@ -310,14 +391,14 @@ func (p *Package) guessKinds(f *File) []*Name {
 	b.WriteString(builtinProlog)
 	b.WriteString(f.Preamble)
 	b.WriteString("void __cgo__f__(void) {\n")
-	b.WriteString("#line 0 \"cgo-test\"\n")
+	b.WriteString("#line 1 \"cgo-test\"\n")
 	for i, n := range toSniff {
-		fmt.Fprintf(&b, "%s; enum { _cgo_enum_%d = %s }; /* cgo-test:%d */\n", n.C, i, n.C, i)
+		fmt.Fprintf(&b, "%s; /* #%d */\nenum { _cgo_enum_%d = %s }; /* #%d */\n", n.C, i, i, n.C, i)
 	}
 	b.WriteString("}\n")
 	stderr := p.gccErrors(b.Bytes())
 	if stderr == "" {
-		fatal("gcc produced no output\non input:\n%s", b.Bytes())
+		fatalf("gcc produced no output\non input:\n%s", b.Bytes())
 	}
 
 	names := make([]*Name, len(toSniff))
@@ -328,7 +409,7 @@ func (p *Package) guessKinds(f *File) []*Name {
 		isConst[i] = true // until proven otherwise
 	}
 
-	for _, line := range strings.Split(stderr, "\n", -1) {
+	for _, line := range strings.Split(stderr, "\n") {
 		if len(line) < 9 || line[0:9] != "cgo-test:" {
 			// the user will see any compiler errors when the code is compiled later.
 			continue
@@ -342,17 +423,21 @@ func (p *Package) guessKinds(f *File) []*Name {
 		if err != nil {
 			continue
 		}
+		i = (i - 1) / 2
 		what := ""
 		switch {
 		default:
 			continue
-		case strings.Contains(line, ": useless type name in empty declaration"):
+		case strings.Contains(line, ": useless type name in empty declaration"),
+			strings.Contains(line, ": declaration does not declare anything"),
+			strings.Contains(line, ": unexpected type name"):
 			what = "type"
 			isConst[i] = false
-		case strings.Contains(line, ": statement with no effect"):
+		case strings.Contains(line, ": statement with no effect"),
+			strings.Contains(line, ": expression result unused"):
 			what = "not-type" // const or func or var
 		case strings.Contains(line, "undeclared"):
-			error(token.NoPos, "%s", strings.TrimSpace(line[colon+1:]))
+			error_(token.NoPos, "%s", strings.TrimSpace(line[colon+1:]))
 		case strings.Contains(line, "is not an integer constant"):
 			isConst[i] = false
 			continue
@@ -371,6 +456,11 @@ func (p *Package) guessKinds(f *File) []*Name {
 	for i, b := range isConst {
 		if b {
 			names[i].Kind = "const"
+			if toSniff[i] != nil && names[i].Const == "" {
+				j := len(needType)
+				needType = needType[0 : j+1]
+				needType[j] = names[i]
+			}
 		}
 	}
 	for _, n := range toSniff {
@@ -380,10 +470,10 @@ func (p *Package) guessKinds(f *File) []*Name {
 		if n.Kind != "" {
 			continue
 		}
-		error(token.NoPos, "could not determine kind of name for C.%s", n.Go)
+		error_(token.NoPos, "could not determine kind of name for C.%s", n.Go)
 	}
 	if nerrors > 0 {
-		fatal("unresolved names")
+		fatalf("unresolved names")
 	}
 	return needType
 }
@@ -409,7 +499,32 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 			fmt.Fprintf(&b, "enum { __cgo_enum__%d = %s };\n", i, n.C)
 		}
 	}
-	d := p.gccDebug(b.Bytes())
+
+	// Apple's LLVM-based gcc does not include the enumeration
+	// names and values in its DWARF debug output.  In case we're
+	// using such a gcc, create a data block initialized with the values.
+	// We can read them out of the object file.
+	fmt.Fprintf(&b, "long long __cgodebug_data[] = {\n")
+	for _, n := range names {
+		if n.Kind == "const" {
+			fmt.Fprintf(&b, "\t%s,\n", n.C)
+		} else {
+			fmt.Fprintf(&b, "\t0,\n")
+		}
+	}
+	// for the last entry, we can not use 0, otherwise
+	// in case all __cgodebug_data is zero initialized,
+	// LLVM-based gcc will place the it in the __DATA.__common
+	// zero-filled section (our debug/macho doesn't support
+	// this)
+	fmt.Fprintf(&b, "\t1\n")
+	fmt.Fprintf(&b, "};\n")
+
+	d, bo, debugData := p.gccDebug(b.Bytes())
+	enumVal := make([]int64, len(debugData)/8)
+	for i := range enumVal {
+		enumVal[i] = int64(bo.Uint64(debugData[i*8:]))
+	}
 
 	// Scan DWARF info for top-level TagVariable entries with AttrName __cgo__i.
 	types := make([]dwarf.Type, len(names))
@@ -418,11 +533,15 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 	for i, n := range names {
 		nameToIndex[n] = i
 	}
+	nameToRef := make(map[*Name]*Ref)
+	for _, ref := range f.Ref {
+		nameToRef[ref.Name] = ref
+	}
 	r := d.Reader()
 	for {
 		e, err := r.Next()
 		if err != nil {
-			fatal("reading DWARF entry: %s", err)
+			fatalf("reading DWARF entry: %s", err)
 		}
 		if e == nil {
 			break
@@ -433,7 +552,7 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 			for {
 				e, err := r.Next()
 				if err != nil {
-					fatal("reading DWARF entry: %s", err)
+					fatalf("reading DWARF entry: %s", err)
 				}
 				if e.Tag == 0 {
 					break
@@ -452,27 +571,27 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 			name, _ := e.Val(dwarf.AttrName).(string)
 			typOff, _ := e.Val(dwarf.AttrType).(dwarf.Offset)
 			if name == "" || typOff == 0 {
-				fatal("malformed DWARF TagVariable entry")
+				fatalf("malformed DWARF TagVariable entry")
 			}
 			if !strings.HasPrefix(name, "__cgo__") {
 				break
 			}
 			typ, err := d.Type(typOff)
 			if err != nil {
-				fatal("loading DWARF type: %s", err)
+				fatalf("loading DWARF type: %s", err)
 			}
 			t, ok := typ.(*dwarf.PtrType)
 			if !ok || t == nil {
-				fatal("internal error: %s has non-pointer type", name)
+				fatalf("internal error: %s has non-pointer type", name)
 			}
 			i, err := strconv.Atoi(name[7:])
 			if err != nil {
-				fatal("malformed __cgo__ name: %s", name)
+				fatalf("malformed __cgo__ name: %s", name)
 			}
 			if enums[i] != 0 {
 				t, err := d.Type(enums[i])
 				if err != nil {
-					fatal("loading DWARF type: %s", err)
+					fatalf("loading DWARF type: %s", err)
 				}
 				types[i] = t
 			} else {
@@ -486,29 +605,42 @@ func (p *Package) loadDWARF(f *File, names []*Name) {
 
 	// Record types and typedef information.
 	var conv typeConv
-	conv.Init(p.PtrSize)
+	conv.Init(p.PtrSize, p.IntSize)
 	for i, n := range names {
+		if types[i] == nil {
+			continue
+		}
+		pos := token.NoPos
+		if ref, ok := nameToRef[n]; ok {
+			pos = ref.Pos()
+		}
 		f, fok := types[i].(*dwarf.FuncType)
 		if n.Kind != "type" && fok {
 			n.Kind = "func"
-			n.FuncType = conv.FuncType(f)
+			n.FuncType = conv.FuncType(f, pos)
 		} else {
-			n.Type = conv.Type(types[i])
+			n.Type = conv.Type(types[i], pos)
 			if enums[i] != 0 && n.Type.EnumValues != nil {
 				k := fmt.Sprintf("__cgo_enum__%d", i)
 				n.Kind = "const"
-				n.Const = strconv.Itoa64(n.Type.EnumValues[k])
+				n.Const = fmt.Sprintf("%#x", n.Type.EnumValues[k])
 				// Remove injected enum to ensure the value will deep-compare
 				// equally in future loads of the same constant.
-				n.Type.EnumValues[k] = 0, false
+				delete(n.Type.EnumValues, k)
+			}
+			// Prefer debug data over DWARF debug output, if we have it.
+			if n.Kind == "const" && i < len(enumVal) {
+				n.Const = fmt.Sprintf("%#x", enumVal[i])
 			}
 		}
 	}
+
 }
 
 // rewriteRef rewrites all the C.xxx references in f.AST to refer to the
 // Go equivalents, now that we have figured out the meaning of all
-// the xxx.
+// the xxx.  In *godefs or *cdefs mode, rewriteRef replaces the names
+// with full definitions instead of mangled names.
 func (p *Package) rewriteRef(f *File) {
 	// Assign mangled names.
 	for _, n := range f.Name {
@@ -516,7 +648,14 @@ func (p *Package) rewriteRef(f *File) {
 			n.Kind = "var"
 		}
 		if n.Mangle == "" {
-			n.Mangle = "_C" + n.Kind + "_" + n.Go
+			// When using gccgo variables have to be
+			// exported so that they become global symbols
+			// that the C code can refer to.
+			prefix := "_C"
+			if *gccgo && n.Kind == "var" {
+				prefix = "C"
+			}
+			n.Mangle = prefix + n.Kind + "_" + n.Go
 		}
 	}
 
@@ -525,6 +664,9 @@ func (p *Package) rewriteRef(f *File) {
 	// are trying to do a ,err call.  Also check that
 	// functions are only used in calls.
 	for _, r := range f.Ref {
+		if r.Name.Kind == "const" && r.Name.Const == "" {
+			error_(r.Pos(), "unable to find value of constant C.%s", r.Name.Go)
+		}
 		var expr ast.Expr = ast.NewIdent(r.Name.Mangle) // default
 		switch r.Context {
 		case "call", "call2":
@@ -534,13 +676,10 @@ func (p *Package) rewriteRef(f *File) {
 					expr = r.Name.Type.Go
 					break
 				}
-				error(r.Pos(), "call of non-function C.%s", r.Name.Go)
+				error_(r.Pos(), "call of non-function C.%s", r.Name.Go)
 				break
 			}
 			if r.Context == "call2" {
-				if r.Name.FuncType.Result == nil {
-					error(r.Pos(), "assignment count mismatch: 2 = 0")
-				}
 				// Invent new Name for the two-result function.
 				n := f.Name["2"+r.Name.Go]
 				if n == nil {
@@ -556,7 +695,7 @@ func (p *Package) rewriteRef(f *File) {
 			}
 		case "expr":
 			if r.Name.Kind == "func" {
-				error(r.Pos(), "must call C.%s", r.Name.Go)
+				error_(r.Pos(), "must call C.%s", r.Name.Go)
 			}
 			if r.Name.Kind == "type" {
 				// Okay - might be new(T)
@@ -568,80 +707,178 @@ func (p *Package) rewriteRef(f *File) {
 
 		case "type":
 			if r.Name.Kind != "type" {
-				error(r.Pos(), "expression C.%s used as type", r.Name.Go)
+				error_(r.Pos(), "expression C.%s used as type", r.Name.Go)
+			} else if r.Name.Type == nil {
+				// Use of C.enum_x, C.struct_x or C.union_x without C definition.
+				// GCC won't raise an error when using pointers to such unknown types.
+				error_(r.Pos(), "type C.%s: undefined C type '%s'", r.Name.Go, r.Name.C)
 			} else {
 				expr = r.Name.Type.Go
 			}
 		default:
 			if r.Name.Kind == "func" {
-				error(r.Pos(), "must call C.%s", r.Name.Go)
+				error_(r.Pos(), "must call C.%s", r.Name.Go)
+			}
+		}
+		if *godefs || *cdefs {
+			// Substitute definition for mangled type name.
+			if id, ok := expr.(*ast.Ident); ok {
+				if t := typedef[id.Name]; t != nil {
+					expr = t.Go
+				}
+				if id.Name == r.Name.Mangle && r.Name.Const != "" {
+					expr = ast.NewIdent(r.Name.Const)
+				}
 			}
 		}
 		*r.Expr = expr
 	}
 }
 
-// gccName returns the name of the compiler to run.  Use $GCC if set in
+// gccName returns the name of the compiler to run.  Use $CC if set in
 // the environment, otherwise just "gcc".
 
-func (p *Package) gccName() (ret string) {
-	if ret = os.Getenv("GCC"); ret == "" {
-		ret = "gcc"
+func (p *Package) gccName() string {
+	// Use $CC if set, since that's what the build uses.
+	if ret := os.Getenv("CC"); ret != "" {
+		return ret
 	}
-	return
+	// Fall back to $GCC if set, since that's what we used to use.
+	if ret := os.Getenv("GCC"); ret != "" {
+		return ret
+	}
+	return "gcc"
 }
 
-// gccMachine returns the gcc -m flag to use, either "-m32" or "-m64".
-func (p *Package) gccMachine() string {
-	if p.PtrSize == 8 {
-		return "-m64"
+// gccMachine returns the gcc -m flag to use, either "-m32", "-m64" or "-marm".
+func (p *Package) gccMachine() []string {
+	switch goarch {
+	case "amd64":
+		return []string{"-m64"}
+	case "386":
+		return []string{"-m32"}
+	case "arm":
+		return []string{"-marm"} // not thumb
 	}
-	return "-m32"
+	return nil
 }
 
-const gccTmp = "_cgo_.o"
+func gccTmp() string {
+	return *objDir + "_cgo_.o"
+}
 
 // gccCmd returns the gcc command line to use for compiling
 // the input.
 func (p *Package) gccCmd() []string {
-	return []string{
+	c := []string{
 		p.gccName(),
-		p.gccMachine(),
 		"-Wall",                             // many warnings
 		"-Werror",                           // warnings are errors
-		"-o" + gccTmp,                       // write object to tmp
+		"-o" + gccTmp(),                     // write object to tmp
 		"-gdwarf-2",                         // generate DWARF v2 debugging symbols
 		"-fno-eliminate-unused-debug-types", // gets rid of e.g. untyped enum otherwise
-		"-c",                                // do not link
-		"-xc",                               // input language is C
-		"-",                                 // read input from standard input
+		"-c",  // do not link
+		"-xc", // input language is C
 	}
+	if strings.Contains(p.gccName(), "clang") {
+		c = append(c,
+			"-ferror-limit=0",
+			// Apple clang version 1.7 (tags/Apple/clang-77) (based on LLVM 2.9svn)
+			// doesn't have -Wno-unneeded-internal-declaration, so we need yet another
+			// flag to disable the warning. Yes, really good diagnostics, clang.
+			"-Wno-unknown-warning-option",
+			"-Wno-unneeded-internal-declaration",
+			"-Wno-unused-function",
+			"-Qunused-arguments",
+		)
+	}
+
+	c = append(c, p.GccOptions...)
+	c = append(c, p.gccMachine()...)
+	c = append(c, "-") //read input from standard input
+	return c
 }
 
 // gccDebug runs gcc -gdwarf-2 over the C program stdin and
-// returns the corresponding DWARF data and any messages
-// printed to standard error.
-func (p *Package) gccDebug(stdin []byte) *dwarf.Data {
-	runGcc(stdin, append(p.gccCmd(), p.GccOptions...))
+// returns the corresponding DWARF data and, if present, debug data block.
+func (p *Package) gccDebug(stdin []byte) (*dwarf.Data, binary.ByteOrder, []byte) {
+	runGcc(stdin, p.gccCmd())
 
-	// Try to parse f as ELF and Mach-O and hope one works.
-	var f interface {
-		DWARF() (*dwarf.Data, os.Error)
-	}
-	var err os.Error
-	if f, err = elf.Open(gccTmp); err != nil {
-		if f, err = macho.Open(gccTmp); err != nil {
-			if f, err = pe.Open(gccTmp); err != nil {
-				fatal("cannot parse gcc output %s as ELF or Mach-O or PE object", gccTmp)
+	if f, err := macho.Open(gccTmp()); err == nil {
+		d, err := f.DWARF()
+		if err != nil {
+			fatalf("cannot load DWARF output from %s: %v", gccTmp(), err)
+		}
+		var data []byte
+		if f.Symtab != nil {
+			for i := range f.Symtab.Syms {
+				s := &f.Symtab.Syms[i]
+				// Mach-O still uses a leading _ to denote non-assembly symbols.
+				if s.Name == "_"+"__cgodebug_data" {
+					// Found it.  Now find data section.
+					if i := int(s.Sect) - 1; 0 <= i && i < len(f.Sections) {
+						sect := f.Sections[i]
+						if sect.Addr <= s.Value && s.Value < sect.Addr+sect.Size {
+							if sdat, err := sect.Data(); err == nil {
+								data = sdat[s.Value-sect.Addr:]
+							}
+						}
+					}
+				}
 			}
 		}
+		return d, f.ByteOrder, data
 	}
 
-	d, err := f.DWARF()
-	if err != nil {
-		fatal("cannot load DWARF debug information from %s: %s", gccTmp, err)
+	if f, err := elf.Open(gccTmp()); err == nil {
+		d, err := f.DWARF()
+		if err != nil {
+			fatalf("cannot load DWARF output from %s: %v", gccTmp(), err)
+		}
+		var data []byte
+		symtab, err := f.Symbols()
+		if err == nil {
+			for i := range symtab {
+				s := &symtab[i]
+				if s.Name == "__cgodebug_data" {
+					// Found it.  Now find data section.
+					if i := int(s.Section); 0 <= i && i < len(f.Sections) {
+						sect := f.Sections[i]
+						if sect.Addr <= s.Value && s.Value < sect.Addr+sect.Size {
+							if sdat, err := sect.Data(); err == nil {
+								data = sdat[s.Value-sect.Addr:]
+							}
+						}
+					}
+				}
+			}
+		}
+		return d, f.ByteOrder, data
 	}
-	return d
+
+	if f, err := pe.Open(gccTmp()); err == nil {
+		d, err := f.DWARF()
+		if err != nil {
+			fatalf("cannot load DWARF output from %s: %v", gccTmp(), err)
+		}
+		var data []byte
+		for _, s := range f.Symbols {
+			if s.Name == "_"+"__cgodebug_data" {
+				if i := int(s.SectionNumber) - 1; 0 <= i && i < len(f.Sections) {
+					sect := f.Sections[i]
+					if s.Value < sect.Size {
+						if sdat, err := sect.Data(); err == nil {
+							data = sdat[s.Value:]
+						}
+					}
+				}
+			}
+		}
+		return d, binary.LittleEndian, data
+	}
+
+	fatalf("cannot parse gcc output %s as ELF, Mach-O, PE object", gccTmp())
+	panic("not reached")
 }
 
 // gccDefines runs gcc -E -dM -xc - over the C program stdin
@@ -649,8 +886,9 @@ func (p *Package) gccDebug(stdin []byte) *dwarf.Data {
 // #defines that gcc encountered while processing the input
 // and its included files.
 func (p *Package) gccDefines(stdin []byte) string {
-	base := []string{p.gccName(), p.gccMachine(), "-E", "-dM", "-xc", "-"}
-	stdout, _ := runGcc(stdin, append(base, p.GccOptions...))
+	base := []string{p.gccName(), "-E", "-dM", "-xc"}
+	base = append(base, p.gccMachine()...)
+	stdout, _ := runGcc(stdin, append(append(base, p.GccOptions...), "-"))
 	return stdout
 }
 
@@ -659,7 +897,7 @@ func (p *Package) gccDefines(stdin []byte) string {
 // gcc to fail.
 func (p *Package) gccErrors(stdin []byte) string {
 	// TODO(rsc): require failure
-	args := append(p.gccCmd(), p.GccOptions...)
+	args := p.gccCmd()
 	if *debugGcc {
 		fmt.Fprintf(os.Stderr, "$ %s <<EOF\n", strings.Join(args, " "))
 		os.Stderr.Write(stdin)
@@ -714,15 +952,19 @@ type typeConv struct {
 	void                                   ast.Expr
 	unsafePointer                          ast.Expr
 	string                                 ast.Expr
+	goVoid                                 ast.Expr // _Ctype_void, denotes C's void
 
 	ptrSize int64
+	intSize int64
 }
 
 var tagGen int
-var typedef = make(map[string]ast.Expr)
+var typedef = make(map[string]*Type)
+var goIdent = make(map[string]*ast.Ident)
 
-func (c *typeConv) Init(ptrSize int64) {
+func (c *typeConv) Init(ptrSize, intSize int64) {
 	c.ptrSize = ptrSize
+	c.intSize = intSize
 	c.m = make(map[dwarf.Type]*Type)
 	c.bool = c.Ident("bool")
 	c.byte = c.Ident("byte")
@@ -742,6 +984,7 @@ func (c *typeConv) Init(ptrSize int64) {
 	c.unsafePointer = c.Ident("unsafe.Pointer")
 	c.void = c.Ident("void")
 	c.string = c.Ident("string")
+	c.goVoid = c.Ident("_Ctype_void")
 }
 
 // base strips away qualifiers and typedefs to get the underlying type
@@ -776,40 +1019,71 @@ var dwarfToName = map[string]string{
 
 const signedDelta = 64
 
+// String returns the current type representation.  Format arguments
+// are assembled within this method so that any changes in mutable
+// values are taken into account.
+func (tr *TypeRepr) String() string {
+	if len(tr.Repr) == 0 {
+		return ""
+	}
+	if len(tr.FormatArgs) == 0 {
+		return tr.Repr
+	}
+	return fmt.Sprintf(tr.Repr, tr.FormatArgs...)
+}
+
+// Empty returns true if the result of String would be "".
+func (tr *TypeRepr) Empty() bool {
+	return len(tr.Repr) == 0
+}
+
+// Set modifies the type representation.
+// If fargs are provided, repr is used as a format for fmt.Sprintf.
+// Otherwise, repr is used unprocessed as the type representation.
+func (tr *TypeRepr) Set(repr string, fargs ...interface{}) {
+	tr.Repr = repr
+	tr.FormatArgs = fargs
+}
+
 // Type returns a *Type with the same memory layout as
 // dtype when used as the type of a variable or a struct field.
-func (c *typeConv) Type(dtype dwarf.Type) *Type {
+func (c *typeConv) Type(dtype dwarf.Type, pos token.Pos) *Type {
 	if t, ok := c.m[dtype]; ok {
 		if t.Go == nil {
-			fatal("type conversion loop at %s", dtype)
+			fatalf("%s: type conversion loop at %s", lineno(pos), dtype)
 		}
 		return t
+	}
+
+	// clang won't generate DW_AT_byte_size for pointer types,
+	// so we have to fix it here.
+	if dt, ok := base(dtype).(*dwarf.PtrType); ok && dt.ByteSize == -1 {
+		dt.ByteSize = c.ptrSize
 	}
 
 	t := new(Type)
 	t.Size = dtype.Size()
 	t.Align = -1
-	t.C = dtype.Common().Name
-	t.EnumValues = nil
+	t.C = &TypeRepr{Repr: dtype.Common().Name}
 	c.m[dtype] = t
 
 	if t.Size < 0 {
 		// Unsized types are [0]byte
 		t.Size = 0
 		t.Go = c.Opaque(0)
-		if t.C == "" {
-			t.C = "void"
+		if t.C.Empty() {
+			t.C.Set("void")
 		}
 		return t
 	}
 
 	switch dt := dtype.(type) {
 	default:
-		fatal("unexpected type: %s", dtype)
+		fatalf("%s: unexpected type: %s", lineno(pos), dtype)
 
 	case *dwarf.AddrType:
 		if t.Size != c.ptrSize {
-			fatal("unexpected: %d-byte address type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte address type - %s", lineno(pos), t.Size, dtype)
 		}
 		t.Go = c.uintptr
 		t.Align = t.Size
@@ -824,18 +1098,18 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 			Len: c.intExpr(dt.Count),
 		}
 		t.Go = gt // publish before recursive call
-		sub := c.Type(dt.Type)
+		sub := c.Type(dt.Type, pos)
 		t.Align = sub.Align
 		gt.Elt = sub.Go
-		t.C = fmt.Sprintf("typeof(%s[%d])", sub.C, dt.Count)
+		t.C.Set("typeof(%s[%d])", sub.C, dt.Count)
 
 	case *dwarf.BoolType:
 		t.Go = c.bool
-		t.Align = c.ptrSize
+		t.Align = 1
 
 	case *dwarf.CharType:
 		if t.Size != 1 {
-			fatal("unexpected: %d-byte char type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte char type - %s", lineno(pos), t.Size, dtype)
 		}
 		t.Go = c.int8
 		t.Align = 1
@@ -844,7 +1118,7 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 		if t.Align = t.Size; t.Align >= c.ptrSize {
 			t.Align = c.ptrSize
 		}
-		t.C = "enum " + dt.EnumName
+		t.C.Set("enum " + dt.EnumName)
 		signed := 0
 		t.EnumValues = make(map[string]int64)
 		for _, ev := range dt.Val {
@@ -855,7 +1129,7 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 		}
 		switch t.Size + int64(signed) {
 		default:
-			fatal("unexpected: %d-byte enum type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte enum type - %s", lineno(pos), t.Size, dtype)
 		case 1:
 			t.Go = c.uint8
 		case 2:
@@ -877,7 +1151,7 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 	case *dwarf.FloatType:
 		switch t.Size {
 		default:
-			fatal("unexpected: %d-byte float type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte float type - %s", lineno(pos), t.Size, dtype)
 		case 4:
 			t.Go = c.float32
 		case 8:
@@ -890,7 +1164,7 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 	case *dwarf.ComplexType:
 		switch t.Size {
 		default:
-			fatal("unexpected: %d-byte complex type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte complex type - %s", lineno(pos), t.Size, dtype)
 		case 8:
 			t.Go = c.complex64
 		case 16:
@@ -908,11 +1182,11 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 
 	case *dwarf.IntType:
 		if dt.BitSize > 0 {
-			fatal("unexpected: %d-bit int type - %s", dt.BitSize, dtype)
+			fatalf("%s: unexpected: %d-bit int type - %s", lineno(pos), dt.BitSize, dtype)
 		}
 		switch t.Size {
 		default:
-			fatal("unexpected: %d-byte int type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte int type - %s", lineno(pos), t.Size, dtype)
 		case 1:
 			t.Go = c.int8
 		case 2:
@@ -932,19 +1206,19 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 		// Translate void* as unsafe.Pointer
 		if _, ok := base(dt.Type).(*dwarf.VoidType); ok {
 			t.Go = c.unsafePointer
-			t.C = "void*"
+			t.C.Set("void*")
 			break
 		}
 
 		gt := &ast.StarExpr{}
 		t.Go = gt // publish before recursive call
-		sub := c.Type(dt.Type)
+		sub := c.Type(dt.Type, pos)
 		gt.X = sub.Go
-		t.C = sub.C + "*"
+		t.C.Set("%s*", sub.C)
 
 	case *dwarf.QualType:
 		// Ignore qualifier.
-		t = c.Type(dt.Type)
+		t = c.Type(dt.Type, pos)
 		c.m[dtype] = t
 		return t
 
@@ -955,24 +1229,32 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 		if tag == "" {
 			tag = "__" + strconv.Itoa(tagGen)
 			tagGen++
-		} else if t.C == "" {
-			t.C = dt.Kind + " " + tag
+		} else if t.C.Empty() {
+			t.C.Set(dt.Kind + " " + tag)
 		}
 		name := c.Ident("_Ctype_" + dt.Kind + "_" + tag)
 		t.Go = name // publish before recursive calls
+		goIdent[name.Name] = name
 		switch dt.Kind {
-		case "union", "class":
-			typedef[name.Name] = c.Opaque(t.Size)
-			if t.C == "" {
-				t.C = fmt.Sprintf("typeof(unsigned char[%d])", t.Size)
+		case "class", "union":
+			t.Go = c.Opaque(t.Size)
+			if t.C.Empty() {
+				t.C.Set("typeof(unsigned char[%d])", t.Size)
 			}
+			t.Align = 1 // TODO: should probably base this on field alignment.
+			typedef[name.Name] = t
 		case "struct":
-			g, csyntax, align := c.Struct(dt)
-			if t.C == "" {
-				t.C = csyntax
+			g, csyntax, align := c.Struct(dt, pos)
+			if t.C.Empty() {
+				t.C.Set(csyntax)
 			}
 			t.Align = align
-			typedef[name.Name] = g
+			tt := *t
+			if tag != "" {
+				tt.C = &TypeRepr{"struct %s", []interface{}{tag}}
+			}
+			tt.Go = g
+			typedef[name.Name] = &tt
 		}
 
 	case *dwarf.TypedefType:
@@ -986,29 +1268,43 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 			t.Align = c.ptrSize
 			break
 		}
-		name := c.Ident("_Ctypedef_" + dt.Name)
+		if dt.Name == "_GoBytes_" {
+			// Special C name for Go []byte type.
+			// Knows slice layout used by compilers: pointer, length, cap.
+			t.Go = c.Ident("[]byte")
+			t.Size = c.ptrSize + 4 + 4
+			t.Align = c.ptrSize
+			break
+		}
+		name := c.Ident("_Ctype_" + dt.Name)
+		goIdent[name.Name] = name
 		t.Go = name // publish before recursive call
-		sub := c.Type(dt.Type)
+		sub := c.Type(dt.Type, pos)
 		t.Size = sub.Size
 		t.Align = sub.Align
 		if _, ok := typedef[name.Name]; !ok {
-			typedef[name.Name] = sub.Go
+			tt := *t
+			tt.Go = sub.Go
+			typedef[name.Name] = &tt
+		}
+		if *godefs || *cdefs {
+			t.Go = sub.Go
 		}
 
 	case *dwarf.UcharType:
 		if t.Size != 1 {
-			fatal("unexpected: %d-byte uchar type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte uchar type - %s", lineno(pos), t.Size, dtype)
 		}
 		t.Go = c.uint8
 		t.Align = 1
 
 	case *dwarf.UintType:
 		if dt.BitSize > 0 {
-			fatal("unexpected: %d-bit uint type - %s", dt.BitSize, dtype)
+			fatalf("%s: unexpected: %d-bit uint type - %s", lineno(pos), dt.BitSize, dtype)
 		}
 		switch t.Size {
 		default:
-			fatal("unexpected: %d-byte uint type - %s", t.Size, dtype)
+			fatalf("%s: unexpected: %d-byte uint type - %s", lineno(pos), t.Size, dtype)
 		case 1:
 			t.Go = c.uint8
 		case 2:
@@ -1023,8 +1319,9 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 		}
 
 	case *dwarf.VoidType:
-		t.Go = c.void
-		t.C = "void"
+		t.Go = c.goVoid
+		t.C.Set("void")
+		t.Align = 1
 	}
 
 	switch dtype.(type) {
@@ -1034,15 +1331,18 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 			if ss, ok := dwarfToName[s]; ok {
 				s = ss
 			}
-			s = strings.Join(strings.Split(s, " ", -1), "") // strip spaces
+			s = strings.Join(strings.Split(s, " "), "") // strip spaces
 			name := c.Ident("_Ctype_" + s)
-			typedef[name.Name] = t.Go
-			t.Go = name
+			tt := *t
+			typedef[name.Name] = &tt
+			if !*godefs && !*cdefs {
+				t.Go = name
+			}
 		}
 	}
 
-	if t.C == "" {
-		fatal("internal error: did not create C name for %s", dtype)
+	if t.C.Empty() {
+		fatalf("%s: internal error: did not create C name for %s", lineno(pos), dtype)
 	}
 
 	return t
@@ -1050,17 +1350,19 @@ func (c *typeConv) Type(dtype dwarf.Type) *Type {
 
 // FuncArg returns a Go type with the same memory layout as
 // dtype when used as the type of a C function argument.
-func (c *typeConv) FuncArg(dtype dwarf.Type) *Type {
-	t := c.Type(dtype)
+func (c *typeConv) FuncArg(dtype dwarf.Type, pos token.Pos) *Type {
+	t := c.Type(dtype, pos)
 	switch dt := dtype.(type) {
 	case *dwarf.ArrayType:
 		// Arrays are passed implicitly as pointers in C.
 		// In Go, we must be explicit.
+		tr := &TypeRepr{}
+		tr.Set("%s*", t.C)
 		return &Type{
 			Size:  c.ptrSize,
 			Align: c.ptrSize,
 			Go:    &ast.StarExpr{X: t.Go},
-			C:     t.C + "*",
+			C:     tr,
 		}
 	case *dwarf.TypedefType:
 		// C has much more relaxed rules than Go for
@@ -1070,9 +1372,18 @@ func (c *typeConv) FuncArg(dtype dwarf.Type) *Type {
 		if ptr, ok := base(dt.Type).(*dwarf.PtrType); ok {
 			// Unless the typedef happens to point to void* since
 			// Go has special rules around using unsafe.Pointer.
-			if _, void := base(ptr.Type).(*dwarf.VoidType); !void {
-				return c.Type(ptr)
+			if _, void := base(ptr.Type).(*dwarf.VoidType); void {
+				break
 			}
+
+			t = c.Type(ptr, pos)
+			if t == nil {
+				return nil
+			}
+
+			// Remember the C spelling, in case the struct
+			// has __attribute__((unavailable)) on it.  See issue 2888.
+			t.Typedef = dt.Name
 		}
 	}
 	return t
@@ -1080,7 +1391,7 @@ func (c *typeConv) FuncArg(dtype dwarf.Type) *Type {
 
 // FuncType returns the Go type analogous to dtype.
 // There is no guarantee about matching memory layout.
-func (c *typeConv) FuncType(dtype *dwarf.FuncType) *FuncType {
+func (c *typeConv) FuncType(dtype *dwarf.FuncType, pos token.Pos) *FuncType {
 	p := make([]*Type, len(dtype.ParamType))
 	gp := make([]*ast.Field, len(dtype.ParamType))
 	for i, f := range dtype.ParamType {
@@ -1093,14 +1404,16 @@ func (c *typeConv) FuncType(dtype *dwarf.FuncType) *FuncType {
 			p, gp = nil, nil
 			break
 		}
-		p[i] = c.FuncArg(f)
+		p[i] = c.FuncArg(f, pos)
 		gp[i] = &ast.Field{Type: p[i].Go}
 	}
 	var r *Type
 	var gr []*ast.Field
-	if _, ok := dtype.ReturnType.(*dwarf.VoidType); !ok && dtype.ReturnType != nil {
-		r = c.Type(dtype.ReturnType)
-		gr = []*ast.Field{&ast.Field{Type: r.Go}}
+	if _, ok := dtype.ReturnType.(*dwarf.VoidType); ok {
+		gr = []*ast.Field{{Type: c.goVoid}}
+	} else if dtype.ReturnType != nil {
+		r = c.Type(dtype.ReturnType, pos)
+		gr = []*ast.Field{{Type: r.Go}}
 	}
 	return &FuncType{
 		Params: p,
@@ -1129,7 +1442,7 @@ func (c *typeConv) Opaque(n int64) ast.Expr {
 func (c *typeConv) intExpr(n int64) ast.Expr {
 	return &ast.BasicLit{
 		Kind:  token.INT,
-		Value: []byte(strconv.Itoa64(n)),
+		Value: strconv.FormatInt(n, 10),
 	}
 }
 
@@ -1142,7 +1455,7 @@ func (c *typeConv) pad(fld []*ast.Field, size int64) []*ast.Field {
 }
 
 // Struct conversion: return Go and (6g) C syntax for type.
-func (c *typeConv) Struct(dt *dwarf.StructType) (expr *ast.StructType, csyntax string, align int64) {
+func (c *typeConv) Struct(dt *dwarf.StructType, pos token.Pos) (expr *ast.StructType, csyntax string, align int64) {
 	var buf bytes.Buffer
 	buf.WriteString("struct {")
 	fld := make([]*ast.Field, 0, 2*len(dt.Field)+1) // enough for padding around every field
@@ -1160,38 +1473,61 @@ func (c *typeConv) Struct(dt *dwarf.StructType) (expr *ast.StructType, csyntax s
 		ident[f.Name] = f.Name
 		used[f.Name] = true
 	}
-	for cid, goid := range ident {
-		if token.Lookup([]byte(goid)).IsKeyword() {
-			// Avoid keyword
-			goid = "_" + goid
 
-			// Also avoid existing fields
-			for _, exist := used[goid]; exist; _, exist = used[goid] {
+	if !*godefs && !*cdefs {
+		for cid, goid := range ident {
+			if token.Lookup(goid).IsKeyword() {
+				// Avoid keyword
 				goid = "_" + goid
-			}
 
-			used[goid] = true
-			ident[cid] = goid
+				// Also avoid existing fields
+				for _, exist := used[goid]; exist; _, exist = used[goid] {
+					goid = "_" + goid
+				}
+
+				used[goid] = true
+				ident[cid] = goid
+			}
 		}
 	}
 
+	anon := 0
 	for _, f := range dt.Field {
-		if f.BitSize > 0 && f.BitSize != f.ByteSize*8 {
-			continue
-		}
 		if f.ByteOffset > off {
 			fld = c.pad(fld, f.ByteOffset-off)
 			off = f.ByteOffset
 		}
-		t := c.Type(f.Type)
+		t := c.Type(f.Type, pos)
+		tgo := t.Go
+		size := t.Size
+
+		if f.BitSize > 0 {
+			if f.BitSize%8 != 0 {
+				continue
+			}
+			size = f.BitSize / 8
+			name := tgo.(*ast.Ident).String()
+			if strings.HasPrefix(name, "int") {
+				name = "int"
+			} else {
+				name = "uint"
+			}
+			tgo = ast.NewIdent(name + fmt.Sprint(f.BitSize))
+		}
+
 		n := len(fld)
 		fld = fld[0 : n+1]
-
-		fld[n] = &ast.Field{Names: []*ast.Ident{c.Ident(ident[f.Name])}, Type: t.Go}
-		off += t.Size
-		buf.WriteString(t.C)
+		name := f.Name
+		if name == "" {
+			name = fmt.Sprintf("anon%d", anon)
+			anon++
+			ident[name] = name
+		}
+		fld[n] = &ast.Field{Names: []*ast.Ident{c.Ident(ident[name])}, Type: tgo}
+		off += size
+		buf.WriteString(t.C.String())
 		buf.WriteString(" ")
-		buf.WriteString(f.Name)
+		buf.WriteString(name)
 		buf.WriteString("; ")
 		if t.Align > align {
 			align = t.Align
@@ -1202,10 +1538,100 @@ func (c *typeConv) Struct(dt *dwarf.StructType) (expr *ast.StructType, csyntax s
 		off = dt.ByteSize
 	}
 	if off != dt.ByteSize {
-		fatal("struct size calculation error")
+		fatalf("%s: struct size calculation error off=%d bytesize=%d", lineno(pos), off, dt.ByteSize)
 	}
 	buf.WriteString("}")
 	csyntax = buf.String()
+
+	if *godefs || *cdefs {
+		godefsFields(fld)
+	}
 	expr = &ast.StructType{Fields: &ast.FieldList{List: fld}}
 	return
+}
+
+func upper(s string) string {
+	if s == "" {
+		return ""
+	}
+	r, size := utf8.DecodeRuneInString(s)
+	if r == '_' {
+		return "X" + s
+	}
+	return string(unicode.ToUpper(r)) + s[size:]
+}
+
+// godefsFields rewrites field names for use in Go or C definitions.
+// It strips leading common prefixes (like tv_ in tv_sec, tv_usec)
+// converts names to upper case, and rewrites _ into Pad_godefs_n,
+// so that all fields are exported.
+func godefsFields(fld []*ast.Field) {
+	prefix := fieldPrefix(fld)
+	npad := 0
+	for _, f := range fld {
+		for _, n := range f.Names {
+			if n.Name != prefix {
+				n.Name = strings.TrimPrefix(n.Name, prefix)
+			}
+			if n.Name == "_" {
+				// Use exported name instead.
+				n.Name = "Pad_cgo_" + strconv.Itoa(npad)
+				npad++
+			}
+			if !*cdefs {
+				n.Name = upper(n.Name)
+			}
+		}
+		p := &f.Type
+		t := *p
+		if star, ok := t.(*ast.StarExpr); ok {
+			star = &ast.StarExpr{X: star.X}
+			*p = star
+			p = &star.X
+			t = *p
+		}
+		if id, ok := t.(*ast.Ident); ok {
+			if id.Name == "unsafe.Pointer" {
+				*p = ast.NewIdent("*byte")
+			}
+		}
+	}
+}
+
+// fieldPrefix returns the prefix that should be removed from all the
+// field names when generating the C or Go code.  For generated
+// C, we leave the names as is (tv_sec, tv_usec), since that's what
+// people are used to seeing in C.  For generated Go code, such as
+// package syscall's data structures, we drop a common prefix
+// (so sec, usec, which will get turned into Sec, Usec for exporting).
+func fieldPrefix(fld []*ast.Field) string {
+	if *cdefs {
+		return ""
+	}
+	prefix := ""
+	for _, f := range fld {
+		for _, n := range f.Names {
+			// Ignore field names that don't have the prefix we're
+			// looking for.  It is common in C headers to have fields
+			// named, say, _pad in an otherwise prefixed header.
+			// If the struct has 3 fields tv_sec, tv_usec, _pad1, then we
+			// still want to remove the tv_ prefix.
+			// The check for "orig_" here handles orig_eax in the
+			// x86 ptrace register sets, which otherwise have all fields
+			// with reg_ prefixes.
+			if strings.HasPrefix(n.Name, "orig_") || strings.HasPrefix(n.Name, "_") {
+				continue
+			}
+			i := strings.Index(n.Name, "_")
+			if i < 0 {
+				continue
+			}
+			if prefix == "" {
+				prefix = n.Name[:i+1]
+			} else if prefix != n.Name[:i+1] {
+				return ""
+			}
+		}
+	}
+	return prefix
 }

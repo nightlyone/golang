@@ -44,37 +44,42 @@
 #endif
 
 char	*noname		= "<none>";
-char	thechar		= '8';
 char	*thestring 	= "386";
 
-/*
- *	-H0 -T0x40004C -D0x10000000	is garbage unix
- *	-H1 -T0xd0 -R4			is unix coff
- *	-H2 -T4128 -R4096		is plan9 format
- *	-H3 -Tx -Rx			is MS-DOS .COM
- *	-H4 -Tx -Rx			is fake MS-DOS .EXE
- *	-H6 -Tx -Rx			is Apple Mach-O
- *	-H7 -Tx -Rx			is Linux ELF32
- *	-H8 -Tx -Rx			was Google Native Client
- *	-H9 -Tx -Rx			is FreeBSD ELF32
- *	-H10 -Tx -Rx			is MS Windows PE
- *	-H11 -Tx -Rx			is tiny (os image)
- */
+Header headers[] = {
+	"garbunix", Hgarbunix,
+	"unixcoff", Hunixcoff,
+	"plan9", Hplan9x32,
+	"msdoscom", Hmsdoscom,
+	"msdosexe", Hmsdosexe,
+	"darwin", Hdarwin,
+	"linux", Hlinux,
+	"freebsd", Hfreebsd,
+	"netbsd", Hnetbsd,
+	"openbsd", Hopenbsd,
+	"windows", Hwindows,
+	"windowsgui", Hwindows,
+	0, 0
+};
 
-void
-usage(void)
-{
-	fprint(2, "usage: 8l [-options] [-E entry] [-H head] [-I interpreter] [-L dir] [-T text] [-R rnd] [-r path] [-o out] main.8\n");
-	exits("usage");
-}
+/*
+ *	-Hgarbunix -T0x40004C -D0x10000000	is garbage unix
+ *	-Hunixcoff -T0xd0 -R4			is unix coff
+ *	-Hplan9 -T4128 -R4096			is plan9 format
+ *	-Hmsdoscom -Tx -Rx			is MS-DOS .COM
+ *	-Hmsdosexe -Tx -Rx			is fake MS-DOS .EXE
+ *	-Hdarwin -Tx -Rx			is Apple Mach-O
+ *	-Hlinux -Tx -Rx				is Linux ELF32
+ *	-Hfreebsd -Tx -Rx			is FreeBSD ELF32
+ *	-Hnetbsd -Tx -Rx			is NetBSD ELF32
+ *	-Hopenbsd -Tx -Rx			is OpenBSD ELF32
+ *	-Hwindows -Tx -Rx			is MS Windows PE32
+ */
 
 void
 main(int argc, char *argv[])
 {
-	int c;
-
 	Binit(&bso, 1, OWRITE);
-	cout = -1;
 	listinit();
 	memset(debug, 0, sizeof(debug));
 	nerrors = 0;
@@ -84,92 +89,77 @@ main(int argc, char *argv[])
 	INITDAT = -1;
 	INITRND = -1;
 	INITENTRY = 0;
+	LIBINITENTRY = 0;
+	nuxiinit();
 
-	ARGBEGIN {
-	default:
-		c = ARGC();
-		if(c == 'l')
-			usage();
- 		if(c >= 0 && c < sizeof(debug))
-			debug[c]++;
-		break;
-	case 'o': /* output to (next arg) */
-		outfile = EARGF(usage());
-		break;
-	case 'E':
-		INITENTRY = EARGF(usage());
-		break;
-	case 'H':
-		HEADTYPE = atolwhex(EARGF(usage()));
-		break;
-	case 'I':
-		interpreter = EARGF(usage());
-		break;
-	case 'L':
-		Lflag(EARGF(usage()));
-		break;
-	case 'T':
-		INITTEXT = atolwhex(EARGF(usage()));
-		break;
-	case 'D':
-		INITDAT = atolwhex(EARGF(usage()));
-		break;
-	case 'R':
-		INITRND = atolwhex(EARGF(usage()));
-		break;
-	case 'r':
-		rpath = EARGF(usage());
-		break;
-	case 'V':
-		print("%cl version %s\n", thechar, getgoversion());
-		errorexit();
-	} ARGEND
+	flagcount("1", "use alternate profiling code", &debug['1']);
+	flagfn1("B", "info: define ELF NT_GNU_BUILD_ID note", addbuildinfo);
+	flagstr("E", "sym: entry symbol", &INITENTRY);
+	flagint32("D", "addr: data address", &INITDAT);
+	flagfn1("I", "interp: set ELF interp", setinterp);
+	flagfn1("L", "dir: add dir to library path", Lflag);
+	flagfn1("H", "head: header type", setheadtype);
+	flagcount("K", "add stack underflow checks", &debug['K']);
+	flagcount("O", "print pc-line tables", &debug['O']);
+	flagcount("Q", "debug byte-register code gen", &debug['Q']);
+	flagint32("R", "rnd: address rounding", &INITRND);
+	flagcount("S", "check type signatures", &debug['S']);
+	flagint32("T", "addr: text address", &INITTEXT);
+	flagfn0("V", "print version and exit", doversion);
+	flagcount("W", "disassemble input", &debug['W']);
+	flagfn2("X", "name value: define string data", addstrdata);
+	flagcount("Z", "clear stack frame on entry", &debug['Z']);
+	flagcount("a", "disassemble output", &debug['a']);
+	flagcount("c", "dump call graph", &debug['c']);
+	flagcount("d", "disable dynamic executable", &debug['d']);
+	flagcount("f", "ignore version mismatch", &debug['f']);
+	flagcount("g", "disable go package data checks", &debug['g']);
+	flagcount("hostobj", "generate host object file", &isobj);
+	flagstr("k", "sym: set field tracking symbol", &tracksym);
+	flagstr("o", "outfile: set output file", &outfile);
+	flagcount("p", "insert profiling code", &debug['p']);
+	flagstr("r", "dir1:dir2:...: set ELF dynamic linker search path", &rpath);
+	flagcount("race", "enable race detector", &flag_race);
+	flagcount("s", "disable symbol table", &debug['s']);
+	flagcount("n", "dump symbol table", &debug['n']);
+	flagcount("u", "reject unsafe packages", &debug['u']);
+	flagcount("v", "print link trace", &debug['v']);
+	flagcount("w", "disable DWARF generation", &debug['w']);
+	
+	flagparse(&argc, &argv, usage);
 
 	if(argc != 1)
 		usage();
 
 	mywhatsys();	// get goos
 
-	if(HEADTYPE == -1) {
-		HEADTYPE = 2;
-		if(strcmp(goos, "linux") == 0)
-			HEADTYPE = 7;
-		else
-		if(strcmp(goos, "darwin") == 0)
-			HEADTYPE = 6;
-		else
-		if(strcmp(goos, "freebsd") == 0)
-			HEADTYPE = 9;
-		else
-		if(strcmp(goos, "windows") == 0)
-			HEADTYPE = 10;
-		else
-		if(strcmp(goos, "tiny") == 0)
-			HEADTYPE = 11;
-		else
-		if(strcmp(goos, "plan9") == 0)
-			HEADTYPE = 2;
-		else
-			print("goos is not known: %s\n", goos);
+	if(HEADTYPE == -1)
+		HEADTYPE = headtype(goos);
+
+	if(isobj) {
+		switch(HEADTYPE) {
+		default:
+			sysfatal("cannot use -hostobj with -H %s", headstr(HEADTYPE));
+		case Hlinux:
+			break;
+		}
 	}
 
 	if(outfile == nil) {
-		if(HEADTYPE == 10)
+		if(HEADTYPE == Hwindows)
 			outfile = "8.out.exe";
 		else
 			outfile = "8.out";
 	}
 
 	libinit();
-	if(rpath == nil)
-		rpath = smprint("%s/pkg/%s_%s", goroot, goos, goarch);
 
 	switch(HEADTYPE) {
 	default:
 		diag("unknown -H option");
 		errorexit();
 
-	case 0:	/* this is garbage */
+	case Hgarbunix:	/* this is garbage */
 		HEADR = 20L+56L;
 		if(INITTEXT == -1)
 			INITTEXT = 0x40004CL;
@@ -178,7 +168,7 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 0;
 		break;
-	case 1:	/* is unix coff */
+	case Hunixcoff:	/* is unix coff */
 		HEADR = 0xd0L;
 		if(INITTEXT == -1)
 			INITTEXT = 0xd0;
@@ -187,7 +177,7 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 0;
 		break;
-	case 2:	/* plan 9 */
+	case Hplan9x32:	/* plan 9 */
 		tlsoffset = -8;
 		HEADR = 32L;
 		if(INITTEXT == -1)
@@ -195,9 +185,9 @@ main(int argc, char *argv[])
 		if(INITDAT == -1)
 			INITDAT = 0;
 		if(INITRND == -1)
-			INITRND = 1;
+			INITRND = 4096;
 		break;
-	case 3:	/* MS-DOS .COM */
+	case Hmsdoscom:	/* MS-DOS .COM */
 		HEADR = 0;
 		if(INITTEXT == -1)
 			INITTEXT = 0x0100;
@@ -206,7 +196,7 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 4;
 		break;
-	case 4:	/* fake MS-DOS .EXE */
+	case Hmsdosexe:	/* fake MS-DOS .EXE */
 		HEADR = 0x200;
 		if(INITTEXT == -1)
 			INITTEXT = 0x0100;
@@ -218,14 +208,14 @@ main(int argc, char *argv[])
 		if(debug['v'])
 			Bprint(&bso, "HEADR = 0x%d\n", HEADR);
 		break;
-	case 6:	/* apple MACH */
+	case Hdarwin:	/* apple MACH */
 		/*
 		 * OS X system constant - offset from %gs to our TLS.
-		 * Explained in ../../libcgo/darwin_386.c.
+		 * Explained in ../../pkg/runtime/cgo/gcc_darwin_386.c.
 		 */
 		tlsoffset = 0x468;
 		machoinit();
-		HEADR = MACHORESERVE;
+		HEADR = INITIAL_MACHO_HEADR;
 		if(INITTEXT == -1)
 			INITTEXT = 4096+HEADR;
 		if(INITDAT == -1)
@@ -233,13 +223,15 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 4096;
 		break;
-	case 7:	/* elf32 executable */
-	case 9:
+	case Hlinux:	/* elf32 executable */
+	case Hfreebsd:
+	case Hnetbsd:
+	case Hopenbsd:
 		/*
 		 * ELF uses TLS offsets negative from %gs.
 		 * Translate 0(GS) and 4(GS) into -8(GS) and -4(GS).
-		 * Also known to ../../pkg/runtime/linux/386/sys.s
-		 * and ../../libcgo/linux_386.c.
+		 * Also known to ../../pkg/runtime/sys_linux_386.s
+		 * and ../../pkg/runtime/cgo/gcc_linux_386.c.
 		 */
 		tlsoffset = -8;
 		elfinit();
@@ -251,7 +243,7 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 4096;
 		break;
-	case 10: /* PE executable */
+	case Hwindows: /* PE executable */
 		peinit();
 		HEADR = PEFILEHEADR;
 		if(INITTEXT == -1)
@@ -260,17 +252,6 @@ main(int argc, char *argv[])
 			INITDAT = 0;
 		if(INITRND == -1)
 			INITRND = PESECTALIGN;
-		break;
-	case 11:
-		tlsoffset = 0;
-		elfinit();
-		HEADR = ELFRESERVE;
-		if(INITTEXT == -1)
-			INITTEXT = 0x100000+HEADR;
-		if(INITDAT == -1)
-			INITDAT = 0;
-		if(INITRND == -1)
-			INITRND = 4096;
 		break;
 	}
 	if(INITDAT != 0 && INITRND != 0)
@@ -292,7 +273,6 @@ main(int argc, char *argv[])
 	zprg.to = zprg.from;
 
 	pcstr = "%.6ux ";
-	nuxiinit();
 	histgen = 0;
 	pc = 0;
 	dtype = 4;
@@ -306,11 +286,12 @@ main(int argc, char *argv[])
 	patch();
 	follow();
 	doelf();
-	if(HEADTYPE == 6)
+	if(HEADTYPE == Hdarwin)
 		domacho();
-	if(HEADTYPE == 10)
+	if(HEADTYPE == Hwindows)
 		dope();
 	dostkoff();
+	dostkcheck();
 	if(debug['p'])
 		if(debug['1'])
 			doprof1();
@@ -323,6 +304,7 @@ main(int argc, char *argv[])
 	symtab();
 	dodata();
 	address();
+	doweak();
 	reloc();
 	asmb();
 	undef();
@@ -342,7 +324,7 @@ zsym(char *pn, Biobuf *f, Sym *h[])
 {	
 	int o;
 	
-	o = Bgetc(f);
+	o = BGETC(f);
 	if(o < 0 || o >= NSYM || h[o] == nil)
 		mangle(pn);
 	return h[o];
@@ -356,12 +338,12 @@ zaddr(char *pn, Biobuf *f, Adr *a, Sym *h[])
 	Sym *s;
 	Auto *u;
 
-	t = Bgetc(f);
+	t = BGETC(f);
 	a->index = D_NONE;
 	a->scale = 0;
 	if(t & T_INDEX) {
-		a->index = Bgetc(f);
-		a->scale = Bgetc(f);
+		a->index = BGETC(f);
+		a->scale = BGETC(f);
 	}
 	a->type = D_NONE;
 	a->offset = 0;
@@ -385,7 +367,7 @@ zaddr(char *pn, Biobuf *f, Adr *a, Sym *h[])
 		a->type = D_SCONST;
 	}
 	if(t & T_TYPE)
-		a->type = Bgetc(f);
+		a->type = BGETC(f);
 	adrgotype = S;
 	if(t & T_GOTYPE)
 		adrgotype = zsym(pn, f, h);
@@ -437,7 +419,7 @@ ldobj1(Biobuf *f, char *pkg, int64 len, char *pn)
 	int32 ipc;
 	Prog *p;
 	int v, o, r, skip;
-	Sym *h[NSYM], *s, *di;
+	Sym *h[NSYM], *s;
 	uint32 sig;
 	int ntext;
 	int32 eof;
@@ -448,7 +430,6 @@ ldobj1(Biobuf *f, char *pkg, int64 len, char *pn)
 	lastp = nil;
 	ntext = 0;
 	eof = Boffset(f) + len;
-	di = S;
 	src[0] = 0;
 
 
@@ -462,10 +443,10 @@ newloop:
 loop:
 	if(f->state == Bracteof || Boffset(f) >= eof)
 		goto eof;
-	o = Bgetc(f);
+	o = BGETC(f);
 	if(o == Beof)
 		goto eof;
-	o |= Bgetc(f) << 8;
+	o |= BGETC(f) << 8;
 	if(o <= AXXX || o >= ALAST) {
 		if(o < 0)
 			goto eof;
@@ -478,8 +459,8 @@ loop:
 		sig = 0;
 		if(o == ASIGNAME)
 			sig = Bget4(f);
-		v = Bgetc(f);	/* type */
-		o = Bgetc(f);	/* sym */
+		v = BGETC(f);	/* type */
+		o = BGETC(f);	/* sym */
 		r = 0;
 		if(v == D_STATIC)
 			r = version;
@@ -495,13 +476,12 @@ loop:
 		s = lookup(x, r);
 		if(x != name)
 			free(x);
-		name = nil;
 
 		if(debug['S'] && r == 0)
 			sig = 1729;
 		if(sig != 0){
 			if(s->sig != 0 && s->sig != sig)
-				diag("incompatible type signatures"
+				diag("incompatible type signatures "
 					"%ux(%s) and %ux(%s) for %s",
 					s->sig, s->file, sig, pn, s->name);
 			s->sig = sig;
@@ -535,8 +515,6 @@ loop:
 	p->as = o;
 	p->line = Bget4(f);
 	p->back = 2;
-	p->ft = 0;
-	p->tt = 0;
 	zaddr(pn, f, &p->from, h);
 	fromgotype = adrgotype;
 	zaddr(pn, f, &p->to, h);
@@ -575,7 +553,7 @@ loop:
 			s->type = SBSS;
 			s->size = 0;
 		}
-		if(s->type != SBSS && !s->dupok) {
+		if(s->type != SBSS && s->type != SNOPTRBSS && !s->dupok) {
 			diag("%s: redefinition: %s in %s",
 				pn, s->name, TNAME);
 			s->type = SBSS;
@@ -587,6 +565,8 @@ loop:
 			s->dupok = 1;
 		if(p->from.scale & RODATA)
 			s->type = SRODATA;
+		else if(p->from.scale & NOPTR)
+			s->type = SNOPTRBSS;
 		goto loop;
 
 	case ADATA:
@@ -606,7 +586,7 @@ loop:
 			diag("multiple initialization for %s: in both %s and %s", s->name, s->file, pn);
 			errorexit();
 		}
-		savedata(s, p);
+		savedata(s, p, pn);
 		unmal(p, sizeof *p);
 		goto loop;
 
@@ -615,9 +595,22 @@ loop:
 		pc++;
 		goto loop;
 
+	case ALOCALS:
+		cursym->locals = p->to.offset;
+		pc++;
+		goto loop;
+
+	case ATYPE:
+		pc++;
+		goto loop;
+
 	case ATEXT:
 		s = p->from.sym;
 		if(s->text != nil) {
+			if(p->from.scale & DUPOK) {
+				skip = 1;
+				goto casdef;
+			}
 			diag("%s: %s: redefinition", pn, s->name);
 			return;
 		}
@@ -649,6 +642,7 @@ loop:
 		}
 		s->type = STEXT;
 		s->value = pc;
+		s->args = p->to.offset2;
 		lastp = p;
 		p->pc = pc++;
 		goto loop;
@@ -662,6 +656,13 @@ loop:
 	case AFDIVRF:
 	case AFCOMF:
 	case AFCOMFP:
+	case AMOVSS:
+	case AADDSS:
+	case ASUBSS:
+	case AMULSS:
+	case ADIVSS:
+	case ACOMISS:
+	case AUCOMISS:
 		if(skip)
 			goto casdef;
 		if(p->from.type == D_FCONST) {
@@ -669,7 +670,7 @@ loop:
 			sprint(literal, "$%ux", ieeedtof(&p->from.ieee));
 			s = lookup(literal, 0);
 			if(s->type == 0) {
-				s->type = SDATA;
+				s->type = SRODATA;
 				adduint32(s, ieeedtof(&p->from.ieee));
 				s->reachable = 0;
 			}
@@ -688,6 +689,13 @@ loop:
 	case AFDIVRD:
 	case AFCOMD:
 	case AFCOMDP:
+	case AMOVSD:
+	case AADDSD:
+	case ASUBSD:
+	case AMULSD:
+	case ADIVSD:
+	case ACOMISD:
+	case AUCOMISD:
 		if(skip)
 			goto casdef;
 		if(p->from.type == D_FCONST) {
@@ -696,7 +704,7 @@ loop:
 				p->from.ieee.l, p->from.ieee.h);
 			s = lookup(literal, 0);
 			if(s->type == 0) {
-				s->type = SDATA;
+				s->type = SRODATA;
 				adduint32(s, p->from.ieee.l);
 				adduint32(s, p->from.ieee.h);
 				s->reachable = 0;
@@ -725,7 +733,6 @@ loop:
 		lastp = p;
 		goto loop;
 	}
-	goto loop;
 
 eof:
 	diag("truncated object file: %s", pn);

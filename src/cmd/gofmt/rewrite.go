@@ -13,15 +13,15 @@ import (
 	"reflect"
 	"strings"
 	"unicode"
-	"utf8"
+	"unicode/utf8"
 )
-
 
 func initRewrite() {
 	if *rewriteRule == "" {
+		rewrite = nil // disable any previous rewrite
 		return
 	}
-	f := strings.Split(*rewriteRule, "->", -1)
+	f := strings.Split(*rewriteRule, "->")
 	if len(f) != 2 {
 		fmt.Fprintf(os.Stderr, "rewrite rule must be of the form 'pattern -> replacement'\n")
 		os.Exit(2)
@@ -31,13 +31,12 @@ func initRewrite() {
 	rewrite = func(p *ast.File) *ast.File { return rewriteFile(pattern, replace, p) }
 }
 
-
 // parseExpr parses s as an expression.
 // It might make sense to expand this to allow statement patterns,
 // but there are problems with preserving formatting and also
 // with what a wildcard for a statement looks like.
 func parseExpr(s string, what string) ast.Expr {
-	x, err := parser.ParseExpr(fset, "input", s)
+	x, err := parser.ParseExpr(s)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "parsing %s %s: %s\n", what, s, err)
 		os.Exit(2)
@@ -45,77 +44,113 @@ func parseExpr(s string, what string) ast.Expr {
 	return x
 }
 
+// Keep this function for debugging.
+/*
+func dump(msg string, val reflect.Value) {
+	fmt.Printf("%s:\n", msg)
+	ast.Print(fset, val.Interface())
+	fmt.Println()
+}
+*/
 
 // rewriteFile applies the rewrite rule 'pattern -> replace' to an entire file.
 func rewriteFile(pattern, replace ast.Expr, p *ast.File) *ast.File {
+	cmap := ast.NewCommentMap(fileSet, p, p.Comments)
 	m := make(map[string]reflect.Value)
-	pat := reflect.NewValue(pattern)
-	repl := reflect.NewValue(replace)
+	pat := reflect.ValueOf(pattern)
+	repl := reflect.ValueOf(replace)
 	var f func(val reflect.Value) reflect.Value // f is recursive
 	f = func(val reflect.Value) reflect.Value {
+		// don't bother if val is invalid to start with
+		if !val.IsValid() {
+			return reflect.Value{}
+		}
 		for k := range m {
-			m[k] = nil, false
+			delete(m, k)
 		}
 		val = apply(f, val)
 		if match(m, pat, val) {
-			val = subst(m, repl, reflect.NewValue(val.Interface().(ast.Node).Pos()))
+			val = subst(m, repl, reflect.ValueOf(val.Interface().(ast.Node).Pos()))
 		}
 		return val
 	}
-	return apply(f, reflect.NewValue(p)).Interface().(*ast.File)
+	r := apply(f, reflect.ValueOf(p)).Interface().(*ast.File)
+	r.Comments = cmap.Filter(r).Comments() // recreate comments list
+	return r
 }
-
 
 // setValue is a wrapper for x.SetValue(y); it protects
 // the caller from panics if x cannot be changed to y.
 func setValue(x, y reflect.Value) {
+	// don't bother if y is invalid to start with
+	if !y.IsValid() {
+		return
+	}
 	defer func() {
 		if x := recover(); x != nil {
-			if s, ok := x.(string); ok && strings.HasPrefix(s, "type mismatch") {
+			if s, ok := x.(string); ok &&
+				(strings.Contains(s, "type mismatch") || strings.Contains(s, "not assignable")) {
 				// x cannot be set to y - ignore this rewrite
 				return
 			}
 			panic(x)
 		}
 	}()
-	x.SetValue(y)
+	x.Set(y)
 }
 
+// Values/types for special cases.
+var (
+	objectPtrNil = reflect.ValueOf((*ast.Object)(nil))
+	scopePtrNil  = reflect.ValueOf((*ast.Scope)(nil))
+
+	identType     = reflect.TypeOf((*ast.Ident)(nil))
+	objectPtrType = reflect.TypeOf((*ast.Object)(nil))
+	positionType  = reflect.TypeOf(token.NoPos)
+	scopePtrType  = reflect.TypeOf((*ast.Scope)(nil))
+)
 
 // apply replaces each AST field x in val with f(x), returning val.
 // To avoid extra conversions, f operates on the reflect.Value form.
 func apply(f func(reflect.Value) reflect.Value, val reflect.Value) reflect.Value {
-	if val == nil {
-		return nil
+	if !val.IsValid() {
+		return reflect.Value{}
 	}
-	switch v := reflect.Indirect(val).(type) {
-	case *reflect.SliceValue:
+
+	// *ast.Objects introduce cycles and are likely incorrect after
+	// rewrite; don't follow them but replace with nil instead
+	if val.Type() == objectPtrType {
+		return objectPtrNil
+	}
+
+	// similarly for scopes: they are likely incorrect after a rewrite;
+	// replace them with nil
+	if val.Type() == scopePtrType {
+		return scopePtrNil
+	}
+
+	switch v := reflect.Indirect(val); v.Kind() {
+	case reflect.Slice:
 		for i := 0; i < v.Len(); i++ {
-			e := v.Elem(i)
+			e := v.Index(i)
 			setValue(e, f(e))
 		}
-	case *reflect.StructValue:
+	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
 			e := v.Field(i)
 			setValue(e, f(e))
 		}
-	case *reflect.InterfaceValue:
+	case reflect.Interface:
 		e := v.Elem()
 		setValue(v, f(e))
 	}
 	return val
 }
 
-
-var positionType = reflect.Typeof(token.NoPos)
-var identType = reflect.Typeof((*ast.Ident)(nil))
-
-
 func isWildcard(s string) bool {
 	rune, size := utf8.DecodeRuneInString(s)
 	return size == len(s) && unicode.IsLower(rune)
 }
-
 
 // match returns true if pattern matches val,
 // recording wildcard submatches in m.
@@ -124,11 +159,11 @@ func match(m map[string]reflect.Value, pattern, val reflect.Value) bool {
 	// Wildcard matches any expression.  If it appears multiple
 	// times in the pattern, it must match the same expression
 	// each time.
-	if m != nil && pattern != nil && pattern.Type() == identType {
+	if m != nil && pattern.IsValid() && pattern.Type() == identType {
 		name := pattern.Interface().(*ast.Ident).Name
-		if isWildcard(name) && val != nil {
-			// wildcards only match expressions
-			if _, ok := val.Interface().(ast.Expr); ok {
+		if isWildcard(name) && val.IsValid() {
+			// wildcards only match valid (non-nil) expressions.
+			if _, ok := val.Interface().(ast.Expr); ok && !val.IsNil() {
 				if old, ok := m[name]; ok {
 					return match(nil, old, val)
 				}
@@ -139,8 +174,8 @@ func match(m map[string]reflect.Value, pattern, val reflect.Value) bool {
 	}
 
 	// Otherwise, pattern and val must match recursively.
-	if pattern == nil || val == nil {
-		return pattern == nil && val == nil
+	if !pattern.IsValid() || !val.IsValid() {
+		return !pattern.IsValid() && !val.IsValid()
 	}
 	if pattern.Type() != val.Type() {
 		return false
@@ -148,9 +183,6 @@ func match(m map[string]reflect.Value, pattern, val reflect.Value) bool {
 
 	// Special cases.
 	switch pattern.Type() {
-	case positionType:
-		// token positions don't need to match
-		return true
 	case identType:
 		// For identifiers, only the names need to match
 		// (and none of the other *ast.Object information).
@@ -159,29 +191,30 @@ func match(m map[string]reflect.Value, pattern, val reflect.Value) bool {
 		p := pattern.Interface().(*ast.Ident)
 		v := val.Interface().(*ast.Ident)
 		return p == nil && v == nil || p != nil && v != nil && p.Name == v.Name
+	case objectPtrType, positionType:
+		// object pointers and token positions don't need to match
+		return true
 	}
 
 	p := reflect.Indirect(pattern)
 	v := reflect.Indirect(val)
-	if p == nil || v == nil {
-		return p == nil && v == nil
+	if !p.IsValid() || !v.IsValid() {
+		return !p.IsValid() && !v.IsValid()
 	}
 
-	switch p := p.(type) {
-	case *reflect.SliceValue:
-		v := v.(*reflect.SliceValue)
+	switch p.Kind() {
+	case reflect.Slice:
 		if p.Len() != v.Len() {
 			return false
 		}
 		for i := 0; i < p.Len(); i++ {
-			if !match(m, p.Elem(i), v.Elem(i)) {
+			if !match(m, p.Index(i), v.Index(i)) {
 				return false
 			}
 		}
 		return true
 
-	case *reflect.StructValue:
-		v := v.(*reflect.StructValue)
+	case reflect.Struct:
 		if p.NumField() != v.NumField() {
 			return false
 		}
@@ -192,8 +225,7 @@ func match(m map[string]reflect.Value, pattern, val reflect.Value) bool {
 		}
 		return true
 
-	case *reflect.InterfaceValue:
-		v := v.(*reflect.InterfaceValue)
+	case reflect.Interface:
 		return match(m, p.Elem(), v.Elem())
 	}
 
@@ -201,14 +233,13 @@ func match(m map[string]reflect.Value, pattern, val reflect.Value) bool {
 	return p.Interface() == v.Interface()
 }
 
-
 // subst returns a copy of pattern with values from m substituted in place
 // of wildcards and pos used as the position of tokens from the pattern.
 // if m == nil, subst returns a copy of pattern and doesn't change the line
 // number information.
 func subst(m map[string]reflect.Value, pattern reflect.Value, pos reflect.Value) reflect.Value {
-	if pattern == nil {
-		return nil
+	if !pattern.IsValid() {
+		return reflect.Value{}
 	}
 
 	// Wildcard gets replaced with map value.
@@ -216,12 +247,12 @@ func subst(m map[string]reflect.Value, pattern reflect.Value, pos reflect.Value)
 		name := pattern.Interface().(*ast.Ident).Name
 		if isWildcard(name) {
 			if old, ok := m[name]; ok {
-				return subst(nil, old, nil)
+				return subst(nil, old, reflect.Value{})
 			}
 		}
 	}
 
-	if pos != nil && pattern.Type() == positionType {
+	if pos.IsValid() && pattern.Type() == positionType {
 		// use new position only if old position was valid in the first place
 		if old := pattern.Interface().(token.Pos); !old.IsValid() {
 			return pattern
@@ -230,29 +261,33 @@ func subst(m map[string]reflect.Value, pattern reflect.Value, pos reflect.Value)
 	}
 
 	// Otherwise copy.
-	switch p := pattern.(type) {
-	case *reflect.SliceValue:
-		v := reflect.MakeSlice(p.Type().(*reflect.SliceType), p.Len(), p.Len())
+	switch p := pattern; p.Kind() {
+	case reflect.Slice:
+		v := reflect.MakeSlice(p.Type(), p.Len(), p.Len())
 		for i := 0; i < p.Len(); i++ {
-			v.Elem(i).SetValue(subst(m, p.Elem(i), pos))
+			v.Index(i).Set(subst(m, p.Index(i), pos))
 		}
 		return v
 
-	case *reflect.StructValue:
-		v := reflect.MakeZero(p.Type()).(*reflect.StructValue)
+	case reflect.Struct:
+		v := reflect.New(p.Type()).Elem()
 		for i := 0; i < p.NumField(); i++ {
-			v.Field(i).SetValue(subst(m, p.Field(i), pos))
+			v.Field(i).Set(subst(m, p.Field(i), pos))
 		}
 		return v
 
-	case *reflect.PtrValue:
-		v := reflect.MakeZero(p.Type()).(*reflect.PtrValue)
-		v.PointTo(subst(m, p.Elem(), pos))
+	case reflect.Ptr:
+		v := reflect.New(p.Type()).Elem()
+		if elem := p.Elem(); elem.IsValid() {
+			v.Set(subst(m, elem, pos).Addr())
+		}
 		return v
 
-	case *reflect.InterfaceValue:
-		v := reflect.MakeZero(p.Type()).(*reflect.InterfaceValue)
-		v.SetValue(subst(m, p.Elem(), pos))
+	case reflect.Interface:
+		v := reflect.New(p.Type()).Elem()
+		if elem := p.Elem(); elem.IsValid() {
+			v.Set(subst(m, elem, pos))
+		}
 		return v
 	}
 

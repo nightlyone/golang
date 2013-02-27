@@ -28,6 +28,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include <u.h>
 #include "cc.h"
 
 Node*
@@ -119,6 +120,10 @@ loop:
 		(*f)(c, t, s);
 		if(s->class == CLOCAL)
 			s = mkstatic(s);
+		if(dataflag) {
+			s->dataflag = dataflag;
+			dataflag = 0;
+		}
 		firstbit = 0;
 		n->sym = s;
 		n->type = s->type;
@@ -1053,6 +1058,10 @@ sigind(Type *t, Typetab *tt)
 			return p-a;
 	if((n&15) == 0){
 		na = malloc((n+16)*sizeof(Type*));
+		if(na == nil) {
+			print("%s: out of memory", argv0);
+			errorexit();
+		}
 		memmove(na, a, n*sizeof(Type*));
 		free(a);
 		a = tt->a = na;
@@ -1378,7 +1387,6 @@ tmerge(Type *t1, Sym *s)
 	Type *ta, *tb, *t2;
 
 	t2 = s->type;
-/*print("merge	%T; %T\n", t1, t2);/**/
 	for(;;) {
 		if(t1 == T || t2 == T || t1 == t2)
 			break;

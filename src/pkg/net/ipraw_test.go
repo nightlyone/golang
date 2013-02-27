@@ -2,116 +2,340 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-
-// TODO(cw): ListenPacket test, Read() test, ipv6 test &
-// Dial()/Listen() level tests
+// +build !plan9
 
 package net
 
 import (
 	"bytes"
-	"flag"
+	"errors"
 	"os"
+	"reflect"
 	"testing"
+	"time"
 )
 
-const ICMP_ECHO_REQUEST = 8
-const ICMP_ECHO_REPLY = 0
+var resolveIPAddrTests = []struct {
+	net     string
+	litAddr string
+	addr    *IPAddr
+	err     error
+}{
+	{"ip", "127.0.0.1", &IPAddr{IP: IPv4(127, 0, 0, 1)}, nil},
+	{"ip4", "127.0.0.1", &IPAddr{IP: IPv4(127, 0, 0, 1)}, nil},
+	{"ip4:icmp", "127.0.0.1", &IPAddr{IP: IPv4(127, 0, 0, 1)}, nil},
 
-// returns a suitable 'ping request' packet, with id & seq and a
-// payload length of pktlen
-func makePingRequest(id, seq, pktlen int, filler []byte) []byte {
-	p := make([]byte, pktlen)
-	copy(p[8:], bytes.Repeat(filler, (pktlen-8)/len(filler)+1))
+	{"ip", "::1", &IPAddr{IP: ParseIP("::1")}, nil},
+	{"ip6", "::1", &IPAddr{IP: ParseIP("::1")}, nil},
+	{"ip6:icmp", "::1", &IPAddr{IP: ParseIP("::1")}, nil},
 
-	p[0] = ICMP_ECHO_REQUEST // type
-	p[1] = 0                 // code
-	p[2] = 0                 // cksum
-	p[3] = 0                 // cksum
-	p[4] = uint8(id >> 8)    // id
-	p[5] = uint8(id & 0xff)  // id
-	p[6] = uint8(seq >> 8)   // sequence
-	p[7] = uint8(seq & 0xff) // sequence
+	{"", "127.0.0.1", &IPAddr{IP: IPv4(127, 0, 0, 1)}, nil}, // Go 1.0 behavior
+	{"", "::1", &IPAddr{IP: ParseIP("::1")}, nil},           // Go 1.0 behavior
 
-	// calculate icmp checksum
-	cklen := len(p)
-	s := uint32(0)
-	for i := 0; i < (cklen - 1); i += 2 {
-		s += uint32(p[i+1])<<8 | uint32(p[i])
-	}
-	if cklen&1 == 1 {
-		s += uint32(p[cklen-1])
-	}
-	s = (s >> 16) + (s & 0xffff)
-	s = s + (s >> 16)
-
-	// place checksum back in header; using ^= avoids the
-	// assumption the checksum bytes are zero
-	p[2] ^= uint8(^s & 0xff)
-	p[3] ^= uint8(^s >> 8)
-
-	return p
+	{"l2tp", "127.0.0.1", nil, UnknownNetworkError("l2tp")},
+	{"l2tp:gre", "127.0.0.1", nil, UnknownNetworkError("l2tp:gre")},
+	{"tcp", "1.2.3.4:123", nil, UnknownNetworkError("tcp")},
 }
 
-func parsePingReply(p []byte) (id, seq int) {
-	id = int(p[4])<<8 | int(p[5])
-	seq = int(p[6])<<8 | int(p[7])
-	return
+func TestResolveIPAddr(t *testing.T) {
+	for _, tt := range resolveIPAddrTests {
+		addr, err := ResolveIPAddr(tt.net, tt.litAddr)
+		if err != tt.err {
+			t.Fatalf("ResolveIPAddr(%v, %v) failed: %v", tt.net, tt.litAddr, err)
+		}
+		if !reflect.DeepEqual(addr, tt.addr) {
+			t.Fatalf("got %#v; expected %#v", addr, tt.addr)
+		}
+	}
 }
 
-var srchost = flag.String("srchost", "", "Source of the ICMP ECHO request")
-var dsthost = flag.String("dsthost", "localhost", "Destination for the ICMP ECHO request")
+var icmpEchoTests = []struct {
+	net   string
+	laddr string
+	raddr string
+}{
+	{"ip4:icmp", "0.0.0.0", "127.0.0.1"},
+	{"ip6:ipv6-icmp", "::", "::1"},
+}
 
-// test (raw) IP socket using ICMP
-func TestICMP(t *testing.T) {
+func TestConnICMPEcho(t *testing.T) {
 	if os.Getuid() != 0 {
-		t.Logf("test disabled; must be root")
-		return
+		t.Skip("skipping test; must be root")
 	}
 
-	var laddr *IPAddr
-	if *srchost != "" {
-		laddr, err := ResolveIPAddr(*srchost)
+	for i, tt := range icmpEchoTests {
+		net, _, err := parseNetwork(tt.net)
 		if err != nil {
-			t.Fatalf(`net.ResolveIPAddr("%v") = %v, %v`, *srchost, laddr, err)
+			t.Fatalf("parseNetwork failed: %v", err)
 		}
-	}
-
-	raddr, err := ResolveIPAddr(*dsthost)
-	if err != nil {
-		t.Fatalf(`net.ResolveIPAddr("%v") = %v, %v`, *dsthost, raddr, err)
-	}
-
-	c, err := ListenIP("ip4:icmp", laddr)
-	if err != nil {
-		t.Fatalf(`net.ListenIP("ip4:icmp", %v) = %v, %v`, *srchost, c, err)
-	}
-
-	sendid := os.Getpid() & 0xffff
-	const sendseq = 61455
-	const pingpktlen = 128
-	sendpkt := makePingRequest(sendid, sendseq, pingpktlen, []byte("Go Go Gadget Ping!!!"))
-
-	n, err := c.WriteToIP(sendpkt, raddr)
-	if err != nil || n != pingpktlen {
-		t.Fatalf(`net.WriteToIP(..., %v) = %v, %v`, raddr, n, err)
-	}
-
-	c.SetTimeout(100e6)
-	resp := make([]byte, 1024)
-	for {
-		n, from, err := c.ReadFrom(resp)
-		if err != nil {
-			t.Fatalf(`ReadFrom(...) = %v, %v, %v`, n, from, err)
-		}
-		if resp[0] != ICMP_ECHO_REPLY {
+		if net == "ip6" && !supportsIPv6 {
 			continue
 		}
-		rcvid, rcvseq := parsePingReply(resp)
-		if rcvid != sendid || rcvseq != sendseq {
-			t.Fatalf(`Ping reply saw id,seq=0x%x,0x%x (expected 0x%x, 0x%x)`, rcvid, rcvseq, sendid, sendseq)
+
+		c, err := Dial(tt.net, tt.raddr)
+		if err != nil {
+			t.Fatalf("Dial failed: %v", err)
 		}
-		return
+		c.SetDeadline(time.Now().Add(100 * time.Millisecond))
+		defer c.Close()
+
+		typ := icmpv4EchoRequest
+		if net == "ip6" {
+			typ = icmpv6EchoRequest
+		}
+		xid, xseq := os.Getpid()&0xffff, i+1
+		b, err := (&icmpMessage{
+			Type: typ, Code: 0,
+			Body: &icmpEcho{
+				ID: xid, Seq: xseq,
+				Data: bytes.Repeat([]byte("Go Go Gadget Ping!!!"), 3),
+			},
+		}).Marshal()
+		if err != nil {
+			t.Fatalf("icmpMessage.Marshal failed: %v", err)
+		}
+		if _, err := c.Write(b); err != nil {
+			t.Fatalf("Conn.Write failed: %v", err)
+		}
+		var m *icmpMessage
+		for {
+			if _, err := c.Read(b); err != nil {
+				t.Fatalf("Conn.Read failed: %v", err)
+			}
+			if net == "ip4" {
+				b = ipv4Payload(b)
+			}
+			if m, err = parseICMPMessage(b); err != nil {
+				t.Fatalf("parseICMPMessage failed: %v", err)
+			}
+			switch m.Type {
+			case icmpv4EchoRequest, icmpv6EchoRequest:
+				continue
+			}
+			break
+		}
+		switch p := m.Body.(type) {
+		case *icmpEcho:
+			if p.ID != xid || p.Seq != xseq {
+				t.Fatalf("got id=%v, seqnum=%v; expected id=%v, seqnum=%v", p.ID, p.Seq, xid, xseq)
+			}
+		default:
+			t.Fatalf("got type=%v, code=%v; expected type=%v, code=%v", m.Type, m.Code, typ, 0)
+		}
 	}
-	t.Fatalf("saw no ping return")
+}
+
+func TestPacketConnICMPEcho(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("skipping test; must be root")
+	}
+
+	for i, tt := range icmpEchoTests {
+		net, _, err := parseNetwork(tt.net)
+		if err != nil {
+			t.Fatalf("parseNetwork failed: %v", err)
+		}
+		if net == "ip6" && !supportsIPv6 {
+			continue
+		}
+
+		c, err := ListenPacket(tt.net, tt.laddr)
+		if err != nil {
+			t.Fatalf("ListenPacket failed: %v", err)
+		}
+		c.SetDeadline(time.Now().Add(100 * time.Millisecond))
+		defer c.Close()
+
+		ra, err := ResolveIPAddr(tt.net, tt.raddr)
+		if err != nil {
+			t.Fatalf("ResolveIPAddr failed: %v", err)
+		}
+		typ := icmpv4EchoRequest
+		if net == "ip6" {
+			typ = icmpv6EchoRequest
+		}
+		xid, xseq := os.Getpid()&0xffff, i+1
+		b, err := (&icmpMessage{
+			Type: typ, Code: 0,
+			Body: &icmpEcho{
+				ID: xid, Seq: xseq,
+				Data: bytes.Repeat([]byte("Go Go Gadget Ping!!!"), 3),
+			},
+		}).Marshal()
+		if err != nil {
+			t.Fatalf("icmpMessage.Marshal failed: %v", err)
+		}
+		if _, err := c.WriteTo(b, ra); err != nil {
+			t.Fatalf("PacketConn.WriteTo failed: %v", err)
+		}
+		var m *icmpMessage
+		for {
+			if _, _, err := c.ReadFrom(b); err != nil {
+				t.Fatalf("PacketConn.ReadFrom failed: %v", err)
+			}
+			// TODO: fix issue 3944
+			//if net == "ip4" {
+			//	b = ipv4Payload(b)
+			//}
+			if m, err = parseICMPMessage(b); err != nil {
+				t.Fatalf("parseICMPMessage failed: %v", err)
+			}
+			switch m.Type {
+			case icmpv4EchoRequest, icmpv6EchoRequest:
+				continue
+			}
+			break
+		}
+		switch p := m.Body.(type) {
+		case *icmpEcho:
+			if p.ID != xid || p.Seq != xseq {
+				t.Fatalf("got id=%v, seqnum=%v; expected id=%v, seqnum=%v", p.ID, p.Seq, xid, xseq)
+			}
+		default:
+			t.Fatalf("got type=%v, code=%v; expected type=%v, code=%v", m.Type, m.Code, typ, 0)
+		}
+	}
+}
+
+func ipv4Payload(b []byte) []byte {
+	if len(b) < 20 {
+		return b
+	}
+	hdrlen := int(b[0]&0x0f) << 2
+	return b[hdrlen:]
+}
+
+const (
+	icmpv4EchoRequest = 8
+	icmpv4EchoReply   = 0
+	icmpv6EchoRequest = 128
+	icmpv6EchoReply   = 129
+)
+
+// icmpMessage represents an ICMP message.
+type icmpMessage struct {
+	Type     int             // type
+	Code     int             // code
+	Checksum int             // checksum
+	Body     icmpMessageBody // body
+}
+
+// icmpMessageBody represents an ICMP message body.
+type icmpMessageBody interface {
+	Len() int
+	Marshal() ([]byte, error)
+}
+
+// Marshal returns the binary enconding of the ICMP echo request or
+// reply message m.
+func (m *icmpMessage) Marshal() ([]byte, error) {
+	b := []byte{byte(m.Type), byte(m.Code), 0, 0}
+	if m.Body != nil && m.Body.Len() != 0 {
+		mb, err := m.Body.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		b = append(b, mb...)
+	}
+	switch m.Type {
+	case icmpv6EchoRequest, icmpv6EchoReply:
+		return b, nil
+	}
+	csumcv := len(b) - 1 // checksum coverage
+	s := uint32(0)
+	for i := 0; i < csumcv; i += 2 {
+		s += uint32(b[i+1])<<8 | uint32(b[i])
+	}
+	if csumcv&1 == 0 {
+		s += uint32(b[csumcv])
+	}
+	s = s>>16 + s&0xffff
+	s = s + s>>16
+	// Place checksum back in header; using ^= avoids the
+	// assumption the checksum bytes are zero.
+	b[2] ^= byte(^s & 0xff)
+	b[3] ^= byte(^s >> 8)
+	return b, nil
+}
+
+// parseICMPMessage parses b as an ICMP message.
+func parseICMPMessage(b []byte) (*icmpMessage, error) {
+	msglen := len(b)
+	if msglen < 4 {
+		return nil, errors.New("message too short")
+	}
+	m := &icmpMessage{Type: int(b[0]), Code: int(b[1]), Checksum: int(b[2])<<8 | int(b[3])}
+	if msglen > 4 {
+		var err error
+		switch m.Type {
+		case icmpv4EchoRequest, icmpv4EchoReply, icmpv6EchoRequest, icmpv6EchoReply:
+			m.Body, err = parseICMPEcho(b[4:])
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return m, nil
+}
+
+// imcpEcho represenets an ICMP echo request or reply message body.
+type icmpEcho struct {
+	ID   int    // identifier
+	Seq  int    // sequence number
+	Data []byte // data
+}
+
+func (p *icmpEcho) Len() int {
+	if p == nil {
+		return 0
+	}
+	return 4 + len(p.Data)
+}
+
+// Marshal returns the binary enconding of the ICMP echo request or
+// reply message body p.
+func (p *icmpEcho) Marshal() ([]byte, error) {
+	b := make([]byte, 4+len(p.Data))
+	b[0], b[1] = byte(p.ID>>8), byte(p.ID&0xff)
+	b[2], b[3] = byte(p.Seq>>8), byte(p.Seq&0xff)
+	copy(b[4:], p.Data)
+	return b, nil
+}
+
+// parseICMPEcho parses b as an ICMP echo request or reply message
+// body.
+func parseICMPEcho(b []byte) (*icmpEcho, error) {
+	bodylen := len(b)
+	p := &icmpEcho{ID: int(b[0])<<8 | int(b[1]), Seq: int(b[2])<<8 | int(b[3])}
+	if bodylen > 4 {
+		p.Data = make([]byte, bodylen-4)
+		copy(p.Data, b[4:])
+	}
+	return p, nil
+}
+
+var ipConnLocalNameTests = []struct {
+	net   string
+	laddr *IPAddr
+}{
+	{"ip4:icmp", &IPAddr{IP: IPv4(127, 0, 0, 1)}},
+	{"ip4:icmp", &IPAddr{}},
+	{"ip4:icmp", nil},
+}
+
+func TestIPConnLocalName(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("skipping test; must be root")
+	}
+
+	for _, tt := range ipConnLocalNameTests {
+		c, err := ListenIP(tt.net, tt.laddr)
+		if err != nil {
+			t.Fatalf("ListenIP failed: %v", err)
+		}
+		defer c.Close()
+		if la := c.LocalAddr(); la == nil {
+			t.Fatal("IPConn.LocalAddr failed")
+		}
+	}
 }

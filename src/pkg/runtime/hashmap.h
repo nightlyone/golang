@@ -63,10 +63,9 @@
 	}
  */
 
-#define	malloc		runtime·mal
 #define	memset(a,b,c)	runtime·memclr((byte*)(a), (uint32)(c))
-#define	memcpy(a,b,c)	runtime·mcpy((byte*)(a),(byte*)(b),(uint32)(c))
-#define	assert(a)	if(!(a)) runtime·throw("assert")
+#define	memcpy(a,b,c)	runtime·memmove((byte*)(a),(byte*)(b),(uint32)(c))
+#define	assert(a)	if(!(a)) runtime·throw("hashmap assert")
 #define free(x)	runtime·free(x)
 #define memmove(a,b,c)	runtime·memmove(a, b, c)
 
@@ -82,12 +81,15 @@ struct hash_iter {
 	int32	elemsize;	/* size of elements in table */
 	int32	changes;	/* number of changes observed last time */
 	int32	i;		/* stack pointer in subtable_state */
+	bool cycled;		/* have reached the end and wrapped to 0 */
 	hash_hash_t last_hash;	/* last hash value returned */
+	hash_hash_t cycle;	/* hash value where we started */
 	struct Hmap *h;		/* the hash table */
+	MapType *t;			/* the map type */
 	struct hash_iter_sub {
 		struct hash_entry *e;		/* pointer into subtable */
 		struct hash_entry *start;	/* start of subtable */
-		struct hash_entry *end;		/* end of subtable */
+		struct hash_entry *last;		/* last entry in subtable */
 	} subtable_state[4];	/* Should be large enough unless the hashing is
 				   so bad that many distinct data values hash
 				   to the same hash value.  */
@@ -140,7 +142,7 @@ struct hash_iter {
    Remove all sub-tables associated with *h.
    This undoes the effects of hash_init().
    If other memory pointed to by user data must be freed, the caller is
-   responsible for doiing do by iterating over *h first; see
+   responsible for doing so by iterating over *h first; see
    hash_iter_init()/hash_next().  */
 // void hash_destroy (struct hash *h);
 
@@ -149,7 +151,7 @@ struct hash_iter {
 /* Initialize *it from *h. */
 // void hash_iter_init (struct hash *h, struct hash_iter *it);
 
-/* Return the next used entry in the table which which *it was initialized. */
+/* Return the next used entry in the table with which *it was initialized. */
 // void *hash_next (struct hash_iter *it);
 
 /*---- test interface ----*/
@@ -157,3 +159,27 @@ struct hash_iter {
    whether used or not.   "level" is the subtable level, 0 means first level. */
 /* TESTING ONLY: DO NOT USE THIS ROUTINE IN NORMAL CODE */
 // void hash_visit (struct hash *h, void (*data_visit) (void *arg, int32 level, void *data), void *arg);
+
+/* Used by the garbage collector */
+struct hash_gciter
+{
+	int32	elemsize;
+	uint8	flag;
+	uint8	valoff;
+	uint32	i;		/* stack pointer in subtable_state */
+	struct hash_subtable *st;
+	struct hash_gciter_sub {
+		struct hash_entry *e;		/* pointer into subtable */
+		struct hash_entry *last;	/* last entry in subtable */
+	} subtable_state[4];
+};
+struct hash_gciter_data
+{
+	struct hash_subtable *st;	/* subtable pointer, or nil */
+	uint8 *key_data;		/* key data, or nil */
+	uint8 *val_data;		/* value data, or nil */
+	bool indirectkey;		/* storing pointers to keys */
+	bool indirectval;		/* storing pointers to values */
+};
+bool hash_gciter_init (struct Hmap *h, struct hash_gciter *it);
+bool hash_gciter_next (struct hash_gciter *it, struct hash_gciter_data *data);

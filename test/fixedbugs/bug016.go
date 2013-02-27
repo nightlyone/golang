@@ -1,4 +1,4 @@
-// errchk $G -e $D/$F.go
+// errorcheck
 
 // Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
@@ -8,7 +8,7 @@ package main
 
 func main() {
 	var i int = 100
-	i = i << -3 // ERROR "overflows"
+	i = i << -3 // ERROR "overflows|negative"
 }
 
 /*

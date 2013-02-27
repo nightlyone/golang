@@ -13,27 +13,25 @@
 package main
 
 import (
-	"container/vector"
+	"encoding/xml"
+	"errors"
 	"fmt"
-	"http"
 	"io"
-	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"template"
-	"utf8"
-	"xml"
+	"text/template"
+	"unicode/utf8"
 )
-
 
 // Handler for /doc/codewalk/ and below.
 func codewalk(w http.ResponseWriter, r *http.Request) {
 	relpath := r.URL.Path[len("/doc/codewalk/"):]
-	abspath := absolutePath(r.URL.Path[1:], *goroot)
+	abspath := r.URL.Path
 
 	r.ParseForm()
 	if f := r.FormValue("fileprint"); f != "" {
@@ -42,8 +40,8 @@ func codewalk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// If directory exists, serve list of code walks.
-	dir, err := os.Lstat(abspath)
-	if err == nil && dir.IsDirectory() {
+	dir, err := fs.Lstat(abspath)
+	if err == nil && dir.IsDir() {
 		codewalkDir(w, r, relpath, abspath)
 		return
 	}
@@ -55,7 +53,9 @@ func codewalk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Otherwise append .xml and hope to find
-	// a codewalk description.
+	// a codewalk description, but before trim
+	// the trailing /.
+	abspath = strings.TrimRight(abspath, "/")
 	cw, err := loadCodewalk(abspath + ".xml")
 	if err != nil {
 		log.Print(err)
@@ -68,28 +68,29 @@ func codewalk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b := applyTemplate(codewalkHTML, "codewalk", cw)
-	servePage(w, "Codewalk: "+cw.Title, "", "", b)
+	servePage(w, Page{
+		Title:    "Codewalk: " + cw.Title,
+		Tabtitle: cw.Title,
+		Body:     applyTemplate(codewalkHTML, "codewalk", cw),
+	})
 }
-
 
 // A Codewalk represents a single codewalk read from an XML file.
 type Codewalk struct {
-	Title string "attr"
-	File  []string
-	Step  []*Codestep
+	Title string      `xml:"title,attr"`
+	File  []string    `xml:"file"`
+	Step  []*Codestep `xml:"step"`
 }
-
 
 // A Codestep is a single step in a codewalk.
 type Codestep struct {
 	// Filled in from XML
-	Src   string "attr"
-	Title string "attr"
-	XML   string "innerxml"
+	Src   string `xml:"src,attr"`
+	Title string `xml:"title,attr"`
+	XML   string `xml:",innerxml"`
 
 	// Derived from Src; not in XML.
-	Err    os.Error
+	Err    error
 	File   string
 	Lo     int
 	LoByte int
@@ -97,7 +98,6 @@ type Codestep struct {
 	HiByte int
 	Data   []byte
 }
-
 
 // String method for printing in template.
 // Formats file address nicely.
@@ -112,20 +112,19 @@ func (st *Codestep) String() string {
 	return s
 }
 
-
 // loadCodewalk reads a codewalk from the named XML file.
-func loadCodewalk(file string) (*Codewalk, os.Error) {
-	f, err := os.Open(file, os.O_RDONLY, 0)
+func loadCodewalk(filename string) (*Codewalk, error) {
+	f, err := fs.Open(filename)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 	cw := new(Codewalk)
-	p := xml.NewParser(f)
-	p.Entity = xml.HTMLEntity
-	err = p.Unmarshal(cw, nil)
+	d := xml.NewDecoder(f)
+	d.Entity = xml.HTMLEntity
+	err = d.Decode(cw)
 	if err != nil {
-		return nil, &os.PathError{"parsing", file, err}
+		return nil, &os.PathError{Op: "parsing", Path: filename, Err: err}
 	}
 
 	// Compute file list, evaluate line numbers for addresses.
@@ -135,8 +134,8 @@ func loadCodewalk(file string) (*Codewalk, os.Error) {
 		if i < 0 {
 			i = len(st.Src)
 		}
-		file := st.Src[0:i]
-		data, err := ioutil.ReadFile(absolutePath(file, *goroot))
+		filename := st.Src[0:i]
+		data, err := ReadFile(fs, filename)
 		if err != nil {
 			st.Err = err
 			continue
@@ -158,8 +157,8 @@ func loadCodewalk(file string) (*Codewalk, os.Error) {
 			st.Hi = byteToLine(data, hi-1)
 		}
 		st.Data = data
-		st.File = file
-		m[file] = true
+		st.File = filename
+		m[filename] = true
 	}
 
 	// Make list of files
@@ -169,11 +168,10 @@ func loadCodewalk(file string) (*Codewalk, os.Error) {
 		cw.File[i] = f
 		i++
 	}
-	sort.SortStrings(cw.File)
+	sort.Strings(cw.File)
 
 	return cw, nil
 }
-
 
 // codewalkDir serves the codewalk directory listing.
 // It scans the directory for subdirectories or files named *.xml
@@ -184,29 +182,31 @@ func codewalkDir(w http.ResponseWriter, r *http.Request, relpath, abspath string
 		Title string
 	}
 
-	dir, err := ioutil.ReadDir(abspath)
+	dir, err := fs.ReadDir(abspath)
 	if err != nil {
 		log.Print(err)
 		serveError(w, r, relpath, err)
 		return
 	}
-	var v vector.Vector
+	var v []interface{}
 	for _, fi := range dir {
-		if fi.IsDirectory() {
-			v.Push(&elem{fi.Name + "/", ""})
-		} else if strings.HasSuffix(fi.Name, ".xml") {
-			cw, err := loadCodewalk(abspath + "/" + fi.Name)
+		name := fi.Name()
+		if fi.IsDir() {
+			v = append(v, &elem{name + "/", ""})
+		} else if strings.HasSuffix(name, ".xml") {
+			cw, err := loadCodewalk(abspath + "/" + name)
 			if err != nil {
 				continue
 			}
-			v.Push(&elem{fi.Name[0 : len(fi.Name)-len(".xml")], cw.Title})
+			v = append(v, &elem{name[0 : len(name)-len(".xml")], cw.Title})
 		}
 	}
 
-	b := applyTemplate(codewalkdirHTML, "codewalkdir", v)
-	servePage(w, "Codewalks", "", "", b)
+	servePage(w, Page{
+		Title: "Codewalks",
+		Body:  applyTemplate(codewalkdirHTML, "codewalkdir", v),
+	})
 }
-
 
 // codewalkFileprint serves requests with ?fileprint=f&lo=lo&hi=hi.
 // The filename f has already been retrieved and is passed as an argument.
@@ -215,8 +215,8 @@ func codewalkDir(w http.ResponseWriter, r *http.Request, relpath, abspath string
 // of the codewalk pages.  It is a separate iframe and does not get
 // the usual godoc HTML wrapper.
 func codewalkFileprint(w http.ResponseWriter, r *http.Request, f string) {
-	abspath := absolutePath(f, *goroot)
-	data, err := ioutil.ReadFile(abspath)
+	abspath := f
+	data, err := ReadFile(fs, abspath)
 	if err != nil {
 		log.Print(err)
 		serveError(w, r, f, err)
@@ -256,12 +256,11 @@ func codewalkFileprint(w http.ResponseWriter, r *http.Request, f string) {
 	io.WriteString(w, "</pre>")
 }
 
-
 // addrToByte evaluates the given address starting at offset start in data.
 // It returns the lo and hi byte offset of the matched region within data.
 // See http://plan9.bell-labs.com/sys/doc/sam/sam.html Table II
 // for details on the syntax.
-func addrToByteRange(addr string, start int, data []byte) (lo, hi int, err os.Error) {
+func addrToByteRange(addr string, start int, data []byte) (lo, hi int, err error) {
 	var (
 		dir        byte
 		prevc      byte
@@ -273,7 +272,7 @@ func addrToByteRange(addr string, start int, data []byte) (lo, hi int, err os.Er
 		c := addr[0]
 		switch c {
 		default:
-			err = os.NewError("invalid address syntax near " + string(c))
+			err = errors.New("invalid address syntax near " + string(c))
 		case ',':
 			if len(addr) == 1 {
 				hi = len(data)
@@ -351,14 +350,13 @@ func addrToByteRange(addr string, start int, data []byte) (lo, hi int, err os.Er
 	return lo, hi, nil
 }
 
-
 // addrNumber applies the given dir, n, and charOffset to the address lo, hi.
 // dir is '+' or '-', n is the count, and charOffset is true if the syntax
 // used was #n.  Applying +n (or +#n) means to advance n lines
 // (or characters) after hi.  Applying -n (or -#n) means to back up n lines
 // (or characters) before lo.
 // The return value is the new lo, hi.
-func addrNumber(data []byte, lo, hi int, dir byte, n int, charOffset bool) (int, int, os.Error) {
+func addrNumber(data []byte, lo, hi int, dir byte, n int, charOffset bool) (int, int, error) {
 	switch dir {
 	case 0:
 		lo = 0
@@ -434,14 +432,13 @@ func addrNumber(data []byte, lo, hi int, dir byte, n int, charOffset bool) (int,
 		}
 	}
 
-	return 0, 0, os.NewError("address out of range")
+	return 0, 0, errors.New("address out of range")
 }
-
 
 // addrRegexp searches for pattern in the given direction starting at lo, hi.
 // The direction dir is '+' (search forward from hi) or '-' (search backward from lo).
 // Backward searches are unimplemented.
-func addrRegexp(data []byte, lo, hi int, dir byte, pattern string) (int, int, os.Error) {
+func addrRegexp(data []byte, lo, hi int, dir byte, pattern string) (int, int, error) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return 0, 0, err
@@ -449,7 +446,7 @@ func addrRegexp(data []byte, lo, hi int, dir byte, pattern string) (int, int, os
 	if dir == '-' {
 		// Could implement reverse search using binary search
 		// through file, but that seems like overkill.
-		return 0, 0, os.NewError("reverse search not implemented")
+		return 0, 0, errors.New("reverse search not implemented")
 	}
 	m := re.FindIndex(data[hi:])
 	if len(m) > 0 {
@@ -460,11 +457,10 @@ func addrRegexp(data []byte, lo, hi int, dir byte, pattern string) (int, int, os
 		m = re.FindIndex(data)
 	}
 	if len(m) == 0 {
-		return 0, 0, os.NewError("no match for " + pattern)
+		return 0, 0, errors.New("no match for " + pattern)
 	}
 	return m[0], m[1], nil
 }
-
 
 // lineToByte returns the byte index of the first byte of line n.
 // Line numbers begin at 1.
@@ -482,7 +478,6 @@ func lineToByte(data []byte, n int) int {
 	}
 	return len(data)
 }
-
 
 // byteToLine returns the number of the line containing the byte at index i.
 func byteToLine(data []byte, i int) int {

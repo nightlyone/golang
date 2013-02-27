@@ -7,6 +7,7 @@
 // See malloc.h for an overview.
 
 #include "runtime.h"
+#include "arch_GOARCH.h"
 #include "malloc.h"
 
 void*
@@ -20,8 +21,10 @@ runtime·MCache_Alloc(MCache *c, int32 sizeclass, uintptr size, int32 zeroed)
 	l = &c->list[sizeclass];
 	if(l->list == nil) {
 		// Replenish using central lists.
-		n = runtime·MCentral_AllocList(&runtime·mheap.central[sizeclass],
+		n = runtime·MCentral_AllocList(&runtime·mheap->central[sizeclass],
 			runtime·class_to_transfercount[sizeclass], &first);
+		if(n == 0)
+			runtime·throw("out of memory");
 		l->list = first;
 		l->nlist = n;
 		c->size += n*size;
@@ -40,13 +43,8 @@ runtime·MCache_Alloc(MCache *c, int32 sizeclass, uintptr size, int32 zeroed)
 		// block is zeroed iff second word is zero ...
 		if(size > sizeof(uintptr) && ((uintptr*)v)[1] != 0)
 			runtime·memclr((byte*)v, size);
-		else {
-			// ... except for the link pointer
-			// that we used above; zero that.
-			v->next = nil;
-		}
 	}
-	c->local_alloc += size;
+	c->local_cachealloc += size;
 	c->local_objects++;
 	return v;
 }
@@ -71,7 +69,7 @@ ReleaseN(MCache *c, MCacheList *l, int32 n, int32 sizeclass)
 	c->size -= n*runtime·class_to_size[sizeclass];
 
 	// Return them to central free list.
-	runtime·MCentral_FreeList(&runtime·mheap.central[sizeclass], n, first);
+	runtime·MCentral_FreeList(&runtime·mheap->central[sizeclass], n, first);
 }
 
 void
@@ -88,7 +86,7 @@ runtime·MCache_Free(MCache *c, void *v, int32 sizeclass, uintptr size)
 	l->list = p;
 	l->nlist++;
 	c->size += size;
-	c->local_alloc -= size;
+	c->local_cachealloc -= size;
 	c->local_objects--;
 
 	if(l->nlist >= MaxMCacheListLen) {

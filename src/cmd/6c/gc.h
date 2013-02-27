@@ -28,6 +28,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include	<u.h>
 #include	"../cc/cc.h"
 #include	"../6l/6.out.h"
 
@@ -291,6 +292,7 @@ void	gbranch(int);
 void	patch(Prog*, int32);
 int	sconst(Node*);
 void	gpseudo(int, Sym*, Node*);
+void	gprefetch(Node*);
 
 /*
  * swt.c
@@ -298,7 +300,8 @@ void	gpseudo(int, Sym*, Node*);
 int	swcmp(const void*, const void*);
 void	doswit(Node*);
 void	swit1(C1*, int, int32, Node*);
-void	cas(void);
+void	swit2(C1*, int, int32, Node*);
+void	newcase(void);
 void	bitload(Node*, Node*, Node*, Node*, Node*);
 void	bitstore(Node*, Node*, Node*, Node*, Node*);
 int32	outstring(char*, int32);
@@ -364,8 +367,6 @@ int	BtoF(int32);
 #define	D_HI	D_NONE
 #define	D_LO	D_NONE
 
-#define	isregtype(t)	((t)>= D_AX && (t)<=D_R15)
-
 /*
  * bound
  */
@@ -397,6 +398,7 @@ void	shiftit(Type*, Node*, Node*);
 #pragma	varargck	type	"A"	int
 #pragma	varargck	type	"B"	Bits
 #pragma	varargck	type	"D"	Adr*
+#pragma	varargck	type	"lD"	Adr*
 #pragma	varargck	type	"P"	Prog*
 #pragma	varargck	type	"R"	int
 #pragma	varargck	type	"S"	char*

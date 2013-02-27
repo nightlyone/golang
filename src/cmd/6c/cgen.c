@@ -265,6 +265,18 @@ cgen(Node *n, Node *nn)
 				break;
 			}
 		}
+		if(n->op == OOR && l->op == OASHL && r->op == OLSHR
+		&& l->right->op == OCONST && r->right->op == OCONST
+		&& l->left->op == ONAME && r->left->op == ONAME
+		&& l->left->sym == r->left->sym
+		&& l->right->vconst + r->right->vconst == 8 * l->left->type->width) {
+			regalloc(&nod, l->left, nn);
+			cgen(l->left, &nod);
+			gopcode(OROTL, n->type, l->right, &nod);
+			gmove(&nod, nn);
+			regfree(&nod);
+			break;
+		}
 		if(n->op == OADD && l->op == OASHL && l->right->op == OCONST
 		&& (r->op != OCONST || r->vconst < -128 || r->vconst > 127)) {
 			c = l->right->vconst;
@@ -930,9 +942,6 @@ cgen(Node *n, Node *nn)
 
 			return;
 		}
-		o = 0;
-		if(REGARG >= 0)
-			o = reg[REGARG];
 		gargs(r, &nod, &nod1);
 		if(l->addable < INDEXED) {
 			reglcgen(&nod, l, nn);
@@ -941,9 +950,8 @@ cgen(Node *n, Node *nn)
 			regfree(&nod);
 		} else
 			gopcode(OFUNC, n->type, Z, l);
-		if(REGARG >= 0)
-			if(o != reg[REGARG])
-				reg[REGARG]--;
+		if(REGARG >= 0 && reg[REGARG])
+			reg[REGARG]--;
 		if(nn != Z) {
 			regret(&nod, n);
 			gmove(&nod, nn);
@@ -1241,11 +1249,12 @@ void
 boolgen(Node *n, int true, Node *nn)
 {
 	int o;
-	Prog *p1, *p2;
+	Prog *p1, *p2, *p3;
 	Node *l, *r, nod, nod1;
 	int32 curs;
 
 	if(debug['g']) {
+		print("boolgen %d\n", true);
 		prtree(nn, "boolgen lhs");
 		prtree(n, "boolgen");
 	}
@@ -1357,6 +1366,15 @@ boolgen(Node *n, int true, Node *nn)
 	case OLO:
 	case OLS:
 		o = n->op;
+		if(true && typefd[l->type->etype] && (o == OEQ || o == ONE)) {
+			// Cannot rewrite !(l == r) into l != r with float64; it breaks NaNs.
+			// Jump around instead.
+			boolgen(n, 0, Z);
+			p1 = p;
+			gbranch(OGOTO);
+			patch(p1, pc);
+			goto com;
+		}
 		if(true)
 			o = comrel[relindex(o)];
 		if(l->complex >= FNX && r->complex >= FNX) {
@@ -1371,6 +1389,10 @@ boolgen(Node *n, int true, Node *nn)
 			break;
 		}
 		if(immconst(l)) {
+			// NOTE: Reversing the comparison here is wrong
+			// for floating point ordering comparisons involving NaN,
+			// but we don't have any of those yet so we don't
+			// bother worrying about it.
 			o = invrel[relindex(o)];
 			/* bad, 13 is address of external that becomes constant */
 			if(r->addable < INDEXED || r->addable == 13) {
@@ -1392,10 +1414,11 @@ boolgen(Node *n, int true, Node *nn)
 				cgen(r, &nod1);
 				gopcode(o, l->type, &nod, &nod1);
 				regfree(&nod1);
-			} else
+			} else {
 				gopcode(o, l->type, &nod, r);
+			}
 			regfree(&nod);
-			goto com;
+			goto fixfloat;
 		}
 		regalloc(&nod, r, nn);
 		cgen(r, &nod);
@@ -1410,6 +1433,33 @@ boolgen(Node *n, int true, Node *nn)
 		} else
 			gopcode(o, l->type, l, &nod);
 		regfree(&nod);
+	fixfloat:
+		if(typefd[l->type->etype]) {
+			switch(o) {
+			case OEQ:
+				// Already emitted AJEQ; want AJEQ and AJPC.
+				p1 = p;
+				gbranch(OGOTO);
+				p2 = p;
+				patch(p1, pc);
+				gins(AJPC, Z, Z);
+				patch(p2, pc);
+				break;
+
+			case ONE:
+				// Already emitted AJNE; want AJNE or AJPS.
+				p1 = p;
+				gins(AJPS, Z, Z);
+				p2 = p;
+				gbranch(OGOTO);
+				p3 = p;
+				patch(p1, pc);
+				patch(p2, pc);
+				gbranch(OGOTO);
+				patch(p3, pc);
+				break;
+			}
+		}
 
 	com:
 		if(nn != Z) {
@@ -1544,7 +1594,7 @@ sugen(Node *n, Node *nn, int32 w)
 			nod0.addable = 0;
 			nod0.right = l;
 
-			/* prtree(&nod0, "hand craft"); /* */
+			// prtree(&nod0, "hand craft");
 			cgen(&nod0, Z);
 		}
 		break;
@@ -1634,7 +1684,7 @@ copy:
 		regsalloc(&nod2, nn);
 		nn->type = t;
 
-		gins(AMOVL, &nod1, &nod2);
+		gins(AMOVQ, &nod1, &nod2);
 		regfree(&nod1);
 
 		nod2.type = typ(TIND, t);

@@ -824,7 +824,7 @@ xtramodes(Reg *r, Adr *a)
 	Adr v;
 
 	p = r->prog;
-	if(debug['h'] && p->as == AMOVB && p->from.type == D_OREG)	/* byte load */
+	if(p->as == AMOVB && p->from.type == D_OREG)	/* byte load */
 		return 0;
 	v = *a;
 	v.type = D_REG;
@@ -1067,6 +1067,7 @@ copyu(Prog *p, Adr *v, Adr *s)
 	case ABLT:
 	case ABGT:
 	case ABLE:
+	case APLD:
 		if(s != A) {
 			if(copysub(&p->from, v, s, 1))
 				return 1;
@@ -1100,7 +1101,7 @@ copyu(Prog *p, Adr *v, Adr *s)
 		if(v->type == D_REG) {
 			if(v->reg <= REGEXT && v->reg > exregoffset)
 				return 2;
-			if(v->reg == REGARG)
+			if(v->reg == (uchar)REGARG)
 				return 2;
 		}
 		if(v->type == D_FREG)
@@ -1118,11 +1119,10 @@ copyu(Prog *p, Adr *v, Adr *s)
 
 	case ATEXT:	/* funny */
 		if(v->type == D_REG)
-			if(v->reg == REGARG)
+			if(v->reg == (uchar)REGARG)
 				return 3;
 		return 0;
 	}
-	return 0;
 }
 
 int

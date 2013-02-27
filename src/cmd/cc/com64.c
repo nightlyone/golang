@@ -28,6 +28,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include <u.h>
 #include "cc.h"
 
 /*
@@ -95,7 +96,7 @@ Node*	nodmmv;
 
 Node*	nodvasop;
 
-char	etconv[NTYPE];	/* for _vasop */
+char	etconv[NALLTYPES];	/* for _vasop */
 Init	initetconv[] =
 {
 	TCHAR,		1,	0,

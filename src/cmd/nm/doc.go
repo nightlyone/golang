@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build ignore
+
 /*
 
 Nm is a version of the Plan 9 nm command.  The original is documented at
@@ -11,8 +13,11 @@ Nm is a version of the Plan 9 nm command.  The original is documented at
 It prints the name list (symbol table) for programs compiled by gc as well as the
 Plan 9 C compiler.
 
-For reasons of disambiguation it is installed as 6nm although it also serves
-as an 8nm and a 5nm.
+This implementation adds the flag -S, which prints each symbol's size
+in decimal after its address.
+
+Usage:
+	go tool nm [-aghnsTu] file
 
 */
-package documentation
+package main

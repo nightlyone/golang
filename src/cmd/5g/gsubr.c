@@ -28,6 +28,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 
 // TODO(kaib): Can make this bigger if we move
@@ -50,6 +52,10 @@ clearp(Prog *p)
 	pcloc++;
 }
 
+static int ddumped;
+static Prog *dfirst;
+static Prog *dpc;
+
 /*
  * generate and return proc with p->as = as,
  * linked into program.  pc is next instruction.
@@ -59,10 +65,23 @@ prog(int as)
 {
 	Prog *p;
 
-	p = pc;
-	pc = mal(sizeof(*pc));
-
-	clearp(pc);
+	if(as == ADATA || as == AGLOBL) {
+		if(ddumped)
+			fatal("already dumped data");
+		if(dpc == nil) {
+			dpc = mal(sizeof(*dpc));
+			dfirst = dpc;
+		}
+		p = dpc;
+		dpc = mal(sizeof(*dpc));
+		p->link = dpc;
+		p->reg = 0;  // used for flags
+	} else {
+		p = pc;
+		pc = mal(sizeof(*pc));
+		clearp(pc);
+		p->link = pc;
+	}
 
 	if(lineno == 0) {
 		if(debug['K'])
@@ -71,22 +90,40 @@ prog(int as)
 
 	p->as = as;
 	p->lineno = lineno;
-	p->link = pc;
 	return p;
+}
+
+void
+dumpdata(void)
+{
+	ddumped = 1;
+	if(dfirst == nil)
+		return;
+	newplist();
+	*pc = *dfirst;
+	pc = dpc;
+	clearp(pc);
 }
 
 /*
  * generate a branch.
  * t is ignored.
+ * likely values are for branch prediction:
+ *	-1 unlikely
+ *	0 no opinion
+ *	+1 likely
  */
 Prog*
-gbranch(int as, Type *t)
+gbranch(int as, Type *t, int likely)
 {
 	Prog *p;
 
+	USED(t);
+	USED(likely);  // TODO: record this for linker
+
 	p = prog(as);
 	p->to.type = D_BRANCH;
-	p->to.branch = P;
+	p->to.u.branch = P;
 	return p;
 }
 
@@ -98,8 +135,21 @@ patch(Prog *p, Prog *to)
 {
 	if(p->to.type != D_BRANCH)
 		fatal("patch: not a branch");
-	p->to.branch = to;
+	p->to.u.branch = to;
 	p->to.offset = to->loc;
+}
+
+Prog*
+unpatch(Prog *p)
+{
+	Prog *q;
+
+	if(p->to.type != D_BRANCH)
+		fatal("unpatch: not a branch");
+	q = p->to.u.branch;
+	p->to.u.branch = P;
+	p->to.offset = 0;
+	return q;
 }
 
 /*
@@ -135,26 +185,31 @@ gjmp(Prog *to)
 {
 	Prog *p;
 
-	p = gbranch(AB, T);
+	p = gbranch(AB, T, 0);
 	if(to != P)
 		patch(p, to);
 	return p;
 }
 
 void
-ggloblnod(Node *nam, int32 width)
+ggloblnod(Node *nam)
 {
 	Prog *p;
 
 	p = gins(AGLOBL, nam, N);
 	p->lineno = nam->lineno;
+	p->from.gotype = ngotype(nam);
 	p->to.sym = S;
 	p->to.type = D_CONST;
-	p->to.offset = width;
+	p->to.offset = nam->type->width;
+	if(nam->readonly)
+		p->reg = RODATA;
+	if(nam->type != T && !haspointers(nam->type))
+		p->reg |= NOPTR;
 }
 
 void
-ggloblsym(Sym *s, int32 width, int dupok)
+ggloblsym(Sym *s, int32 width, int dupok, int rodata)
 {
 	Prog *p;
 
@@ -166,7 +221,20 @@ ggloblsym(Sym *s, int32 width, int dupok)
 	p->to.name = D_NONE;
 	p->to.offset = width;
 	if(dupok)
-		p->reg = DUPOK;
+		p->reg |= DUPOK;
+	if(rodata)
+		p->reg |= RODATA;
+}
+
+void
+gtrack(Sym *s)
+{
+	Prog *p;
+	
+	p = gins(AUSEFIELD, N, N);
+	p->from.type = D_OREG;
+	p->from.name = D_EXTERN;
+	p->from.sym = s;
 }
 
 int
@@ -190,17 +258,20 @@ isfat(Type *t)
  * also fix up direct register references to be D_OREG.
  */
 void
-afunclit(Addr *a)
+afunclit(Addr *a, Node *n)
 {
 	if(a->type == D_CONST && a->name == D_EXTERN || a->type == D_REG) {
 		a->type = D_OREG;
+		if(n->op == ONAME)
+			a->sym = n->sym;
 	}
 }
 
 static	int	resvd[] =
 {
-	9,	// reserved for m
-	10,	// reserved for g
+	9,     // reserved for m
+	10,    // reserved for g
+	REGSP, // reserved for SP
 };
 
 void
@@ -244,6 +315,8 @@ anyregalloc(void)
 	return 0;
 }
 
+uintptr regpc[REGALLOC_FMAX+1];
+
 /*
  * allocate register of type t, leave in n.
  * if o != N, o is desired fixed register.
@@ -254,7 +327,7 @@ regalloc(Node *n, Type *t, Node *o)
 {
 	int i, et, fixfree, floatfree;
 
-	if(debug['r']) {
+	if(0 && debug['r']) {
 		fixfree = 0;
 		for(i=REGALLOC_R0; i<=REGALLOC_RMAX; i++)
 			if(reg[i] == 0)
@@ -287,9 +360,13 @@ regalloc(Node *n, Type *t, Node *o)
 				goto out;
 		}
 		for(i=REGALLOC_R0; i<=REGALLOC_RMAX; i++)
-			if(reg[i] == 0)
+			if(reg[i] == 0) {
+				regpc[i] = (uintptr)getcallerpc(&n);
 				goto out;
-
+			}
+		print("registers allocated at\n");
+		for(i=REGALLOC_R0; i<=REGALLOC_RMAX; i++)
+			print("%d %p\n", i, regpc[i]);
 		yyerror("out of fixed registers");
 		goto err;
 
@@ -327,7 +404,7 @@ regfree(Node *n)
 {
 	int i, fixfree, floatfree;
 
-	if(debug['r']) {
+	if(0 && debug['r']) {
 		fixfree = 0;
 		for(i=REGALLOC_R0; i<=REGALLOC_RMAX; i++)
 			if(reg[i] == 0)
@@ -339,16 +416,20 @@ regfree(Node *n)
 		print("regalloc fix %d float %d\n", fixfree, floatfree);
 	}
 
-	if(n->op == ONAME && iscomplex[n->type->etype])
+	if(n->op == ONAME)
 		return;
 	if(n->op != OREGISTER && n->op != OINDREG)
 		fatal("regfree: not a register");
 	i = n->val.u.reg;
-	if(i < 0 || i >= sizeof(reg))
+	if(i == REGSP)
+		return;
+	if(i < 0 || i >= nelem(reg) || i >= nelem(regpc))
 		fatal("regfree: reg out of range");
 	if(reg[i] <= 0)
-		fatal("regfree: reg not allocated");
+		fatal("regfree: reg %R not allocated", i);
 	reg[i]--;
+	if(reg[i] == 0)
+		regpc[i] = 0;
 }
 
 /*
@@ -410,8 +491,15 @@ nodarg(Type *t, int fp)
 		fatal("nodarg: offset not computed for %T", t);
 	n->xoffset = t->width;
 	n->addable = 1;
+	n->orig = t->nname;
 
 fp:
+	// Rewrite argument named _ to __,
+	// or else the assignment to _ will be
+	// discarded during code generation.
+	if(isblank(n))
+		n->sym = lookup("__");
+
 	switch(fp) {
 	default:
 		fatal("nodarg %T %d", t, fp);
@@ -426,6 +514,7 @@ fp:
 		n->class = PPARAM;
 		break;
 	}
+	n->typecheck = 1;
 	return n;
 }
 
@@ -474,9 +563,9 @@ split64(Node *n, Node *lo, Node *hi)
 	if(!is64(n->type))
 		fatal("split64 %T", n->type);
 
-	sclean[nsclean].op = OEMPTY;
 	if(nsclean >= nelem(sclean))
 		fatal("split64 clean");
+	sclean[nsclean].op = OEMPTY;
 	nsclean++;
 	switch(n->op) {
 	default:
@@ -994,7 +1083,8 @@ gins(int as, Node *f, Node *t)
 	if(f != N)
 		naddr(f, &af, 1);
 	if(t != N)
-		naddr(t, &at, 1);	p = prog(as);
+		naddr(t, &at, 1);
+	p = prog(as);
 	if(f != N)
 		p->from = af;
 	if(t != N)
@@ -1031,7 +1121,7 @@ gcmp(int as, Node *lhs, Node *rhs)
 {
 	Prog *p;
 
-	if(lhs->op != OREGISTER || rhs->op != OREGISTER)
+	if(lhs->op != OREGISTER)
 		fatal("bad operands to gcmp: %O %O", lhs->op, rhs->op);
 
 	p = gins(as, rhs, N);
@@ -1070,6 +1160,27 @@ gregshift(int as, Node *lhs, int32 stype, Node *reg, Node *rhs)
 	return p;
 }
 
+// Generate an instruction referencing *n
+// to force segv on nil pointer dereference.
+void
+checkref(Node *n)
+{
+	Node m1, m2;
+
+	if(n->type->type->width < unmappedzero)
+		return;
+
+	regalloc(&m1, types[TUINTPTR], n);
+	regalloc(&m2, types[TUINT8], n);
+	cgen(n, &m1);
+	m1.xoffset = 0;
+	m1.op = OINDREG;
+	m1.type = types[TUINT8];
+	gins(AMOVBU, &m1, &m2);
+	regfree(&m2);
+	regfree(&m1);
+}
+
 static void
 checkoffset(Addr *a, int canemitcode)
 {
@@ -1085,7 +1196,7 @@ checkoffset(Addr *a, int canemitcode)
 	// reference with large offset.  instead, emit explicit
 	// test of 0(reg).
 	regalloc(&n1, types[TUINTPTR], N);
-	p = gins(AMOVW, N, &n1);
+	p = gins(AMOVB, N, &n1);
 	p->from = *a;
 	p->from.offset = 0;
 	regfree(&n1);
@@ -1098,11 +1209,21 @@ checkoffset(Addr *a, int canemitcode)
 void
 naddr(Node *n, Addr *a, int canemitcode)
 {
+	Prog *p;
+
 	a->type = D_NONE;
 	a->name = D_NONE;
 	a->reg = NREG;
+	a->gotype = S;
+	a->node = N;
+	a->etype = 0;
 	if(n == N)
 		return;
+
+	if(n->type != T && n->type->etype != TIDEAL) {
+		dowidth(n->type);
+		a->width = n->type->width;
+	}
 
 	switch(n->op) {
 	default:
@@ -1158,6 +1279,26 @@ naddr(Node *n, Addr *a, int canemitcode)
 		a->sym = n->left->sym;
 		a->type = D_OREG;
 		a->name = D_PARAM;
+		a->node = n->left->orig;
+		break;
+	
+	case OCLOSUREVAR:
+		if(!canemitcode)
+			fatal("naddr OCLOSUREVAR cannot emit code");
+		p = gins(AMOVW, N, N);
+		p->from.type = D_OREG;
+		p->from.reg = 7;
+		p->from.offset = n->xoffset;
+		p->to.type = D_REG;
+		p->to.reg = 1;
+		a->type = D_REG;
+		a->reg = 1;
+		a->sym = S;
+		break;		
+
+	case OCFUNC:
+		naddr(n->left, a, canemitcode);
+		a->sym = n->left->sym;
 		break;
 
 	case ONAME:
@@ -1170,6 +1311,9 @@ naddr(Node *n, Addr *a, int canemitcode)
 		}
 		a->offset = n->xoffset;
 		a->sym = n->sym;
+		a->node = n->orig;
+		//if(a->node >= (Node*)&n)
+		//	fatal("stack node");
 		if(a->sym == S)
 			a->sym = lookup(".noname");
 		if(n->method) {
@@ -1196,6 +1340,7 @@ naddr(Node *n, Addr *a, int canemitcode)
 		case PFUNC:
 			a->name = D_EXTERN;
 			a->type = D_CONST;
+			a->sym = funcsym(a->sym);
 			break;
 		}
 		break;
@@ -1207,9 +1352,10 @@ naddr(Node *n, Addr *a, int canemitcode)
 			break;
 		case CTFLT:
 			a->type = D_FCONST;
-			a->dval = mpgetflt(n->val.u.fval);
+			a->u.dval = mpgetflt(n->val.u.fval);
 			break;
 		case CTINT:
+		case CTRUNE:
 			a->sym = S;
 			a->type = D_CONST;
 			a->offset = mpgetfix(n->val.u.xval);
@@ -1230,9 +1376,20 @@ naddr(Node *n, Addr *a, int canemitcode)
 		}
 		break;
 
+	case OITAB:
+		// itable of interface value
+		naddr(n->left, a, canemitcode);
+		a->etype = TINT32;
+		if(a->type == D_CONST && a->offset == 0)
+			break;	// len(nil)
+		if(a->offset >= unmappedzero && a->offset-Array_nel < unmappedzero)
+			checkoffset(a, canemitcode);
+		break;
+
 	case OLEN:
 		// len of string or slice
 		naddr(n->left, a, canemitcode);
+		a->etype = TINT32;
 		if(a->type == D_CONST && a->offset == 0)
 			break;	// len(nil)
 		a->offset += Array_nel;
@@ -1243,6 +1400,7 @@ naddr(Node *n, Addr *a, int canemitcode)
 	case OCAP:
 		// cap of string or slice
 		naddr(n->left, a, canemitcode);
+		a->etype = TINT32;
 		if(a->type == D_CONST && a->offset == 0)
 			break;	// cap(nil)
 		a->offset += Array_cap;
@@ -1252,6 +1410,7 @@ naddr(Node *n, Addr *a, int canemitcode)
 
 	case OADDR:
 		naddr(n->left, a, canemitcode);
+		a->etype = tptr;
 		switch(a->type) {
 		case D_OREG:
 			a->type = D_CONST;
@@ -1265,6 +1424,9 @@ naddr(Node *n, Addr *a, int canemitcode)
 			fatal("naddr: OADDR %d\n", a->type);
 		}
 	}
+	
+	if(a->width < 0)
+		fatal("naddr: bad width for %N -> %D", n, a);
 }
 
 /*
@@ -1475,6 +1637,16 @@ optoas(int op, Type *t)
 		a = ASUBD;
 		break;
 
+	case CASE(OMINUS, TINT8):
+	case CASE(OMINUS, TUINT8):
+	case CASE(OMINUS, TINT16):
+	case CASE(OMINUS, TUINT16):
+	case CASE(OMINUS, TINT32):
+	case CASE(OMINUS, TUINT32):
+	case CASE(OMINUS, TPTR32):
+		a = ARSB;
+		break;
+
 	case CASE(OAND, TINT8):
 	case CASE(OAND, TUINT8):
 	case CASE(OAND, TINT16):
@@ -1664,7 +1836,7 @@ sudoaddable(int as, Node *n, Addr *a, int *w)
 
 	switch(n->op) {
 	case OLITERAL:
-		if(n->val.ctype != CTINT)
+		if(!isconst(n, CTINT))
 			break;
 		v = mpgetfix(n->val.u.xval);
 		if(v >= 32000 || v <= -32000)
@@ -1681,6 +1853,9 @@ sudoaddable(int as, Node *n, Addr *a, int *w)
 		goto odot;
 
 	case OINDEX:
+		return 0;
+		// disabled: OINDEX case is now covered by agenr
+		// for a more suitable register allocation pattern.
 		if(n->left->type->etype == TSTRING)
 			return 0;
 		cleani += 2;
@@ -1744,6 +1919,7 @@ odot:
 
 	a->type = D_NONE;
 	a->name = D_NONE;
+	n1.type = n->type;
 	naddr(&n1, a, 1);
 	goto yes;
 
@@ -1797,7 +1973,7 @@ oindex:
 		t = types[TINT32];
 	regalloc(reg1, t, N);
 	regalloc(&n3, types[TINT32], reg1);
-	p2 = cgenindex(r, &n3);
+	p2 = cgenindex(r, &n3, debug['B'] || n->bounded);
 	gmove(&n3, reg1);
 	regfree(&n3);
 
@@ -1837,7 +2013,7 @@ oindex:
 		cgen(&n2, &n3);
 		gcmp(optoas(OCMP, types[TUINT32]), reg1, &n3);
 		regfree(&n3);
-		p1 = gbranch(optoas(OLT, types[TUINT32]), T);
+		p1 = gbranch(optoas(OLT, types[TUINT32]), T, +1);
 		if(p2)
 			patch(p2, pc);
 		ginscall(panicindex, 0);
@@ -1871,7 +2047,6 @@ oindex:
 	a->type = D_OREG;
 	a->reg = reg->val.u.reg;
 	a->offset = 0;
-
 	goto yes;
 
 oindex_const:
@@ -1888,7 +2063,7 @@ oindex_const:
 	v = mpgetfix(r->val.u.xval);
 	if(o & ODynam) {
 
-		if(!debug['B'] && !n->etype) {
+		if(!debug['B'] && !n->bounded) {
 			n1 = *reg;
 			n1.op = OINDREG;
 			n1.type = types[tptr];
@@ -1901,7 +2076,7 @@ oindex_const:
 			gcmp(optoas(OCMP, types[TUINT32]), &n4, &n3);
 			regfree(&n4);
 			regfree(&n3);
-			p1 = gbranch(optoas(OGT, types[TUINT32]), T);
+			p1 = gbranch(optoas(OGT, types[TUINT32]), T, +1);
 			ginscall(panicindex, 0);
 			patch(p1, pc);
 		}

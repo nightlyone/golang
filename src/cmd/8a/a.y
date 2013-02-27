@@ -29,7 +29,9 @@
 // THE SOFTWARE.
 
 %{
+#include <u.h>
 #include <stdio.h>	/* if we don't, bison will, and a.h re-#defines getc */
+#include <libc.h>
 #include "a.h"
 %}
 %union	{
@@ -51,9 +53,9 @@
 %left	'+' '-'
 %left	'*' '/' '%'
 %token	<lval>	LTYPE0 LTYPE1 LTYPE2 LTYPE3 LTYPE4
-%token	<lval>	LTYPEC LTYPED LTYPEN LTYPER LTYPET LTYPES LTYPEM LTYPEI LTYPEG
+%token	<lval>	LTYPEC LTYPED LTYPEN LTYPER LTYPET LTYPES LTYPEM LTYPEI LTYPEG LTYPEXC
 %token	<lval>	LCONST LFP LPC LSB
-%token	<lval>	LBREG LLREG LSREG LFREG
+%token	<lval>	LBREG LLREG LSREG LFREG LXREG
 %token	<dval>	LFCONST
 %token	<sval>	LSCONST LSP
 %token	<sym>	LNAME LLAB LVAR
@@ -61,7 +63,7 @@
 %type	<con2>	con2
 %type	<gen>	mem imm imm2 reg nam rel rem rim rom omem nmem
 %type	<gen2>	nonnon nonrel nonrem rimnon rimrem remrim
-%type	<gen2>	spec1 spec2 spec3 spec4 spec5 spec6 spec7 spec8
+%type	<gen2>	spec1 spec2 spec3 spec4 spec5 spec6 spec7 spec8 spec9
 %%
 prog:
 |	prog
@@ -114,6 +116,7 @@ inst:
 |	LTYPEM spec6	{ outcode($1, &$2); }
 |	LTYPEI spec7	{ outcode($1, &$2); }
 |	LTYPEG spec8	{ outcode($1, &$2); }
+|	LTYPEXC spec9	{ outcode($1, &$2); }
 
 nonnon:
 	{
@@ -175,6 +178,11 @@ nonrel:
 		$$.from = nullgen;
 		$$.to = $1;
 	}
+|	imm ',' rel
+	{
+		$$.from = $1;
+		$$.to = $3;
+	}
 
 spec1:	/* DATA */
 	nam '/' con ',' imm
@@ -207,6 +215,13 @@ spec3:	/* JMP/CALL */
 	{
 		$$.from = nullgen;
 		$$.to = $1;
+	}
+|	'*' nam
+	{
+		$$.from = nullgen;
+		$$.to = $2;
+		$$.to.index = $2.type;
+		$$.to.type = D_INDIR+D_ADDR;
 	}
 
 spec4:	/* NOP */
@@ -273,6 +288,14 @@ spec8:	/* GLOBL */
 		$$.to = $5;
 	}
 
+spec9:	/* CMPPS/CMPPD */
+	reg ',' rem ',' con
+	{
+		$$.from = $1;
+		$$.to = $3;
+		$$.to.offset = $5;
+	}
+
 rem:
 	reg
 |	mem
@@ -336,6 +359,11 @@ reg:
 		$$ = nullgen;
 		$$.type = $1;
 	}
+|	LXREG
+	{
+		$$ = nullgen;
+		$$.type = $1;
+	}
 |	LSP
 	{
 		$$ = nullgen;
@@ -382,6 +410,12 @@ imm:
 		$$ = nullgen;
 		$$.type = D_FCONST;
 		$$.dval = $3;
+	}
+|	'$' '(' '-' LFCONST ')'
+	{
+		$$ = nullgen;
+		$$.type = D_FCONST;
+		$$.dval = -$4;
 	}
 |	'$' '-' LFCONST
 	{

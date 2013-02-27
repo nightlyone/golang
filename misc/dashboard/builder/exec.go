@@ -1,65 +1,79 @@
+// Copyright 2011 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package main
 
 import (
 	"bytes"
-	"exec"
+	"fmt"
 	"io"
+	"log"
 	"os"
-	"strings"
+	"os/exec"
+	"time"
 )
 
 // run is a simple wrapper for exec.Run/Close
-func run(envv []string, dir string, argv ...string) os.Error {
-	bin, err := pathLookup(argv[0])
-	if err != nil {
+func run(timeout time.Duration, envv []string, dir string, argv ...string) error {
+	if *verbose {
+		log.Println("run", argv)
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir = dir
+	cmd.Env = envv
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
 		return err
 	}
-	p, err := exec.Run(bin, argv, envv, dir,
-		exec.DevNull, exec.DevNull, exec.PassThrough)
-	if err != nil {
-		return err
-	}
-	return p.Close()
+	return waitWithTimeout(timeout, cmd)
 }
 
-// runLog runs a process and returns the combined stdout/stderr, 
-// as well as writing it to logfile (if specified).
-func runLog(envv []string, logfile, dir string, argv ...string) (output string, exitStatus int, err os.Error) {
-	bin, err := pathLookup(argv[0])
-	if err != nil {
-		return
-	}
-	p, err := exec.Run(bin, argv, envv, dir,
-		exec.DevNull, exec.Pipe, exec.MergeWithStdout)
-	if err != nil {
-		return
-	}
-	defer p.Close()
-	b := new(bytes.Buffer)
-	var w io.Writer = b
-	if logfile != "" {
-		f, err := os.Open(logfile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
-		if err != nil {
-			return
-		}
-		defer f.Close()
-		w = io.MultiWriter(f, b)
-	}
-	_, err = io.Copy(w, p.Stdout)
-	if err != nil {
-		return
-	}
-	wait, err := p.Wait(0)
-	if err != nil {
-		return
-	}
-	return b.String(), wait.WaitStatus.ExitStatus(), nil
+// runLog runs a process and returns the combined stdout/stderr. It returns
+// process combined stdout and stderr output, exit status and error. The
+// error returned is nil, if process is started successfully, even if exit
+// status is not successful.
+func runLog(timeout time.Duration, envv []string, dir string, argv ...string) (string, bool, error) {
+	var b bytes.Buffer
+	ok, err := runOutput(timeout, envv, &b, dir, argv...)
+	return b.String(), ok, err
 }
 
-// Find bin in PATH if a relative or absolute path hasn't been specified
-func pathLookup(s string) (string, os.Error) {
-	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") {
-		return s, nil
+// runOutput runs a process and directs any output to the supplied writer.
+// It returns exit status and error. The error returned is nil, if process
+// is started successfully, even if exit status is not successful.
+func runOutput(timeout time.Duration, envv []string, out io.Writer, dir string, argv ...string) (bool, error) {
+	if *verbose {
+		log.Println("runOutput", argv)
 	}
-	return exec.LookPath(s)
+
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir = dir
+	cmd.Env = envv
+	cmd.Stdout = out
+	cmd.Stderr = out
+
+	startErr := cmd.Start()
+	if startErr != nil {
+		return false, startErr
+	}
+	if err := waitWithTimeout(timeout, cmd); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func waitWithTimeout(timeout time.Duration, cmd *exec.Cmd) error {
+	errc := make(chan error, 1)
+	go func() {
+		errc <- cmd.Wait()
+	}()
+	var err error
+	select {
+	case <-time.After(timeout):
+		cmd.Process.Kill()
+		err = fmt.Errorf("timed out after %v", timeout)
+	case err = <-errc:
+	}
+	return err
 }

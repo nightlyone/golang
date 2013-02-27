@@ -1,8 +1,12 @@
-// errchk $G -e $D/$F.go
+// errorcheck
 
 // Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+
+// Test various correct and incorrect permutations of send-only,
+// receive-only, and bidirectional channels.
+// Does not compile.
 
 package main
 
@@ -22,21 +26,18 @@ func main() {
 
 	c <- 0 // ok
 	<-c    // ok
-	//TODO(rsc): uncomment when this syntax is valid for receive+check closed
-	//	x, ok := <-c	// ok
-	//	_, _ = x, ok
+	x, ok := <-c	// ok
+	_, _ = x, ok
 
 	cr <- 0 // ERROR "send"
 	<-cr    // ok
-	//TODO(rsc): uncomment when this syntax is valid for receive+check closed
-	//	x, ok = <-cr	// ok
-	//	_, _ = x, ok
+	x, ok = <-cr	// ok
+	_, _ = x, ok
 
 	cs <- 0 // ok
 	<-cs    // ERROR "receive"
-	////TODO(rsc): uncomment when this syntax is valid for receive+check closed
-	////	x, ok = <-cs	// ERROR "receive"
-	////	_, _ = x, ok
+	x, ok = <-cs	// ERROR "receive"
+	_, _ = x, ok
 
 	select {
 	case c <- 0: // ok
@@ -51,4 +52,11 @@ func main() {
 	case x := <-cs: // ERROR "receive"
 		_ = x
 	}
+
+	for _ = range cs {// ERROR "receive"
+	}
+
+	close(c)
+	close(cs)
+	close(cr)  // ERROR "receive"
 }

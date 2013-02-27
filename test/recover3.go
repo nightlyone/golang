@@ -1,8 +1,10 @@
-// $G $D/$F.go && $L $F.$A && ./$A.out
+// run
 
 // Copyright 2010 The Go Authors.  All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+
+// Test recovering from runtime errors.
 
 package main
 
@@ -35,7 +37,7 @@ func check(name string, f func(), err string) {
 			println(name, "panicked but not with runtime.Error")
 			return
 		}
-		s := runt.String()
+		s := runt.Error()
 		if strings.Index(s, err) < 0 {
 			bug()
 			println(name, "panicked with", s, "not", err)
@@ -69,6 +71,10 @@ func main() {
 	inter = 1
 	check("type-concrete", func() { println(inter.(string)) }, "int, not string")
 	check("type-interface", func() { println(inter.(m)) }, "missing method m")
+
+	if didbug {
+		panic("recover3")
+	}
 }
 
 type m interface {

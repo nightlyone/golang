@@ -40,115 +40,121 @@
 #include	<ar.h>
 
 char	*noname		= "<none>";
-char	thechar		= '6';
 char*	thestring 	= "amd64";
 char*	paramspace	= "FP";
 
-/*
- *	-H2 -T4136 -R4096		is plan9 64-bit format
- *	-H3 -T4128 -R4096		is plan9 32-bit format
- *	-H5 -T0x80110000 -R4096		is ELF32
- *	-H6 -Tx -Rx			is apple MH-exec
- *	-H7 -Tx -Rx			is linux elf-exec
- *      -H9 -Tx -Rx			is FreeBSD elf-exec
- *
- *	options used: 189BLQSWabcjlnpsvz
- */
+Header headers[] = {
+	"plan9x32", Hplan9x32,
+	"plan9", Hplan9x64,
+	"elf", Helf,
+	"darwin", Hdarwin,
+	"linux", Hlinux,
+	"freebsd", Hfreebsd,
+	"netbsd", Hnetbsd,
+	"openbsd", Hopenbsd,
+	"windows", Hwindows,
+	"windowsgui", Hwindows,
+	0, 0
+};
 
-void
-usage(void)
-{
-	fprint(2, "usage: 6l [-options] [-E entry] [-H head] [-I interpreter] [-L dir] [-T text] [-R rnd] [-r path] [-o out] main.6\n");
-	exits("usage");
-}
+/*
+ *	-Hplan9x32 -T4128 -R4096	is plan9 32-bit format
+ *	-Hplan9 -T0x200028 -R0x200000	is plan9 64-bit format
+ *	-Helf -T0x80110000 -R4096	is ELF32
+ *	-Hdarwin -Tx -Rx		is apple MH-exec
+ *	-Hlinux -Tx -Rx			is linux elf-exec
+ *	-Hfreebsd -Tx -Rx		is FreeBSD elf-exec
+ *	-Hnetbsd -Tx -Rx		is NetBSD elf-exec
+ *	-Hopenbsd -Tx -Rx		is OpenBSD elf-exec
+ *	-Hwindows -Tx -Rx		is MS Windows PE32+
+ */
 
 void
 main(int argc, char *argv[])
 {
-	int c;
-
 	Binit(&bso, 1, OWRITE);
-	cout = -1;
 	listinit();
 	memset(debug, 0, sizeof(debug));
 	nerrors = 0;
-	outfile = "6.out";
+	outfile = nil;
 	HEADTYPE = -1;
 	INITTEXT = -1;
 	INITDAT = -1;
 	INITRND = -1;
 	INITENTRY = 0;
+	LIBINITENTRY = 0;
+	nuxiinit();
 
-	ARGBEGIN {
-	default:
-		c = ARGC();
-		if(c == 'l')
-			usage();
- 		if(c >= 0 && c < sizeof(debug))
-			debug[c]++;
-		break;
-	case 'o': /* output to (next arg) */
-		outfile = EARGF(usage());
-		break;
-	case 'E':
-		INITENTRY = EARGF(usage());
-		break;
-	case 'H':
-		HEADTYPE = atolwhex(EARGF(usage()));
-		break;
-	case 'I':
-		interpreter = EARGF(usage());
-		break;
-	case 'L':
-		Lflag(EARGF(usage()));
-		break;
-	case 'T':
-		INITTEXT = atolwhex(EARGF(usage()));
-		break;
-	case 'D':
-		INITDAT = atolwhex(EARGF(usage()));
-		break;
-	case 'R':
-		INITRND = atolwhex(EARGF(usage()));
-		break;
-	case 'r':
-		rpath = EARGF(usage());
-		break;
-	case 'V':
-		print("%cl version %s\n", thechar, getgoversion());
-		errorexit();
-	} ARGEND
+	flagcount("1", "use alternate profiling code", &debug['1']);
+	flagcount("8", "assume 64-bit addresses", &debug['8']);
+	flagfn1("B", "info: define ELF NT_GNU_BUILD_ID note", addbuildinfo);
+	flagint64("D", "addr: data address", &INITDAT);
+	flagstr("E", "sym: entry symbol", &INITENTRY);
+	flagfn1("I", "interp: set ELF interp", setinterp);
+	flagfn1("L", "dir: add dir to library path", Lflag);
+	flagfn1("H", "head: header type", setheadtype);
+	flagcount("K", "add stack underflow checks", &debug['K']);
+	flagcount("O", "print pc-line tables", &debug['O']);
+	flagcount("Q", "debug byte-register code gen", &debug['Q']);
+	flagint32("R", "rnd: address rounding", &INITRND);
+	flagcount("S", "check type signatures", &debug['S']);
+	flagint64("T", "addr: text address", &INITTEXT);
+	flagfn0("V", "print version and exit", doversion);
+	flagcount("W", "disassemble input", &debug['W']);
+	flagfn2("X", "name value: define string data", addstrdata);
+	flagcount("Z", "clear stack frame on entry", &debug['Z']);
+	flagcount("a", "disassemble output", &debug['a']);
+	flagcount("c", "dump call graph", &debug['c']);
+	flagcount("d", "disable dynamic executable", &debug['d']);
+	flagcount("f", "ignore version mismatch", &debug['f']);
+	flagcount("g", "disable go package data checks", &debug['g']);
+	flagcount("hostobj", "generate host object file", &isobj);
+	flagstr("k", "sym: set field tracking symbol", &tracksym);
+	flagcount("n", "dump symbol table", &debug['n']);
+	flagstr("o", "outfile: set output file", &outfile);
+	flagcount("p", "insert profiling code", &debug['p']);
+	flagstr("r", "dir1:dir2:...: set ELF dynamic linker search path", &rpath);
+	flagcount("race", "enable race detector", &flag_race);
+	flagcount("s", "disable symbol table", &debug['s']);
+	flagcount("u", "reject unsafe packages", &debug['u']);
+	flagcount("v", "print link trace", &debug['v']);
+	flagcount("w", "disable DWARF generation", &debug['w']);
+	flagcount("shared", "generate shared object", &flag_shared);
+	
+	flagparse(&argc, &argv, usage);
 
 	if(argc != 1)
 		usage();
 
-	libinit();
-	if(rpath == nil)
-		rpath = smprint("%s/pkg/%s_%s", goroot, goos, goarch);
+	mywhatsys();	// get goos
 
-	if(HEADTYPE == -1) {
-		HEADTYPE = 2;
-		if(strcmp(goos, "linux") == 0)
-			HEADTYPE = 7;
-		else
-		if(strcmp(goos, "darwin") == 0)
-			HEADTYPE = 6;
-		else
-		if(strcmp(goos, "freebsd") == 0)
-			HEADTYPE = 9;
-		else
-		if(strcmp(goos, "windows") == 0)
-			HEADTYPE = 10;
-		else
-			print("goos is not known: %s\n", goos);
+	if(HEADTYPE == -1)
+		HEADTYPE = headtype(goos);
+
+	if(isobj) {
+		switch(HEADTYPE) {
+		default:
+			sysfatal("cannot use -hostobj with -H %s", headstr(HEADTYPE));
+		case Hlinux:
+			break;
+		}
 	}
+
+	if(outfile == nil) {
+		if(HEADTYPE == Hwindows)
+			outfile = "6.out.exe";
+		else
+			outfile = "6.out";
+	}
+
+	libinit();
 
 	switch(HEADTYPE) {
 	default:
 		diag("unknown -H option");
 		errorexit();
-	case 2:	/* plan 9 */
-		HEADR = 32L+8L;
+	case Hplan9x32:	/* plan 9 */
+		HEADR = 32L;
 		if(INITTEXT == -1)
 			INITTEXT = 4096+HEADR;
 		if(INITDAT == -1)
@@ -156,16 +162,16 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 4096;
 		break;
-	case 3:	/* plan 9 */
-		HEADR = 32L;
+	case Hplan9x64:	/* plan 9 */
+		HEADR = 32L + 8L;
 		if(INITTEXT == -1)
-			INITTEXT = 4096+32;
+			INITTEXT = 0x200000+HEADR;
 		if(INITDAT == -1)
 			INITDAT = 0;
 		if(INITRND == -1)
-			INITRND = 4096;
+			INITRND = 0x200000;
 		break;
-	case 5:	/* elf32 executable */
+	case Helf:	/* elf32 executable */
 		HEADR = rnd(52L+3*32L, 16);
 		if(INITTEXT == -1)
 			INITTEXT = 0x80110000L;
@@ -174,14 +180,14 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 4096;
 		break;
-	case 6:	/* apple MACH */
+	case Hdarwin:	/* apple MACH */
 		/*
 		 * OS X system constant - offset from 0(GS) to our TLS.
-		 * Explained in ../../libcgo/darwin_amd64.c.
+		 * Explained in ../../pkg/runtime/cgo/gcc_darwin_amd64.c.
 		 */
 		tlsoffset = 0x8a0;
 		machoinit();
-		HEADR = MACHORESERVE;
+		HEADR = INITIAL_MACHO_HEADR;
 		if(INITRND == -1)
 			INITRND = 4096;
 		if(INITTEXT == -1)
@@ -189,13 +195,15 @@ main(int argc, char *argv[])
 		if(INITDAT == -1)
 			INITDAT = 0;
 		break;
-	case 7:	/* elf64 executable */
-	case 9: /* freebsd */
+	case Hlinux:	/* elf64 executable */
+	case Hfreebsd:	/* freebsd */
+	case Hnetbsd:	/* netbsd */
+	case Hopenbsd:	/* openbsd */
 		/*
 		 * ELF uses TLS offset negative from FS.
 		 * Translate 0(FS) and 8(FS) into -16(FS) and -8(FS).
-		 * Also known to ../../pkg/runtime/linux/amd64/sys.s
-		 * and ../../libcgo/linux_amd64.s.
+		 * Also known to ../../pkg/runtime/sys_linux_amd64.s
+		 * and ../../pkg/runtime/cgo/gcc_linux_amd64.c.
 		 */
 		tlsoffset = -16;
 		elfinit();
@@ -207,7 +215,7 @@ main(int argc, char *argv[])
 		if(INITRND == -1)
 			INITRND = 4096;
 		break;
-	case 10: /* PE executable */
+	case Hwindows: /* PE executable */
 		peinit();
 		HEADR = PEFILEHEADR;
 		if(INITTEXT == -1)
@@ -238,7 +246,6 @@ main(int argc, char *argv[])
 	zprg.mode = 64;
 
 	pcstr = "%.6llux ";
-	nuxiinit();
 	histgen = 0;
 	pc = 0;
 	dtype = 4;
@@ -252,9 +259,10 @@ main(int argc, char *argv[])
 	patch();
 	follow();
 	doelf();
-	if(HEADTYPE == 6)
+	if(HEADTYPE == Hdarwin)
 		domacho();
 	dostkoff();
+	dostkcheck();
 	paramspace = "SP";	/* (FP) now (SP) on output */
 	if(debug['p'])
 		if(debug['1'])
@@ -262,7 +270,7 @@ main(int argc, char *argv[])
 		else
 			doprof2();
 	span();
-	if(HEADTYPE == 10)
+	if(HEADTYPE == Hwindows)
 		dope();
 	addexport();
 	textaddress();
@@ -270,6 +278,7 @@ main(int argc, char *argv[])
 	symtab();
 	dodata();
 	address();
+	doweak();
 	reloc();
 	asmb();
 	undef();
@@ -289,7 +298,7 @@ zsym(char *pn, Biobuf *f, Sym *h[])
 {	
 	int o;
 	
-	o = Bgetc(f);
+	o = BGETC(f);
 	if(o < 0 || o >= NSYM || h[o] == nil)
 		mangle(pn);
 	return h[o];
@@ -303,12 +312,12 @@ zaddr(char *pn, Biobuf *f, Adr *a, Sym *h[])
 	Sym *s;
 	Auto *u;
 
-	t = Bgetc(f);
+	t = BGETC(f);
 	a->index = D_NONE;
 	a->scale = 0;
 	if(t & T_INDEX) {
-		a->index = Bgetc(f);
-		a->scale = Bgetc(f);
+		a->index = BGETC(f);
+		a->scale = BGETC(f);
 	}
 	a->offset = 0;
 	if(t & T_OFFSET) {
@@ -332,7 +341,7 @@ zaddr(char *pn, Biobuf *f, Adr *a, Sym *h[])
 		a->type = D_SCONST;
 	}
 	if(t & T_TYPE)
-		a->type = Bgetc(f);
+		a->type = BGETC(f);
 	if(a->type < 0 || a->type >= D_SIZE)
 		mangle(pn);
 	adrgotype = S;
@@ -358,6 +367,15 @@ zaddr(char *pn, Biobuf *f, Adr *a, Sym *h[])
 			return;
 		}
 	}
+	
+	switch(t) {
+	case D_FILE:
+	case D_FILE1:
+	case D_AUTO:
+	case D_PARAM:
+		if(s == S)
+			mangle(pn);
+	}
 
 	u = mal(sizeof(*u));
 	u->link = curauto;
@@ -382,7 +400,7 @@ ldobj1(Biobuf *f, char *pkg, int64 len, char *pn)
 	vlong ipc;
 	Prog *p;
 	int v, o, r, skip, mode;
-	Sym *h[NSYM], *s, *di;
+	Sym *h[NSYM], *s;
 	uint32 sig;
 	char *name, *x;
 	int ntext;
@@ -393,7 +411,6 @@ ldobj1(Biobuf *f, char *pkg, int64 len, char *pn)
 	lastp = nil;
 	ntext = 0;
 	eof = Boffset(f) + len;
-	di = S;
 	src[0] = 0;
 
 newloop:
@@ -407,10 +424,10 @@ newloop:
 loop:
 	if(f->state == Bracteof || Boffset(f) >= eof)
 		goto eof;
-	o = Bgetc(f);
+	o = BGETC(f);
 	if(o == Beof)
 		goto eof;
-	o |= Bgetc(f) << 8;
+	o |= BGETC(f) << 8;
 	if(o <= AXXX || o >= ALAST) {
 		if(o < 0)
 			goto eof;
@@ -423,8 +440,8 @@ loop:
 		sig = 0;
 		if(o == ASIGNAME)
 			sig = Bget4(f);
-		v = Bgetc(f);	/* type */
-		o = Bgetc(f);	/* sym */
+		v = BGETC(f);	/* type */
+		o = BGETC(f);	/* sym */
 		r = 0;
 		if(v == D_STATIC)
 			r = version;
@@ -440,13 +457,12 @@ loop:
 		s = lookup(x, r);
 		if(x != name)
 			free(x);
-		name = nil;
 
 		if(debug['S'] && r == 0)
 			sig = 1729;
 		if(sig != 0){
 			if(s->sig != 0 && s->sig != sig)
-				diag("incompatible type signatures"
+				diag("incompatible type signatures "
 					"%ux(%s) and %ux(%s) for %s",
 					s->sig, s->file, sig, pn, s->name);
 			s->sig = sig;
@@ -481,8 +497,6 @@ loop:
 	p->line = Bget4(f);
 	p->back = 2;
 	p->mode = mode;
-	p->ft = 0;
-	p->tt = 0;
 	zaddr(pn, f, &p->from, h);
 	fromgotype = adrgotype;
 	zaddr(pn, f, &p->to, h);
@@ -530,7 +544,7 @@ loop:
 			s->type = SBSS;
 			s->size = 0;
 		}
-		if(s->type != SBSS && !s->dupok) {
+		if(s->type != SBSS && s->type != SNOPTRBSS && !s->dupok) {
 			diag("%s: redefinition: %s in %s",
 				pn, s->name, TNAME);
 			s->type = SBSS;
@@ -542,6 +556,8 @@ loop:
 			s->dupok = 1;
 		if(p->from.scale & RODATA)
 			s->type = SRODATA;
+		else if(p->from.scale & NOPTR)
+			s->type = SNOPTRBSS;
 		goto loop;
 
 	case ADATA:
@@ -561,7 +577,7 @@ loop:
 			diag("multiple initialization for %s: in both %s and %s", s->name, s->file, pn);
 			errorexit();
 		}
-		savedata(s, p);
+		savedata(s, p, pn);
 		unmal(p, sizeof *p);
 		goto loop;
 
@@ -570,9 +586,22 @@ loop:
 		pc++;
 		goto loop;
 
+	case ALOCALS:
+		cursym->locals = p->to.offset;
+		pc++;
+		goto loop;
+	
+	case ATYPE:
+		pc++;
+		goto loop;
+
 	case ATEXT:
 		s = p->from.sym;
 		if(s->text != nil) {
+			if(p->from.scale & DUPOK) {
+				skip = 1;
+				goto casdef;
+			}
 			diag("%s: %s: redefinition", pn, s->name);
 			return;
 		}
@@ -609,6 +638,7 @@ loop:
 		}
 		s->type = STEXT;
 		s->value = pc;
+		s->args = p->to.offset >> 32;
 		lastp = p;
 		p->pc = pc++;
 		goto loop;
@@ -646,7 +676,7 @@ loop:
 			sprint(literal, "$%ux", ieeedtof(&p->from.ieee));
 			s = lookup(literal, 0);
 			if(s->type == 0) {
-				s->type = SDATA;
+				s->type = SRODATA;
 				adduint32(s, ieeedtof(&p->from.ieee));
 				s->reachable = 0;
 			}
@@ -680,7 +710,7 @@ loop:
 				p->from.ieee.l, p->from.ieee.h);
 			s = lookup(literal, 0);
 			if(s->type == 0) {
-				s->type = SDATA;
+				s->type = SRODATA;
 				adduint32(s, p->from.ieee.l);
 				adduint32(s, p->from.ieee.h);
 				s->reachable = 0;
@@ -709,7 +739,6 @@ loop:
 		lastp = p;
 		goto loop;
 	}
-	goto loop;
 
 eof:
 	diag("truncated object file: %s", pn);

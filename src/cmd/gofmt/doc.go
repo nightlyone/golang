@@ -3,42 +3,44 @@
 // license that can be found in the LICENSE file.
 
 /*
-
 Gofmt formats Go programs.
 
 Without an explicit path, it processes the standard input.  Given a file,
 it operates on that file; given a directory, it operates on all .go files in
 that directory, recursively.  (Files starting with a period are ignored.)
+By default, gofmt prints the reformatted sources to standard output.
 
 Usage:
 	gofmt [flags] [path ...]
 
 The flags are:
-
+	-d
+		Do not print reformatted sources to standard output.
+		If a file's formatting is different than gofmt's, print diffs
+		to standard output.
+	-e
+		Print all (including spurious) errors.
 	-l
-		just list files whose formatting differs from gofmt's; generate no other output
-		unless -w is also set.
+		Do not print reformatted sources to standard output.
+		If a file's formatting is different from gofmt's, print its name
+		to standard output.
 	-r rule
-		apply the rewrite rule to the source before reformatting.
+		Apply the rewrite rule to the source before reformatting.
 	-s
-		try to simplify code (after applying the rewrite rule, if any).
+		Try to simplify code (after applying the rewrite rule, if any).
 	-w
-		if set, overwrite each input file with its output.
-	-spaces
-		align with spaces instead of tabs.
-	-tabindent
-		indent with tabs independent of -spaces.
-	-tabwidth=8
-		tab width in spaces.
+		Do not print reformatted sources to standard output.
+		If a file's formatting is different from gofmt's, overwrite it
+		with gofmt's version.
 
-Debugging flags:
-
-	-trace
-		print parse trace.
-	-ast
-		print AST (before rewrites).
+Formatting control flags:
 	-comments=true
-		print comments; if false, all comments are elided from the output.
+		Print comments; if false, all comments are elided from the output.
+	-tabs=true
+		Indent with tabs; if false, spaces are used instead.
+	-tabwidth=8
+		Tab width in spaces.
+
 
 The rewrite rule specified with the -r flag must be a string of the form:
 
@@ -49,6 +51,12 @@ In the pattern, single-character lowercase identifiers serve as
 wildcards matching arbitrary sub-expressions; those expressions
 will be substituted for the same identifiers in the replacement.
 
+When gofmt reads from standard input, it accepts either a full Go program
+or a program fragment.  A program fragment must be a syntactically
+valid declaration list, statement list, or expression.  When formatting
+such a fragment, gofmt preserves leading indentation as well as leading
+and trailing spaces, so that individual sections of a Go program can be
+formatted by piping them through gofmt.
 
 Examples
 
@@ -64,6 +72,6 @@ To convert the package tree from explicit slice upper bounds to implicit ones:
 
 	gofmt -r 'α[β:len(α)] -> α[β:]' -w $GOROOT/src/pkg
 */
-package documentation
+package main
 
 // BUG(rsc): The implementation of -r is a bit slow.

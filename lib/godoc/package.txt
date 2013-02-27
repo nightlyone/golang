@@ -1,95 +1,80 @@
-{.section PAst}
-{@ FSet}
-{.end}
-{.section PDoc}
-{.section IsPkg}
-PACKAGE
+{{with .PAst}}{{node . $.FSet}}{{end}}{{/*
 
-package {PackageName}
-import "{ImportPath}"
-{.or}
-COMMAND DOCUMENTATION
-{.end}
-{.section Doc}
+---------------------------------------
 
-{@ FSet}
-{.end}
-{.section Consts}
+*/}}{{with .PDoc}}{{if not $.IsMain}}PACKAGE
 
+package {{.Name}}
+    import "{{.ImportPath}}"
+
+{{else}}COMMAND DOCUMENTATION
+
+{{end}}{{comment_text .Doc "    " "\t"}}
+{{example_text "" $.Examples $.FSet "    "}}{{/*
+
+---------------------------------------
+
+*/}}{{with .Consts}}
 CONSTANTS
 
-{.repeated section @}
-{Decl FSet}
-{Doc}
-{.end}
-{.end}
-{.section Vars}
+{{range .}}{{node .Decl $.FSet}}
+{{comment_text .Doc "    " "\t"}}{{end}}
+{{end}}{{/*
 
+---------------------------------------
+
+*/}}{{with .Vars}}
 VARIABLES
 
-{.repeated section @}
-{Decl FSet}
-{Doc}
-{.end}
-{.end}
-{.section Funcs}
+{{range .}}{{node .Decl $.FSet}}
+{{comment_text .Doc "    " "\t"}}{{end}}
+{{end}}{{/*
 
+---------------------------------------
+
+*/}}{{with .Funcs}}
 FUNCTIONS
 
-{.repeated section @}
-{Decl FSet}
-{Doc}
-{.end}
-{.end}
-{.section Types}
+{{range .}}{{node .Decl $.FSet}}
+{{comment_text .Doc "    " "\t"}}
+{{example_text .Name $.Examples $.FSet "    "}}
+{{end}}{{end}}{{/*
 
+---------------------------------------
+
+*/}}{{with .Types}}
 TYPES
 
-{.repeated section @}
-{Decl FSet}
-{Doc}
-{.repeated section Consts}
-{Decl FSet}
-{Doc}
-{.end}
-{.repeated section Vars}
-{Decl FSet}
-{Doc}
-{.end}
-{.repeated section Factories}
-{Decl FSet}
-{Doc}
-{.end}
-{.repeated section Methods}
-{Decl FSet}
-{Doc}
-{.end}
-{.end}
-{.end}
-{.section Bugs}
+{{range .}}{{$tname := .Name}}{{node .Decl $.FSet}}
+{{comment_text .Doc "    " "\t"}}
+{{range .Consts}}{{node .Decl $.FSet}}
+{{comment_text .Doc "    " "\t"}}
+{{end}}{{range .Vars}}{{node .Decl $.FSet}}
+{{comment_text .Doc "    " "\t"}}
+{{end}}{{example_text .Name $.Examples $.FSet "    "}}
+{{range .Funcs}}{{node .Decl $.FSet}}
+{{comment_text .Doc "    " "\t"}}
+{{example_text .Name $.Examples $.FSet "    "}}
+{{end}}{{range .Methods}}{{node .Decl $.FSet}}
+{{comment_text .Doc "    " "\t"}}
+{{$name := printf "%s_%s" $tname .Name}}{{example_text $name $.Examples $.FSet "    "}}
+{{end}}{{end}}{{end}}{{/*
 
-BUGS
+---------------------------------------
 
-{.repeated section @}
-{@}
-{.end}
-{.end}
-{.end}
-{.section PList}
+*/}}{{with $.Notes}}
+{{range $marker, $content := .}}
+{{noteTitle $marker}}s
 
-OTHER PACKAGES
+{{range $content}}{{comment_text . "    " "\t"}}
+{{end}}{{end}}{{end}}{{end}}{{/*
 
-{.repeated section @}
-{@}
-{.end}
-{.end}
-{.section Dirs}
-{.section Dirs}
+---------------------------------------
 
+*/}}{{with .Dirs}}
 SUBDIRECTORIES
-
-{.repeated section List}
-	{Name}
-{.end}
-{.end}
-{.end}
+{{if $.DirFlat}}{{range .List}}{{if .HasPkg}}
+	{{.Path}}{{end}}{{end}}
+{{else}}{{range .List}}
+	{{repeat `. ` .Depth}}{{.Name}}{{end}}
+{{end}}{{end}}

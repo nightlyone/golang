@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include <u.h>
+#include <libc.h>
 #include "go.h"
 
 /*
@@ -13,8 +15,8 @@
 
 static int defercalc;
 
-uint32
-rnd(uint32 o, uint32 r)
+vlong
+rnd(vlong o, vlong r)
 {
 	if(r < 1 || r > 8 || (r&(r-1)) != 0)
 		fatal("rnd");
@@ -30,14 +32,18 @@ offmod(Type *t)
 	o = 0;
 	for(f=t->type; f!=T; f=f->down) {
 		if(f->etype != TFIELD)
-			fatal("widstruct: not TFIELD: %lT", f);
+			fatal("offmod: not TFIELD: %lT", f);
 		f->width = o;
 		o += widthptr;
+		if(o >= MAXWIDTH) {
+			yyerror("interface too large");
+			o = widthptr;
+		}
 	}
 }
 
-static uint32
-widstruct(Type *t, uint32 o, int flag)
+static vlong
+widstruct(Type *errtype, Type *t, vlong o, int flag)
 {
 	Type *f;
 	int32 w, maxalign;
@@ -48,6 +54,11 @@ widstruct(Type *t, uint32 o, int flag)
 	for(f=t->type; f!=T; f=f->down) {
 		if(f->etype != TFIELD)
 			fatal("widstruct: not TFIELD: %lT", f);
+		if(f->type == T) {
+			// broken field, just skip it so that other valid fields
+			// get a width.
+			continue;
+		}
 		dowidth(f->type);
 		if(f->type->align > maxalign)
 			maxalign = f->type->align;
@@ -69,6 +80,10 @@ widstruct(Type *t, uint32 o, int flag)
 				f->nname->xoffset = o;
 		}
 		o += w;
+		if(o >= MAXWIDTH) {
+			yyerror("type %lT too large", errtype);
+			o = 8;  // small but nonzero
+		}
 	}
 	// final width is rounded
 	if(flag)
@@ -172,6 +187,9 @@ dowidth(Type *t)
 		w = 8;
 		checkwidth(t->type);
 		break;
+	case TUNSAFEPTR:
+		w = widthptr;
+		break;
 	case TINTER:		// implemented as 2 pointers
 		w = 2*widthptr;
 		t->align = widthptr;
@@ -222,17 +240,12 @@ dowidth(Type *t)
 			uint64 cap;
 
 			dowidth(t->type);
-			if(t->type->width == 0)
-				fatal("no width for type %T", t->type);
-			if(tptr == TPTR32)
-				cap = ((uint32)-1) / t->type->width;
-			else
-				cap = ((uint64)-1) / t->type->width;
-			if(t->bound > cap)
-				yyerror("type %lT larger than address space", t);
+			if(t->type->width != 0) {
+				cap = (MAXWIDTH-1) / t->type->width;
+				if(t->bound > cap)
+					yyerror("type %lT larger than address space", t);
+			}
 			w = t->bound * t->type->width;
-			if(w == 0)
-				w = 1;
 			t->align = t->type->align;
 		}
 		else if(t->bound == -1) {
@@ -240,8 +253,12 @@ dowidth(Type *t)
 			checkwidth(t->type);
 			t->align = widthptr;
 		}
-		else if(t->bound == -100)
-			yyerror("use of [...] array outside of array literal");
+		else if(t->bound == -100) {
+			if(!t->broke) {
+				yyerror("use of [...] array outside of array literal");
+				t->broke = 1;
+			}
+		}
 		else
 			fatal("dowidth %T", t);	// probably [...]T
 		break;
@@ -249,11 +266,7 @@ dowidth(Type *t)
 	case TSTRUCT:
 		if(t->funarg)
 			fatal("dowidth fn struct %T", t);
-		w = widstruct(t, 0, 1);
-		if(w == 0)
-			w = 1;
-		//if(t->align < widthptr)
-		//	warn("align %d: %T\n", t->align, t);
+		w = widstruct(t, t, 0, 1);
 		break;
 
 	case TFUNC:
@@ -271,9 +284,9 @@ dowidth(Type *t)
 		// function is 3 cated structures;
 		// compute their widths as side-effect.
 		t1 = t->type;
-		w = widstruct(*getthis(t1), 0, 0);
-		w = widstruct(*getinarg(t1), w, widthptr);
-		w = widstruct(*getoutarg(t1), w, widthptr);
+		w = widstruct(t->type, *getthis(t1), 0, 0);
+		w = widstruct(t->type, *getinarg(t1), w, widthptr);
+		w = widstruct(t->type, *getoutarg(t1), w, widthptr);
 		t1->argwid = w;
 		if(w%widthptr)
 			warn("bad type %T %d\n", t1, w);
@@ -281,9 +294,9 @@ dowidth(Type *t)
 		break;
 	}
 
-	// catch all for error cases; avoid divide by zero later
-	if(w == 0)
-		w = 1;
+	if(widthptr == 4 && w != (int32)w)
+		yyerror("type %T too large", t);
+
 	t->width = w;
 	if(t->align == 0) {
 		if(w > 8 || (w&(w-1)) != 0)
@@ -400,6 +413,13 @@ typeinit(void)
 
 	types[TPTR64] = typ(TPTR64);
 	dowidth(types[TPTR64]);
+	
+	t = typ(TUNSAFEPTR);
+	types[TUNSAFEPTR] = t;
+	t->sym = pkglookup("Pointer", unsafepkg);
+	t->sym->def = typenod(t);
+	
+	dowidth(types[TUNSAFEPTR]);
 
 	tptr = TPTR32;
 	if(widthptr == 8)
@@ -458,7 +478,7 @@ typeinit(void)
 			okforadd[i] = 1;
 			okforarith[i] = 1;
 			okforconst[i] = 1;
-//			issimple[i] = 1;
+			issimple[i] = 1;
 		}
 	}
 
@@ -481,13 +501,15 @@ typeinit(void)
 
 	okforeq[TPTR32] = 1;
 	okforeq[TPTR64] = 1;
+	okforeq[TUNSAFEPTR] = 1;
 	okforeq[TINTER] = 1;
-	okforeq[TMAP] = 1;
 	okforeq[TCHAN] = 1;
-	okforeq[TFUNC] = 1;
 	okforeq[TSTRING] = 1;
 	okforeq[TBOOL] = 1;
-	okforeq[TARRAY] = 1;	// refined in typecheck
+	okforeq[TMAP] = 1;	// nil only; refined in typecheck
+	okforeq[TFUNC] = 1;	// nil only; refined in typecheck
+	okforeq[TARRAY] = 1;	// nil slice only; refined in typecheck
+	okforeq[TSTRUCT] = 1;	// it's complicated; refined in typecheck
 
 	okforcmp[TSTRING] = 1;
 
@@ -519,7 +541,7 @@ typeinit(void)
 	okfor[OCOM] = okforand;
 	okfor[OMINUS] = okforarith;
 	okfor[ONOT] = okforbool;
-	okfor[OPLUS] = okforadd;
+	okfor[OPLUS] = okforarith;
 
 	// special
 	okfor[OCAP] = okforcap;
@@ -570,6 +592,7 @@ typeinit(void)
 	simtype[TMAP] = tptr;
 	simtype[TCHAN] = tptr;
 	simtype[TFUNC] = tptr;
+	simtype[TUNSAFEPTR] = tptr;
 
 	/* pick up the backend typedefs */
 	for(i=0; typedefs[i].name; i++) {
@@ -593,7 +616,7 @@ typeinit(void)
 			fatal("typeinit: %s already defined", s->name);
 
 		t = typ(etype);
-		t->sym = s;
+		t->sym = s1;
 
 		dowidth(t);
 		types[etype] = t;
@@ -601,12 +624,12 @@ typeinit(void)
 	}
 
 	Array_array = rnd(0, widthptr);
-	Array_nel = rnd(Array_array+widthptr, types[TUINT32]->width);
-	Array_cap = rnd(Array_nel+types[TUINT32]->width, types[TUINT32]->width);
-	sizeof_Array = rnd(Array_cap+types[TUINT32]->width, widthptr);
+	Array_nel = rnd(Array_array+widthptr, widthint);
+	Array_cap = rnd(Array_nel+widthint, widthint);
+	sizeof_Array = rnd(Array_cap+widthint, widthptr);
 
 	// string is same as slice wo the cap
-	sizeof_String = rnd(Array_nel+types[TUINT32]->width, widthptr);
+	sizeof_String = rnd(Array_nel+widthint, widthptr);
 
 	dowidth(types[TSTRING]);
 	dowidth(idealstring);

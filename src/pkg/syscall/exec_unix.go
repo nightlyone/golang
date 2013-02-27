@@ -2,11 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build darwin freebsd linux netbsd openbsd
+
 // Fork, exec, wait, etc.
 
 package syscall
 
 import (
+	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -60,9 +63,10 @@ import (
 
 var ForkLock sync.RWMutex
 
-// Convert array of string to array
-// of NUL-terminated byte pointer.
-func StringArrayPtr(ss []string) []*byte {
+// StringSlicePtr is deprecated. Use SlicePtrFromStrings instead.
+// If any string contains a NUL byte this function panics instead
+// of returning an error.
+func StringSlicePtr(ss []string) []*byte {
 	bb := make([]*byte, len(ss)+1)
 	for i := 0; i < len(ss); i++ {
 		bb[i] = StringBytePtr(ss[i])
@@ -71,11 +75,27 @@ func StringArrayPtr(ss []string) []*byte {
 	return bb
 }
 
+// SlicePtrFromStrings converts a slice of strings to a slice of
+// pointers to NUL-terminated byte slices. If any string contains
+// a NUL byte, it returns (nil, EINVAL).
+func SlicePtrFromStrings(ss []string) ([]*byte, error) {
+	var err error
+	bb := make([]*byte, len(ss)+1)
+	for i := 0; i < len(ss); i++ {
+		bb[i], err = BytePtrFromString(ss[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	bb[len(ss)] = nil
+	return bb, nil
+}
+
 func CloseOnExec(fd int) { fcntl(fd, F_SETFD, FD_CLOEXEC) }
 
-func SetNonblock(fd int, nonblocking bool) (errno int) {
+func SetNonblock(fd int, nonblocking bool) (err error) {
 	flag, err := fcntl(fd, F_GETFL, 0)
-	if err != 0 {
+	if err != nil {
 		return err
 	}
 	if nonblocking {
@@ -87,155 +107,74 @@ func SetNonblock(fd int, nonblocking bool) (errno int) {
 	return err
 }
 
-
-// Fork, dup fd onto 0..len(fd), and exec(argv0, argvv, envv) in child.
-// If a dup or exec fails, write the errno int to pipe.
-// (Pipe is close-on-exec so if exec succeeds, it will be closed.)
-// In the child, this function must not acquire any locks, because
-// they might have been locked at the time of the fork.  This means
-// no rescheduling, no malloc calls, and no new stack segments.
-// The calls to RawSyscall are okay because they are assembly
-// functions that do not grow the stack.
-func forkAndExecInChild(argv0 *byte, argv []*byte, envv []*byte, traceme bool, dir *byte, fd []int, pipe int) (pid int, err int) {
-	// Declare all variables at top in case any
-	// declarations require heap allocation (e.g., err1).
-	var r1, r2, err1 uintptr
-	var nextfd int
-	var i int
-
-	darwin := OS == "darwin"
-
-	// About to call fork.
-	// No more allocation or calls of non-assembly functions.
-	r1, r2, err1 = RawSyscall(SYS_FORK, 0, 0, 0)
-	if err1 != 0 {
-		return 0, int(err1)
-	}
-
-	// On Darwin:
-	//	r1 = child pid in both parent and child.
-	//	r2 = 0 in parent, 1 in child.
-	// Convert to normal Unix r1 = 0 in child.
-	if darwin && r2 == 1 {
-		r1 = 0
-	}
-
-	if r1 != 0 {
-		// parent; return PID
-		return int(r1), 0
-	}
-
-	// Fork succeeded, now in child.
-
-	// Enable tracing if requested.
-	if traceme {
-		_, _, err1 = RawSyscall(SYS_PTRACE, uintptr(PTRACE_TRACEME), 0, 0)
-		if err1 != 0 {
-			goto childerror
-		}
-	}
-
-	// Chdir
-	if dir != nil {
-		_, _, err1 = RawSyscall(SYS_CHDIR, uintptr(unsafe.Pointer(dir)), 0, 0)
-		if err1 != 0 {
-			goto childerror
-		}
-	}
-
-	// Pass 1: look for fd[i] < i and move those up above len(fd)
-	// so that pass 2 won't stomp on an fd it needs later.
-	nextfd = int(len(fd))
-	if pipe < nextfd {
-		_, _, err1 = RawSyscall(SYS_DUP2, uintptr(pipe), uintptr(nextfd), 0)
-		if err1 != 0 {
-			goto childerror
-		}
-		RawSyscall(SYS_FCNTL, uintptr(nextfd), F_SETFD, FD_CLOEXEC)
-		pipe = nextfd
-		nextfd++
-	}
-	for i = 0; i < len(fd); i++ {
-		if fd[i] >= 0 && fd[i] < int(i) {
-			_, _, err1 = RawSyscall(SYS_DUP2, uintptr(fd[i]), uintptr(nextfd), 0)
-			if err1 != 0 {
-				goto childerror
-			}
-			RawSyscall(SYS_FCNTL, uintptr(nextfd), F_SETFD, FD_CLOEXEC)
-			fd[i] = nextfd
-			nextfd++
-			if nextfd == pipe { // don't stomp on pipe
-				nextfd++
-			}
-		}
-	}
-
-	// Pass 2: dup fd[i] down onto i.
-	for i = 0; i < len(fd); i++ {
-		if fd[i] == -1 {
-			RawSyscall(SYS_CLOSE, uintptr(i), 0, 0)
-			continue
-		}
-		if fd[i] == int(i) {
-			// dup2(i, i) won't clear close-on-exec flag on Linux,
-			// probably not elsewhere either.
-			_, _, err1 = RawSyscall(SYS_FCNTL, uintptr(fd[i]), F_SETFD, 0)
-			if err1 != 0 {
-				goto childerror
-			}
-			continue
-		}
-		// The new fd is created NOT close-on-exec,
-		// which is exactly what we want.
-		_, _, err1 = RawSyscall(SYS_DUP2, uintptr(fd[i]), uintptr(i), 0)
-		if err1 != 0 {
-			goto childerror
-		}
-	}
-
-	// By convention, we don't close-on-exec the fds we are
-	// started with, so if len(fd) < 3, close 0, 1, 2 as needed.
-	// Programs that know they inherit fds >= 3 will need
-	// to set them close-on-exec.
-	for i = len(fd); i < 3; i++ {
-		RawSyscall(SYS_CLOSE, uintptr(i), 0, 0)
-	}
-
-	// Time to exec.
-	_, _, err1 = RawSyscall(SYS_EXECVE,
-		uintptr(unsafe.Pointer(argv0)),
-		uintptr(unsafe.Pointer(&argv[0])),
-		uintptr(unsafe.Pointer(&envv[0])))
-
-childerror:
-	// send error code on pipe
-	RawSyscall(SYS_WRITE, uintptr(pipe), uintptr(unsafe.Pointer(&err1)), uintptr(unsafe.Sizeof(err1)))
-	for {
-		RawSyscall(SYS_EXIT, 253, 0, 0)
-	}
-
-	// Calling panic is not actually safe,
-	// but the for loop above won't break
-	// and this shuts up the compiler.
-	panic("unreached")
+// Credential holds user and group identities to be assumed
+// by a child process started by StartProcess.
+type Credential struct {
+	Uid    uint32   // User ID.
+	Gid    uint32   // Group ID.
+	Groups []uint32 // Supplementary group IDs.
 }
 
-func forkExec(argv0 string, argv []string, envv []string, traceme bool, dir string, fd []int) (pid int, err int) {
+// ProcAttr holds attributes that will be applied to a new process started
+// by StartProcess.
+type ProcAttr struct {
+	Dir   string    // Current working directory.
+	Env   []string  // Environment.
+	Files []uintptr // File descriptors.
+	Sys   *SysProcAttr
+}
+
+var zeroProcAttr ProcAttr
+var zeroSysProcAttr SysProcAttr
+
+func forkExec(argv0 string, argv []string, attr *ProcAttr) (pid int, err error) {
 	var p [2]int
 	var n int
-	var err1 uintptr
+	var err1 Errno
 	var wstatus WaitStatus
+
+	if attr == nil {
+		attr = &zeroProcAttr
+	}
+	sys := attr.Sys
+	if sys == nil {
+		sys = &zeroSysProcAttr
+	}
 
 	p[0] = -1
 	p[1] = -1
 
 	// Convert args to C form.
-	argv0p := StringBytePtr(argv0)
-	argvp := StringArrayPtr(argv)
-	envvp := StringArrayPtr(envv)
-	var dirp *byte
-	if len(dir) > 0 {
-		dirp = StringBytePtr(dir)
+	argv0p, err := BytePtrFromString(argv0)
+	if err != nil {
+		return 0, err
+	}
+	argvp, err := SlicePtrFromStrings(argv)
+	if err != nil {
+		return 0, err
+	}
+	envvp, err := SlicePtrFromStrings(attr.Env)
+	if err != nil {
+		return 0, err
+	}
+
+	if runtime.GOOS == "freebsd" && len(argv[0]) > len(argv0) {
+		argvp[0] = argv0p
+	}
+
+	var chroot *byte
+	if sys.Chroot != "" {
+		chroot, err = BytePtrFromString(sys.Chroot)
+		if err != nil {
+			return 0, err
+		}
+	}
+	var dir *byte
+	if attr.Dir != "" {
+		dir, err = BytePtrFromString(attr.Dir)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	// Acquire the fork lock so that no other threads
@@ -244,38 +183,27 @@ func forkExec(argv0 string, argv []string, envv []string, traceme bool, dir stri
 	ForkLock.Lock()
 
 	// Allocate child status pipe close on exec.
-	if err = Pipe(p[0:]); err != 0 {
-		goto error
-	}
-	if _, err = fcntl(p[0], F_SETFD, FD_CLOEXEC); err != 0 {
-		goto error
-	}
-	if _, err = fcntl(p[1], F_SETFD, FD_CLOEXEC); err != 0 {
+	if err = forkExecPipe(p[:]); err != nil {
 		goto error
 	}
 
 	// Kick off child.
-	pid, err = forkAndExecInChild(argv0p, argvp, envvp, traceme, dirp, fd, p[1])
-	if err != 0 {
-	error:
-		if p[0] >= 0 {
-			Close(p[0])
-			Close(p[1])
-		}
-		ForkLock.Unlock()
-		return 0, err
+	pid, err1 = forkAndExecInChild(argv0p, argvp, envvp, chroot, dir, attr, sys, p[1])
+	if err1 != 0 {
+		err = Errno(err1)
+		goto error
 	}
 	ForkLock.Unlock()
 
 	// Read child error status from pipe.
 	Close(p[1])
-	n, err = read(p[0], (*byte)(unsafe.Pointer(&err1)), unsafe.Sizeof(err1))
+	n, err = readlen(p[0], (*byte)(unsafe.Pointer(&err1)), int(unsafe.Sizeof(err1)))
 	Close(p[0])
-	if err != 0 || n != 0 {
-		if n == unsafe.Sizeof(err1) {
-			err = int(err1)
+	if err != nil || n != 0 {
+		if n == int(unsafe.Sizeof(err1)) {
+			err = Errno(err1)
 		}
-		if err == 0 {
+		if err == nil {
 			err = EPIPE
 		}
 
@@ -289,30 +217,45 @@ func forkExec(argv0 string, argv []string, envv []string, traceme bool, dir stri
 	}
 
 	// Read got EOF, so pipe closed on exec, so exec succeeded.
-	return pid, 0
+	return pid, nil
+
+error:
+	if p[0] >= 0 {
+		Close(p[0])
+		Close(p[1])
+	}
+	ForkLock.Unlock()
+	return 0, err
 }
 
 // Combination of fork and exec, careful to be thread safe.
-func ForkExec(argv0 string, argv []string, envv []string, dir string, fd []int) (pid int, err int) {
-	return forkExec(argv0, argv, envv, false, dir, fd)
-}
-
-// PtraceForkExec is like ForkExec, but starts the child in a traced state.
-func PtraceForkExec(argv0 string, argv []string, envv []string, dir string, fd []int) (pid int, err int) {
-	return forkExec(argv0, argv, envv, true, dir, fd)
-}
-
-// Ordinary exec.
-func Exec(argv0 string, argv []string, envv []string) (err int) {
-	_, _, err1 := RawSyscall(SYS_EXECVE,
-		uintptr(unsafe.Pointer(StringBytePtr(argv0))),
-		uintptr(unsafe.Pointer(&StringArrayPtr(argv)[0])),
-		uintptr(unsafe.Pointer(&StringArrayPtr(envv)[0])))
-	return int(err1)
+func ForkExec(argv0 string, argv []string, attr *ProcAttr) (pid int, err error) {
+	return forkExec(argv0, argv, attr)
 }
 
 // StartProcess wraps ForkExec for package os.
-func StartProcess(argv0 string, argv []string, envv []string, dir string, fd []int) (pid, handle int, err int) {
-	pid, err = forkExec(argv0, argv, envv, false, dir, fd)
+func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle uintptr, err error) {
+	pid, err = forkExec(argv0, argv, attr)
 	return pid, 0, err
+}
+
+// Ordinary exec.
+func Exec(argv0 string, argv []string, envv []string) (err error) {
+	argv0p, err := BytePtrFromString(argv0)
+	if err != nil {
+		return err
+	}
+	argvp, err := SlicePtrFromStrings(argv)
+	if err != nil {
+		return err
+	}
+	envvp, err := SlicePtrFromStrings(envv)
+	if err != nil {
+		return err
+	}
+	_, _, err1 := RawSyscall(SYS_EXECVE,
+		uintptr(unsafe.Pointer(argv0p)),
+		uintptr(unsafe.Pointer(&argvp[0])),
+		uintptr(unsafe.Pointer(&envvp[0])))
+	return Errno(err1)
 }

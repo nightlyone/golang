@@ -2,11 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#include <u.h>
+#include <libc.h>
 #include "gg.h"
 
 int	thechar	= '8';
 char*	thestring	= "386";
 
+vlong MAXWIDTH = (1LL<<32) - 1;
 
 /*
  * go declares several platform-specific type aliases:
@@ -24,6 +27,7 @@ void
 betypeinit(void)
 {
 	widthptr = 4;
+	widthint = 4;
 
 	zprog.link = P;
 	zprog.as = AGOK;

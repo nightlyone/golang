@@ -28,6 +28,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#include	<u.h>
 #include	"cc.h"
 
 typedef	struct	Ftab	Ftab;
@@ -45,7 +46,7 @@ struct	Gtab
 };
 
 Ftab	ftabinit[OEND];
-Gtab	gtabinit[NTYPE];
+Gtab	gtabinit[NALLTYPES];
 
 int
 isfunct(Node *n)
@@ -349,7 +350,7 @@ bad:
 	diag(Z, "dclfunct bad %T %s\n", t, s->name);
 }
 
-Gtab	gtabinit[NTYPE] =
+Gtab	gtabinit[NALLTYPES] =
 {
 	TCHAR,		"c",
 	TUCHAR,		"uc",

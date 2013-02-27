@@ -1,4 +1,4 @@
-// errchk $G $D/$F.go
+// errorcheck
 
 // Copyright 2010 The Go Authors.  All rights reserved.
 // Use of this source code is governed by a BSD-style
@@ -7,9 +7,9 @@
 package main
 
 func f(args ...int) {
-	g(args)	// ERROR "[.][.][.]"
+	g(args)
 }
 
 func g(args ...interface{}) {
-	f(args)	// ERROR "[.][.][.]"
+	f(args)	// ERROR "cannot use|incompatible"
 }
