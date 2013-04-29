@@ -211,6 +211,13 @@ ldpe(Biobuf *f, char *pkg, int64 len, char *pn)
 		sect = &obj->sect[i];
 		if(sect->sh.Characteristics&IMAGE_SCN_MEM_DISCARDABLE)
 			continue;
+
+		if((sect->sh.Characteristics&(IMAGE_SCN_CNT_CODE|IMAGE_SCN_CNT_INITIALIZED_DATA|IMAGE_SCN_CNT_UNINITIALIZED_DATA)) == 0) {
+			// This has been seen for .idata sections, which we
+			// want to ignore.  See issues 5106 and 5273.
+			continue;
+		}
+
 		if(map(obj, sect) < 0)
 			goto bad;
 		
@@ -232,7 +239,7 @@ ldpe(Biobuf *f, char *pkg, int64 len, char *pn)
 				s->type = STEXT;
 				break;
 			default:
-				werrstr("unexpected flags for PE section %s", sect->name);
+				werrstr("unexpected flags %#08ux for PE section %s", sect->sh.Characteristics, sect->name);
 				goto bad;
 		}
 		s->p = sect->base;
@@ -250,6 +257,11 @@ ldpe(Biobuf *f, char *pkg, int64 len, char *pn)
 			continue;
 		if(rsect->sh.Characteristics&IMAGE_SCN_MEM_DISCARDABLE)
 			continue;
+		if((sect->sh.Characteristics&(IMAGE_SCN_CNT_CODE|IMAGE_SCN_CNT_INITIALIZED_DATA|IMAGE_SCN_CNT_UNINITIALIZED_DATA)) == 0) {
+			// This has been seen for .idata sections, which we
+			// want to ignore.  See issues 5106 and 5273.
+			continue;
+		}
 		r = mal(rsect->sh.NumberOfRelocations*sizeof r[0]);
 		Bseek(f, obj->base+rsect->sh.PointerToRelocations, 0);
 		for(j=0; j<rsect->sh.NumberOfRelocations; j++) {
