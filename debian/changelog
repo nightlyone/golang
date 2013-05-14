@@ -1,4 +1,10 @@
-golang (2:1.1~hg20130427-1) UNRELEASED; urgency=low
+golang (2:1.1-1) quantal; urgency=low
+
+  * Imported Upstream version 1.1
+
+ -- Ingo Oeser <nightlyone@googlemail.com>  Tue, 14 May 2013 07:31:54 +0200
+
+golang (2:1.1~hg20130427-1) experimental; urgency=low
 
   * New hg tip snapshot.
 
