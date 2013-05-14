@@ -403,8 +403,10 @@ if owner != user {
 
 <p>
 By convention, one-method interfaces are named by
-the method name plus the -er suffix: <code>Reader</code>,
-<code>Writer</code>, <code>Formatter</code> etc.
+the method name plus an -er suffix or similar modification
+to construct an agent noun: <code>Reader</code>,
+<code>Writer</code>, <code>Formatter</code>,
+<code>CloseNotifier</code> etc.
 </p>
 
 <p>
@@ -1805,7 +1807,7 @@ is different from our custom <code>Append</code> function above.
 Schematically, it's like this:
 </p>
 <pre>
-func append(slice []<i>T</i>, elements...<i>T</i>) []<i>T</i>
+func append(slice []<i>T</i>, elements ...<i>T</i>) []<i>T</i>
 </pre>
 <p>
 where <i>T</i> is a placeholder for any given type.  You can't
