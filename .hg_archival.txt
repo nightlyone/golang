@@ -1,6 +1,0 @@
-repo: f6182e5abf5eb0c762dddbb18f8854b7e350eaeb
-node: 2489327864d77c231a6ba4896f0cb9483d84122b
-branch: default
-latesttag: weekly
-latesttag: weekly.2012-03-27
-latesttagdistance: 3440
