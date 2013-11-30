@@ -2,3 +2,7 @@
 golang-go: unstripped-binary-or-object
 # Go always links statically.
 golang-go: statically-linked-binary
+# No support for relative readonly links in go
+golang-go: hardening-no-relro usr/bin/go
+# nothing to configure for go
+golang-go: no-debconf-templates
