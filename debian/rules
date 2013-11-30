@@ -40,7 +40,7 @@ else
 endif
 
 override_dh_compress:
-	dh_compress -Xusr/share/doc/$(PACKAGE)-doc/html -Xusr/share/doc/$(PACKAGE)-doc/godoc
+	dh_compress -Xusr/share/doc/$(PACKAGE)-doc/html
 
 # Generates debian/control from debian/control.base and debian/control.cross.
 # In the latter, @OS@ and @ARCH@ are replaced with every supported combination
@@ -76,7 +76,6 @@ override_dh_install:
 	-rm $(CURDIR)/debian/golang-doc/usr/share/doc/golang-doc/html/jquery.js && \
 	ln -s /usr/share/javascript/jquery/jquery.min.js $(CURDIR)/debian/golang-doc/usr/share/doc/golang-doc/html/jquery.js
 	# Make scripts executable
-	chmod +x $(CURDIR)/debian/golang-src/usr/share/go/src/cmd/godoc/setup-godoc-app.bash
 	# Remove testdata and tests from installed src directory
 	find $(CURDIR)/debian/golang-src/usr/share/go/src -type d -name testdata -prune -execdir rm -rf {} \;
 	find $(CURDIR)/debian/golang-src/usr/share/go/src -type f -name '*_test.go' -delete
