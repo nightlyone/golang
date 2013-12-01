@@ -1,3 +1,12 @@
+golang (2:1.2-1) unstable; urgency=low
+
+  * New Upstream release.
+  * Remove custom patches
+  * do not care about godoc
+  * relro linking is not support by go ld
+
+ -- Ingo Oeser <nightlyone@googlemail.com>  Mon, 02 Dec 2013 00:43:20 +0100
+
 golang (2:1.1.2-3) unstable; urgency=low
 
   * cherry-pick upstream commit: archive-tar-fix-links-and-pax.patch
